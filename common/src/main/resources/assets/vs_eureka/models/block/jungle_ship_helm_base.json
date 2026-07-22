@@ -1,0 +1,9 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_base",
+	"textures": {
+		"log": "block/jungle_log",
+		"log_top": "block/jungle_log_top",
+		"planks": "block/jungle_planks",
+		"particle": "block/jungle_planks"
+	}
+  }

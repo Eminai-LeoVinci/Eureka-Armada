@@ -1,0 +1,76 @@
+package org.valkyrienskies.eureka.forge
+
+import net.minecraft.client.Minecraft
+import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider
+import net.minecraft.client.resources.model.ModelResourceLocation
+import net.minecraft.resources.ResourceLocation
+import net.neoforged.neoforge.client.event.EntityRenderersEvent
+import net.neoforged.neoforge.client.event.ModelEvent
+import org.valkyrienskies.eureka.EurekaBlockEntities
+import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.block.IWoodType
+import org.valkyrienskies.eureka.block.WoodType
+import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer
+import org.valkyrienskies.eureka.blockentity.renderer.WheelModels
+import thedarkcolour.kotlinforforge.neoforge.forge.MOD_BUS
+
+object EurekaModForgeClient {
+    private var happendClientSetup = false
+
+    fun registerClient() {
+        MOD_BUS.addListener { event: ModelEvent.BakingCompleted ->
+            clientSetup(
+                event
+            )
+        }
+        MOD_BUS.addListener { event: ModelEvent.RegisterAdditional ->
+            onModelRegistry(
+                event
+            )
+        }
+        MOD_BUS.addListener { event: EntityRenderersEvent.RegisterRenderers ->
+            entityRenderers(
+                event
+            )
+        }
+    }
+
+    fun clientSetup(event: ModelEvent.BakingCompleted) {
+        if (happendClientSetup) {
+            return
+        }
+        happendClientSetup = true
+        EurekaMod.initClient()
+        WheelModels.setModelGetter { woodType: IWoodType ->
+            event.modelBakery.bakedTopLevelModels
+                .getOrDefault(
+                    ModelResourceLocation.standalone(
+                        ResourceLocation.fromNamespaceAndPath(
+                            EurekaMod.MOD_ID, "block/" + woodType.serializedName.lowercase() + "_ship_helm_wheel"
+                        )
+                    ),
+                    Minecraft.getInstance().modelManager.missingModel
+                )
+        }
+    }
+
+    fun entityRenderers(event: EntityRenderersEvent.RegisterRenderers) {
+        event.registerBlockEntityRenderer(EurekaBlockEntities.SHIP_HELM.get()) { ctx: BlockEntityRendererProvider.Context ->
+            ShipHelmBlockEntityRenderer(
+                ctx
+            )
+        }
+    }
+
+    fun onModelRegistry(event: ModelEvent.RegisterAdditional) {
+        for (woodType in WoodType.entries) {
+            event.register(
+                ModelResourceLocation.standalone(
+                    ResourceLocation.fromNamespaceAndPath(
+                        EurekaMod.MOD_ID, "block/" + woodType.serializedName.lowercase() + "_ship_helm_wheel"
+                    )
+                )
+            )
+        }
+    }
+}

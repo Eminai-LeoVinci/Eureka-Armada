@@ -1,0 +1,11 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_wheel",
+	"textures": {
+		"log": "block/birch_log",
+		"log_top": "block/birch_log_top",
+		"planks": "block/birch_planks",
+		"iron_block": "block/iron_block",
+		"particle": "block/birch_planks",
+		"gold_block": "vs_eureka:block/helm_wheel_hub"
+	}
+  }

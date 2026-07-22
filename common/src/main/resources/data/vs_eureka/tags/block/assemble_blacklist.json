@@ -1,0 +1,13 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:air",
+    "minecraft:bedrock",
+    "minecraft:reinforced_deepslate",
+    "#minecraft:portals",
+    "minecraft:end_gateway",
+    "minecraft:end_portal_frame",
+    "minecraft:water",
+    "minecraft:lava"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "vs_eureka",
+  "version": "${version}",
+  "name": "VS Eureka Mod",
+  "description": "Basically Archimedes Ships, but with VS2 as the backend! — Unofficial Fabric port",
+  "authors": [
+    "ewoudje",
+    "Tri0de",
+    "Rubydesic",
+    "millennIumAMbiguity"
+  ],
+  "contributors": [
+    "Copper",
+    "Anarava",
+    "VS Discord",
+    "Eminai-LeoVinci"
+  ],
+  "contact": {
+    "homepage": "https://github.com/Eminai-LeoVinci/Eureka-Ships",
+    "sources": "https://github.com/Eminai-LeoVinci/Eureka-Ships",
+    "issues": "https://github.com/Eminai-LeoVinci/Eureka-Ships/issues"
+  },
+  "license": "GPL-3.0-only",
+  "icon": "assets/vs_eureka/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "org.valkyrienskies.eureka.fabric.EurekaModFabric"
+    ],
+    "client": [
+      "org.valkyrienskies.eureka.fabric.EurekaModFabric${'$'}Client"
+    ],
+    "modmenu": [
+      "org.valkyrienskies.eureka.fabric.EurekaModFabric${'$'}ModMenu"
+    ],
+    "fabric-datagen": [
+      "org.valkyrienskies.eureka.fabric.EurekaDataGenerator"
+    ]
+  },
+  "depends": {
+    "minecraft": ">=1.21.1",
+    "valkyrienskies": ">=${vs2_version}",
+    "fabricloader": ">=0.14.21"
+  }
+}
