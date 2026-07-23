@@ -33,6 +33,7 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaBlockEntities
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBindings
+import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.AnchorBlock
@@ -79,6 +80,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
     private val ship: LoadedServerShip? get() = (level as ServerLevel).getLoadedShipManagingPos(this.blockPos)
     private val control: EurekaShipControl? get() = ship?.getAttachment(EurekaShipControl::class.java)
+
+    // True when this helm's ship is currently bound as an armada child. The helm menu greys out this ship's
+    // controls (assemble/disassemble/cruise/mode/keep-active) while so -- a child is steered only by its parent;
+    // only "/armada unbind" (later, the helm's Child checkbox) releases it. Server-side truth, synced to the menu.
+    val isArmadaChild: Boolean get() = ship?.let { ArmadaShipControl.get(it)?.isChild == true } ?: false
 
     // Keep-active (VS2 ShipSettings), toggled from the helm menu's "Keep Active?" checkbox -- equivalent to
     // `/vs set-keep-active <ship> <bool>` but usable by players without command access. Server-side only.

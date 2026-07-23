@@ -335,27 +335,34 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // which used to grey out cruise / keep-active / the mode radio even on a fully assembled ship.
         val assembled = menu.assembled
         val advanced = !menu.vanillaControls
+        // A ship bound as an armada child is read-only from its own helm -- it's steered only by its parent, so
+        // its controls grey out. The readouts (Top Speed / Blocks / Dimensions / Engine Power, and the cruise
+        // value boxes) stay visible so the child can still be inspected. Only "/armada unbind" releases it.
+        val childLocked = menu.isArmadaChild
 
-        assembleButton.active = !assembled
-        disassembleButton.active = EurekaConfig.SERVER.allowDisassembly && assembled
+        assembleButton.active = !assembled && !childLocked
+        disassembleButton.active = EurekaConfig.SERVER.allowDisassembly && assembled && !childLocked
         alignButton.active = disassembleButton.active
 
         // Advanced / Vanilla radio is per-ship -> only meaningful once assembled.
-        advancedCheckbox.active = assembled
-        vanillaCheckbox.active = assembled
+        advancedCheckbox.active = assembled && !childLocked
+        vanillaCheckbox.active = assembled && !childLocked
 
-        keepActiveCheckbox.active = assembled
-        waterLockCheckbox.active = true
+        keepActiveCheckbox.active = assembled && !childLocked
+        waterLockCheckbox.active = !childLocked
 
-        // Cruise controls need a ship AND advanced mode (vanilla cruise is the single C-toggle, no per-axis sets).
-        val cruiseUsable = assembled && advanced
+        // Cruise controls need a ship AND advanced mode (vanilla cruise is the single C-toggle, no per-axis sets),
+        // and are locked on a child. The value boxes stay VISIBLE (read-only) for a child so its speed/turn/
+        // vertical setpoints remain legible; they're editable only when the section is actually usable.
+        val cruiseUsable = assembled && advanced && !childLocked
+        val cruiseVisible = assembled && advanced
         cruiseMasterCheckbox.active = cruiseUsable
         cruiseSpeedCheckbox.active = cruiseUsable
         cruiseTurnCheckbox.active = cruiseUsable
         cruiseVerticalCheckbox.active = cruiseUsable
-        updateCruiseBox(cruiseSpeedBox, cruiseUsable, menu.cruiseSpeed)
-        updateCruiseBox(cruiseTurnBox, cruiseUsable, menu.cruiseTurn)
-        updateCruiseBox(cruiseVerticalBox, cruiseUsable, menu.cruiseVertical)
+        updateCruiseBox(cruiseSpeedBox, cruiseVisible, cruiseUsable, menu.cruiseSpeed)
+        updateCruiseBox(cruiseTurnBox, cruiseVisible, cruiseUsable, menu.cruiseTurn)
+        updateCruiseBox(cruiseVerticalBox, cruiseVisible, cruiseUsable, menu.cruiseVertical)
 
         // HUD sub-toggles grey out while the master is off.
         val hudOn = EurekaConfig.CLIENT.displayHud
@@ -379,15 +386,16 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         if (!isLookingAtShip && renaming) cancelRename()
     }
 
-    // Show/enable a cruise box and, while it isn't being edited, keep it displaying the live synced value.
-    // The synced value is in thousandths (see ShipHelmScreenMenu) so it renders with three decimals for fine
-    // tuning; speed tracks the ship's live velocity (HUD-synced), turn/vertical show their locked setpoints.
-    private fun updateCruiseBox(box: EditBox, usable: Boolean, syncedThousandths: Int) {
-        box.visible = usable
-        box.setEditable(usable)
+    // Show a cruise box and, while it isn't being edited, keep it displaying the live synced value. [visible]
+    // and [editable] are separate so an armada child can keep the box readable (visible) while locking edits
+    // (not editable). The synced value is in thousandths (see ShipHelmScreenMenu) so it renders with three
+    // decimals for fine tuning; speed tracks the ship's live velocity (HUD-synced), turn/vertical show setpoints.
+    private fun updateCruiseBox(box: EditBox, visible: Boolean, editable: Boolean, syncedThousandths: Int) {
+        box.visible = visible
+        box.setEditable(editable)
         // Locale.ROOT so the decimal separator is always '.', matching the box's NUMERIC filter (a locale that
         // formats with ',' would be rejected by the filter and truncate the value).
-        if (usable && !box.isFocused) box.value = String.format(java.util.Locale.ROOT, "%.3f", syncedThousandths / 1000.0)
+        if (visible && !box.isFocused) box.value = String.format(java.util.Locale.ROOT, "%.3f", syncedThousandths / 1000.0)
     }
 
     // Assembler "+ N%" box: always visible (matching the checkboxes), editable only when its sub is on. While not

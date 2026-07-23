@@ -29,10 +29,12 @@ object EurekaMod {
             useLegacySerializer()
         }
 
-        // Armada parent/child bind state. Transient for now (step 1): the weld joint isn't persisted
-        // by the solver, so the bookkeeping resets on reload alongside it. See ArmadaShipControl.
+        // Armada parent/child bind state, PERSISTED (Jackson) so a bound child re-joins its parent after a
+        // world reload. Only the child-side bind (parent id + offset) is serialized; the runtime follow
+        // provider that positions each child is re-installed every server tick by ArmadaBindings.reconcile.
+        // Legacy serializer matches this class's @JsonAutoDetect(fieldVisibility = ANY) design.
         ValkyrienSkiesMod.vsCore.registerAttachment(ArmadaShipControl::class.java) {
-            useTransientSerializer()
+            useLegacySerializer()
         }
     }
 

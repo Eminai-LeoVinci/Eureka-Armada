@@ -1,6 +1,8 @@
 package org.valkyrienskies.eureka.armada
 
 import net.minecraft.server.level.ServerLevel
+import org.joml.Quaterniond
+import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -45,6 +47,39 @@ object ArmadaBindings {
         // Copy the set first -- unbindChild mutates the parent's childShipIds.
         for (childId in armada.childShipIds.toList()) {
             level.shipObjectWorld.loadedShips.getById(childId)?.let { unbindChild(level, it) }
+        }
+    }
+
+    /**
+     * Re-establish any armada bond that a world reload dropped. The child-side bind (parent id + offset) is
+     * persisted on [ArmadaShipControl], but the [ArmadaFollowProvider] that actually positions the child is a
+     * runtime object and isn't serialized -- so just after load a bound child has its parent id but no provider
+     * and would briefly behave as a free ship. Called every server-world tick: for each loaded child whose
+     * provider is missing and whose parent is loaded, it re-installs the follow provider, re-disables ship-ship
+     * collision with the parent, and rebuilds the parent's [ArmadaShipControl.childShipIds] entry. Idempotent --
+     * a child that's already following is skipped in O(1), so the steady-state cost is negligible.
+     */
+    fun reconcile(level: ServerLevel) {
+        val world = level.shipObjectWorld
+        for (child in world.loadedShips) {
+            val armada = ArmadaShipControl.get(child) ?: continue
+            val parentId = armada.parentShipId ?: continue
+            if (child.transformProvider is ArmadaFollowProvider) continue // already following
+            val parent = world.loadedShips.getById(parentId) ?: continue  // parent not loaded yet; retry next tick
+            val pos = armada.intendedPosInParent ?: continue
+            val rot = armada.intendedRotInParent ?: Quaterniond()
+
+            // Rebuild the follow provider from the persisted offset. Scaling and centre-of-mass are intrinsic
+            // ship properties, so they're re-read live rather than persisted.
+            child.transformProvider = ArmadaFollowProvider(
+                parent,
+                Vector3d(pos),
+                Quaterniond(rot),
+                Vector3d(child.transform.shipToWorldScaling),
+                Vector3d(child.transform.positionInShip)
+            )
+            ValkyrienSkiesMod.getOrCreateGTPA(parent.chunkClaimDimension).disableCollisionBetween(parent.id, child.id)
+            ArmadaShipControl.getOrCreate(parent).childShipIds.add(child.id)
         }
     }
 }

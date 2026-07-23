@@ -10,6 +10,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.ResourcePackActivationType;
@@ -25,6 +26,7 @@ import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
+import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
@@ -53,6 +55,11 @@ public class EurekaModFabric implements ModInitializer {
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
             ArmadaCommand.INSTANCE.register(dispatcher);
         });
+
+        // Re-establish persisted armada bonds after a world reload. The child-side bind is saved on the
+        // ArmadaShipControl attachment, but the runtime follow provider that positions each child isn't, so
+        // reconcile re-installs it once the parent is loaded. Cheap: it skips already-following children in O(1).
+        ServerTickEvents.END_WORLD_TICK.register(ArmadaBindings.INSTANCE::reconcile);
     }
 
     @Environment(EnvType.CLIENT)
