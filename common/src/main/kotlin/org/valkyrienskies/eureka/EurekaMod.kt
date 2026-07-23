@@ -1,5 +1,6 @@
 package org.valkyrienskies.eureka
 
+import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 
@@ -26,6 +27,12 @@ object EurekaMod {
         // Legacy serializer matches this class's @JsonAutoDetect(fieldVisibility = ANY) design.
         ValkyrienSkiesMod.vsCore.registerAttachment(EurekaShipControl::class.java) {
             useLegacySerializer()
+        }
+
+        // Armada parent/child bind state. Transient for now (step 1): the weld joint isn't persisted
+        // by the solver, so the bookkeeping resets on reload alongside it. See ArmadaShipControl.
+        ValkyrienSkiesMod.vsCore.registerAttachment(ArmadaShipControl::class.java) {
+            useTransientSerializer()
         }
     }
 

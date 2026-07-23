@@ -25,6 +25,7 @@ import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
+import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
@@ -49,6 +50,8 @@ public class EurekaModFabric implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             ShipWeightCommand.INSTANCE.register(dispatcher);
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
+            // "/armada bind|unbind|list" -- its own root literal, not under /vs.
+            ArmadaCommand.INSTANCE.register(dispatcher);
         });
     }
 

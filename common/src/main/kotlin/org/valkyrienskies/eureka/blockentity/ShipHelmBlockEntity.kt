@@ -32,6 +32,7 @@ import org.valkyrienskies.core.api.attachment.getAttachment
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaBlockEntities
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.AnchorBlock
@@ -522,6 +523,12 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         val ship = ship ?: return
         val level = level ?: return
         val control = control ?: return
+
+        // Release this ship from any armada first: a welded ship must not tear down with a live joint (the
+        // joint would reference a ship that no longer exists), and a child dragged by a weld can end up
+        // tilted/out of position, which makes unfillShip relocate blocks out of the world's height range and
+        // crash. Idempotent, so it's safe to call every waiting tick. See ArmadaBindings.
+        if (level is ServerLevel) ArmadaBindings.releaseFromArmada(level, ship)
 
         if (!control.canDisassemble) {
             shouldDisassembleWhenPossible = true
