@@ -5,6 +5,7 @@ import org.joml.Quaterniond
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
+import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.shipObjectWorld
 
 /**
@@ -82,4 +83,27 @@ object ArmadaBindings {
             ArmadaShipControl.getOrCreate(parent).childShipIds.add(child.id)
         }
     }
+
+    /** A single child's bond flattened for the client-sync snapshot (see ArmadaNetworkingFabric). */
+    class ArmadaBondData(val childId: Long, val parentId: Long, val pos: Vector3d, val rot: Quaterniond)
+
+    /**
+     * Snapshot every loaded child's bond in [level] for client sync. Lives here (common) rather than in the
+     * fabric networking layer because it touches VS's `shipObjectWorld` extension, which only resolves against
+     * the common module's classpath.
+     */
+    fun collectBonds(level: ServerLevel): List<ArmadaBondData> {
+        val out = ArrayList<ArmadaBondData>()
+        for (ship in level.shipObjectWorld.loadedShips) {
+            val armada = ArmadaShipControl.get(ship) ?: continue
+            val parentId = armada.parentShipId ?: continue
+            val pos = armada.intendedPosInParent ?: continue
+            val rot = armada.intendedRotInParent ?: continue
+            out.add(ArmadaBondData(ship.id, parentId, Vector3d(pos), Quaterniond(rot)))
+        }
+        return out
+    }
+
+    /** Stable per-dimension key (VS DimensionId string) for [level]; used to gate the bond broadcast. */
+    fun dimKey(level: ServerLevel): String = level.dimensionId
 }
