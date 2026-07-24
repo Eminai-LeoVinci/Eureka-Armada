@@ -44,6 +44,9 @@ object ArmadaClientBonds {
     fun tick() = ensureProviders()
 
     private fun ensureProviders() {
+        // Nothing to install, and asking for the ship world outside a level (title screen, world load) makes VS log
+        // a warning with a stack trace -- once per client tick, which is a lot of log for no work.
+        if (bonds.isEmpty()) return
         val world = Minecraft.getInstance().shipObjectWorld
         for ((childId, bond) in bonds) {
             val child = world.loadedShips.getById(childId) as? ClientShip ?: continue
