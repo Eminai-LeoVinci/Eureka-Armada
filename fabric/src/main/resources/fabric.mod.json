@@ -38,6 +38,9 @@
       "org.valkyrienskies.eureka.fabric.EurekaDataGenerator"
     ]
   },
+  "mixins": [
+    "vs_eureka.mixins.json"
+  ],
   "depends": {
     "minecraft": ">=1.21.1",
     "valkyrienskies": ">=${vs2_version}",

@@ -43,6 +43,29 @@ object ArmadaClientBonds {
     /** Called each client tick: (re)install providers on any bound child that doesn't have one yet. */
     fun tick() = ensureProviders()
 
+    /** True when this client knows of at least one bond -- lets callers skip armada work entirely when there is none. */
+    fun hasBonds(): Boolean = bonds.isNotEmpty()
+
+    /**
+     * True when both ships belong to the same armada (same parent, or one is the other's parent). Used by the
+     * ship-mounted camera clip: the whole formation moves as one, so no ship in it should shove the camera in --
+     * only the world and ships outside the armada should.
+     */
+    fun sharesArmadaWith(a: Long, b: Long): Boolean {
+        if (bonds.isEmpty()) return false
+        if (a == b) return true
+        return rootOf(a) == rootOf(b)
+    }
+
+    /** Walk up to the armada's top parent. Bonds are one level deep today; the cap just makes a cycle harmless. */
+    private fun rootOf(shipId: Long): Long {
+        var id = shipId
+        repeat(MAX_BOND_DEPTH) {
+            id = bonds[id]?.parentShipId ?: return id
+        }
+        return id
+    }
+
     private fun ensureProviders() {
         // Nothing to install, and asking for the ship world outside a level (title screen, world load) makes VS log
         // a warning with a stack trace -- once per client tick, which is a lot of log for no work.
@@ -61,4 +84,6 @@ object ArmadaClientBonds {
         val child = Minecraft.getInstance().shipObjectWorld.loadedShips.getById(childId) as? ClientShip ?: return
         if (child.transformProvider is ArmadaClientFollowProvider) child.transformProvider = null
     }
+
+    private const val MAX_BOND_DEPTH = 8
 }
