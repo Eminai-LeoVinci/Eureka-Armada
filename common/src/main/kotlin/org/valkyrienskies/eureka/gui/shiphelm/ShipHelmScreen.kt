@@ -23,7 +23,7 @@ import org.valkyrienskies.mod.common.getShipManagingPos
  *  - Advanced Controls / Vanilla Controls radio (Advanced default; Vanilla = the pre-overhaul control feel).
  *  - three columns: Cruise Control (master + Speed/Turn/Vertical arm checkboxes, each with a manual value box),
  *    Display HUD (master + Speed/Altitude/Heading), Eureka Assembler (master + Auto Floaters/Balloons).
- *  - a divider, then miscellaneous toggles (Keep Active, Water Lock).
+ *  - a divider, then miscellaneous toggles: Keep Active / Water Lock left, Armada Parent / Armada Child right.
  *  - bottom row: three info boxes (Top Speed / Blocks / Dimensions) bottom-left, the Assemble/Align/Disassemble
  *    buttons centre, and three boxes bottom-right (Engine Power %, then two reserved-blank).
  */
@@ -61,6 +61,8 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     private lateinit var keepActiveCheckbox: ShipHelmCheckbox
     private lateinit var waterLockCheckbox: ShipHelmCheckbox
+    private lateinit var armadaParentCheckbox: ShipHelmCheckbox
+    private lateinit var armadaChildCheckbox: ShipHelmCheckbox
 
     private lateinit var renameButton: ShipHelmIconButton
     private lateinit var renameBox: EditBox
@@ -202,6 +204,20 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
                 x + MISC_X, y + MISC_Y + MISC_DY, checkboxWidth(WATER_LOCK_TEXT),
                 WATER_LOCK_TEXT, font, { menu.waterAltitudeHold }
             ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 5) }
+        )
+        // Armada role markers, second misc column: tick Parent at the lead ship, then Child at each ship that
+        // should fly in its formation. Mutually exclusive (see updateButtons).
+        armadaParentCheckbox = addRenderableWidget(
+            ShipHelmCheckbox(
+                x + MISC2_X, y + MISC_Y, checkboxWidth(ARMADA_PARENT_TEXT),
+                ARMADA_PARENT_TEXT, font, { menu.isArmadaParent }
+            ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 15) }
+        )
+        armadaChildCheckbox = addRenderableWidget(
+            ShipHelmCheckbox(
+                x + MISC2_X, y + MISC_Y + MISC_DY, checkboxWidth(ARMADA_CHILD_TEXT),
+                ARMADA_CHILD_TEXT, font, { menu.isArmadaChild }
+            ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 16) }
         )
         // endregion
 
@@ -350,6 +366,12 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
         keepActiveCheckbox.active = assembled && !childLocked
         waterLockCheckbox.active = !childLocked
+
+        // Armada role markers are mutually exclusive: a child can't be marked parent, and a parent (real or
+        // just marked) can't be ticked child. Both need an assembled ship, since a bond is between two ships.
+        // Child is the ONE control an armada child keeps -- unticking it is how the ship gets released.
+        armadaParentCheckbox.active = assembled && !childLocked
+        armadaChildCheckbox.active = assembled && (childLocked || !menu.isArmadaParent)
 
         // Cruise controls need a ship AND advanced mode (vanilla cruise is the single C-toggle, no per-axis sets),
         // and are locked on a child. The value boxes stay VISIBLE (read-only) for a child so its speed/turn/
@@ -615,10 +637,12 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val PLUS_X = PCT_BOX_X - 8 // the "+" sits just left of each % box
         private const val WEIGHT_TEXT_COLOR = 0xFFE0E0E0.toInt() // near-white, matching the % EditBoxes' text
 
-        // Miscellaneous stack.
+        // Miscellaneous stack. Two columns: Keep Active / Water Lock on the left, the armada role markers on
+        // the right. MISC2_X clears the widest left label ("Keep Active?" is ~78px wide including its box).
         private const val MISC_X = 14
         private const val MISC_Y = 104
         private const val MISC_DY = 13
+        private const val MISC2_X = 120
 
         // Bottom row: info boxes (left), buttons (centre), engine boxes (right).
         private const val BOX_H = 15
@@ -645,6 +669,8 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
         private val KEEP_ACTIVE_TEXT = Component.translatable("gui.vs_eureka.keep_active")
         private val WATER_LOCK_TEXT = Component.translatable("gui.vs_eureka.water_lock")
+        private val ARMADA_PARENT_TEXT = Component.translatable("gui.vs_eureka.armada_parent")
+        private val ARMADA_CHILD_TEXT = Component.translatable("gui.vs_eureka.armada_child")
         // Underlined so the Advanced / Vanilla mode selectors read as the section headers they are.
         private val ADVANCED_TEXT = Component.translatable("gui.vs_eureka.advanced_controls")
             .withStyle(ChatFormatting.UNDERLINE)

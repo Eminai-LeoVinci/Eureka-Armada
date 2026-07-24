@@ -51,6 +51,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedMassHigh = 0     // remaining high bits (a DataSlot transmits only a 16-bit short)
     private var syncedAssembled = false // is THIS helm's ship assembled (authoritative, not the client raycast)
     private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
+    private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
     init {
         addDataSlot(object : DataSlot() {
             override fun get(): Int = if (blockEntity?.keepActive ?: syncedKeepActive) 1 else 0
@@ -174,12 +175,29 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = if (blockEntity?.isArmadaChild == true) 1 else 0
             override fun set(value: Int) { syncedIsChild = value == 1 }
         })
+        // Armada Parent checkbox state, bit-packed: it ticks either because this ship really leads an armada
+        // (bit0) or because this player has only just marked it as the parent to bind to (bit1, per-player --
+        // hence read against the opener, not globally).
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int {
+                val be = blockEntity ?: return 0
+                var f = 0
+                if (be.isArmadaParent) f = f or 1
+                if (be.isArmadaParentMarkedBy(player)) f = f or 2
+                return f
+            }
+            override fun set(value: Int) { syncedArmadaParent = value }
+        })
     }
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive
     // Server-authoritative, synced above: is this helm's ship assembled (the client's blockEntity is null).
     val assembled: Boolean get() = blockEntity?.assembled ?: syncedAssembled
     // Server-authoritative, synced above: is this helm's ship an armada child (controls read-only if so).
     val isArmadaChild: Boolean get() = blockEntity?.isArmadaChild ?: syncedIsChild
+    // Whether the "Armada Parent" box shows ticked: this ship leads an armada, or the viewer has marked it as
+    // the parent their next children bind to.
+    val isArmadaParent: Boolean get() =
+        blockEntity?.let { it.isArmadaParent || it.isArmadaParentMarkedBy(player) } ?: (syncedArmadaParent != 0)
     val blockCount: Int get() = blockEntity?.assembledBlockCount
         ?: ((syncedBlockHigh shl 16) or (syncedBlockLow and 0xFFFF))
     val topSpeed: Int get() = blockEntity?.estimatedTopSpeed ?: syncedTopSpeed
@@ -291,6 +309,11 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
         if (id == 6 && server) { blockEntity.setVanillaControls(true); return true }
         if (id == 7 && server) { blockEntity.setVanillaControls(false); return true }
 
+        // "Armada Parent" / "Armada Child" markers. 16 is deliberately NOT child-locked: unticking Child is how
+        // a bound ship gets released, so it has to stay live at a child's otherwise read-only helm.
+        if (id == 15 && server) { blockEntity.toggleArmadaParent(player); return true }
+        if (id == 16 && server) { blockEntity.toggleArmadaChild(player); return true }
+
         // "Cruise Control" master -> toggle cruise; 9/10/11 arm the speed/turn/vertical sets.
         if (id == 8 && server) { blockEntity.setCruise(!blockEntity.cruising); return true }
         if (id == 9 && server) { blockEntity.setCruiseAxis(0, !blockEntity.cruiseSpeedArmed); return true }
@@ -319,8 +342,10 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
 
         // Ship-control button ids locked while this helm's ship is an armada child (see isChildLockedButton):
         // 0 assemble, 1 align, 3 disassemble, 4 keep-active, 5 water-lock, 6/7 vanilla/advanced, 8 cruise master,
-        // 9/10/11 cruise speed/turn/vertical arms. The cruise value-entry band is handled separately (by range).
-        private val CHILD_LOCKED_IDS = setOf(0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+        // 9/10/11 cruise speed/turn/vertical arms, 15 armada-parent (a child can't lead an armada). The cruise
+        // value-entry band is handled separately (by range). 16 (armada-child) is the one control a child keeps:
+        // it's the release.
+        private val CHILD_LOCKED_IDS = setOf(0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15)
 
         // Manual cruise value entry rides the vanilla container button-click channel (buttonId is a full VarInt
         // on the wire), so no new packet is needed. The client encodes {axis, value} as one large id; the server

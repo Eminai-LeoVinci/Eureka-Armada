@@ -33,6 +33,7 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaBlockEntities
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBindings
+import org.valkyrienskies.eureka.armada.ArmadaSelection
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
@@ -82,9 +83,92 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     private val control: EurekaShipControl? get() = ship?.getAttachment(EurekaShipControl::class.java)
 
     // True when this helm's ship is currently bound as an armada child. The helm menu greys out this ship's
-    // controls (assemble/disassemble/cruise/mode/keep-active) while so -- a child is steered only by its parent;
-    // only "/armada unbind" (later, the helm's Child checkbox) releases it. Server-side truth, synced to the menu.
+    // controls (assemble/disassemble/cruise/mode/keep-active) while so -- a child is steered only by its parent.
+    // Unticking the menu's "Armada Child" checkbox (or "/armada unbind") releases it. Server truth, synced to the menu.
     val isArmadaChild: Boolean get() = ship?.let { ArmadaShipControl.get(it)?.isChild == true } ?: false
+
+    // region Armada Parent / Child checkboxes
+    // The helm menu's two armada markers, which together do what "/armada bind <parent> <child>" does from a
+    // place that only knows one ship: tick Parent at the lead ship's helm to mark it (per-player, see
+    // ArmadaSelection), then tick Child at each other ship's helm to lock it into that parent's formation.
+    // The two are mutually exclusive -- a child can't be marked parent, and a marked/actual parent can't be
+    // ticked child -- and unticking either releases exactly what it holds.
+
+    /** True when this ship actually leads an armada (has at least one bound child). */
+    val isArmadaParent: Boolean get() = ship?.let { ArmadaShipControl.get(it)?.childShipIds?.isNotEmpty() == true } ?: false
+
+    /** True when [player] has marked this ship as the parent to bind their next children to (children optional). */
+    fun isArmadaParentMarkedBy(player: Player): Boolean =
+        ship?.let { ArmadaSelection.isSelected(player.uuid, it.id) } ?: false
+
+    /**
+     * "Armada Parent" checkbox. Ticking marks this ship as [player]'s parent; unticking clears the mark AND
+     * releases every child it has picked up, so one click dissolves the armada from its lead ship.
+     */
+    fun toggleArmadaParent(player: Player) {
+        val ship = ship ?: return
+        val level = level as? ServerLevel ?: return
+        if (isArmadaChild) {
+            armadaFeedback(player, "This ship is an armada child -- untick Armada Child first.")
+            return
+        }
+
+        if (isArmadaParent || isArmadaParentMarkedBy(player)) {
+            // releaseFromArmada also drops the mark, so unticking at a parent someone ELSE marked doesn't
+            // silently clear this player's mark on a different ship.
+            val released = ArmadaShipControl.get(ship)?.childShipIds?.size ?: 0
+            ArmadaBindings.releaseFromArmada(level, ship)
+            armadaFeedback(
+                player,
+                if (released > 0) "Armada dissolved -- released $released ship(s)." else "Armada parent unmarked."
+            )
+            return
+        }
+
+        ArmadaSelection.select(player.uuid, ship.id)
+        armadaFeedback(player, "Marked as armada parent. Tick Armada Child at another ship's helm to add it.")
+    }
+
+    /**
+     * "Armada Child" checkbox. Ticking locks this ship into the parent [player] marked; unticking releases only
+     * this ship, leaving the rest of the armada flying.
+     */
+    fun toggleArmadaChild(player: Player) {
+        val ship = ship ?: return
+        val level = level as? ServerLevel ?: return
+
+        if (isArmadaChild) {
+            ArmadaBindings.unbindChild(level, ship)
+            armadaFeedback(player, "Released from the armada.")
+            return
+        }
+        if (isArmadaParent || isArmadaParentMarkedBy(player)) {
+            armadaFeedback(player, "This ship is the armada parent -- untick Armada Parent first.")
+            return
+        }
+
+        val parentId = ArmadaSelection.get(player.uuid)
+        if (parentId == null) {
+            armadaFeedback(player, "No armada parent marked -- tick Armada Parent at the lead ship's helm first.")
+            return
+        }
+        val parent = level.shipObjectWorld.loadedShips.getById(parentId)
+        if (parent == null) {
+            ArmadaSelection.forgetShip(parentId)
+            armadaFeedback(player, "The marked parent ship isn't loaded -- get closer to it and try again.")
+            return
+        }
+
+        val refusal = ArmadaBindings.bindChild(parent, ship)
+        player.displayClientMessage(refusal ?: Component.literal("Bound into the armada."), false)
+    }
+
+    // Armada checkbox feedback goes to CHAT, not the action bar: the helm menu is open when these fire and the
+    // HUD is hidden behind it, so an action-bar line would be gone before the player could read it. Chat keeps
+    // the message in the log for when they close the menu.
+    private fun armadaFeedback(player: Player, message: String) =
+        player.displayClientMessage(Component.literal(message), false)
+    // endregion
 
     // Keep-active (VS2 ShipSettings), toggled from the helm menu's "Keep Active?" checkbox -- equivalent to
     // `/vs set-keep-active <ship> <bool>` but usable by players without command access. Server-side only.

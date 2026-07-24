@@ -12,23 +12,19 @@ import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.eureka.EurekaConfig
-import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 import org.valkyrienskies.mod.common.shipObjectWorld
 
 /**
  * "/armada bind <parent> <child>", "/armada unbind <child>", "/armada list", "/armada debug <ship>" --
- * the command-driven, no-GUI first cut of the Armada parent/child feature. Rigidly welds a child ship
- * into a parent ship's frame with a VS core [VSFixedJoint] so a fleet moves as one rigid body.
+ * the command-driven face of the Armada parent/child feature (the helm menu's Armada Parent/Child checkboxes
+ * are the other). Locks a child ship into a parent ship's frame so a fleet flies as one vessel; see
+ * [ArmadaBindings.bindChild] for the bond itself.
  *
  * Registered as its OWN root literal (not under /vs) to sidestep the client-/vs-tree-first parse ambiguity
  * that Eureka's other commands document.
  */
 object ArmadaCommand {
-
-    // Both ships must be this close to stationary (m/s) to bind, so the orientation snap and the freshly
-    // created joint are born stress-free rather than fighting live momentum.
-    private const val REST_VELOCITY_EPS = 0.5
 
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
@@ -59,63 +55,20 @@ object ArmadaCommand {
         val parentAny: Ship = ShipArgument.getShip(ctx, "parent")
         val childAny: Ship = ShipArgument.getShip(ctx, "child")
 
-        if (parentAny.id == childAny.id) {
-            src.sendFailure(Component.literal("A ship can't be its own parent."))
-            return 0
-        }
         if (parentAny !is LoadedServerShip || childAny !is LoadedServerShip) {
             src.sendFailure(Component.literal("Both ships must be loaded -- get closer to them and try again."))
             return 0
         }
-        val parent: LoadedServerShip = parentAny
-        val child: LoadedServerShip = childAny
 
-        if (parent.chunkClaimDimension != child.chunkClaimDimension) {
-            src.sendFailure(Component.literal("Both ships must be in the same dimension."))
+        // Every rule and the bond itself live in ArmadaBindings, so the helm menu's Child checkbox binds
+        // identically to this command.
+        ArmadaBindings.bindChild(parentAny, childAny)?.let {
+            src.sendFailure(it)
             return 0
         }
-
-        val childArmada = ArmadaShipControl.getOrCreate(child)
-        if (childArmada.isChild) {
-            src.sendFailure(Component.literal("That ship is already bound to a parent -- unbind it first."))
-            return 0
-        }
-
-        if (parent.velocity.length() > REST_VELOCITY_EPS || child.velocity.length() > REST_VELOCITY_EPS) {
-            src.sendFailure(Component.literal("Bring both ships to a stop before binding."))
-            return 0
-        }
-
-        // The fixed offset the child holds: its current centre of mass expressed in the parent's model
-        // (shipyard) frame. The follow provider maps this back through the parent's live pose each physics
-        // tick, so the child keeps this exact spot in the armada. Orientation is locked to the parent
-        // exactly (identity relative rotation), so on the first tick the child snaps to face forward -- no
-        // pre-align needed, since pose-slaving simply places it there.
-        val childCenterInParentModel = parent.transform.worldToShip.transformPosition(
-            Vector3d(child.transform.positionInWorld), Vector3d()
-        )
-        val relRot = Quaterniond()
-
-        // Lock the child to the parent by POSITIONING it every physics tick (no joint, nothing to flex).
-        child.transformProvider = ArmadaFollowProvider(
-            parent,
-            Vector3d(childCenterInParentModel),
-            Quaterniond(relRot),
-            Vector3d(child.transform.shipToWorldScaling),
-            Vector3d(child.transform.positionInShip)
-        )
-
-        // Ships collide with each other by default; a locked child doesn't need to (its pose is forced), and
-        // an overlapping close armada could otherwise shove the parent. Turn it off between these two.
-        ValkyrienSkiesMod.getOrCreateGTPA(parent.chunkClaimDimension).disableCollisionBetween(parent.id, child.id)
-
-        childArmada.parentShipId = parent.id
-        childArmada.intendedPosInParent = Vector3d(childCenterInParentModel)
-        childArmada.intendedRotInParent = Quaterniond(relRot)
-        ArmadaShipControl.getOrCreate(parent).childShipIds.add(child.id)
 
         src.sendSuccess({
-            Component.literal("Bound ${name(child)} to parent ${name(parent)}.").withStyle(ChatFormatting.GREEN)
+            Component.literal("Bound ${name(childAny)} to parent ${name(parentAny)}.").withStyle(ChatFormatting.GREEN)
         }, true)
         return 1
     }
