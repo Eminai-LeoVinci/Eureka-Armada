@@ -554,12 +554,23 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         val holdAABB = EntityShipCollisionUtils.worldAABBForShip(ship)
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s gravity-hold through teardown (mobs/entities only)
 
-        ShipAssembler.unfillShip(
-            level as ServerLevel,
-            ship,
-            this.blockPos,
-            BlockPos.containing(inWorld.x, inWorld.y, inWorld.z)
-        )
+        val serverLevel = level as ServerLevel
+        if (!ShipAssembler.unfillShip(serverLevel, ship, this.blockPos, BlockPos.containing(inWorld.x, inWorld.y, inWorld.z))) {
+            // The hull doesn't fit under (or over) the world's height limit where it's floating, so it was left
+            // alone rather than relocating blocks into a chunk section that doesn't exist. Hand control back --
+            // otherwise the ship stays stuck aligning, retrying this every tick -- and say why, because from the
+            // helm it just looks like the button stopped working.
+            shouldDisassembleWhenPossible = false
+            control.disassembling = false
+            control.aligning = false
+            val centre = ship.transform.positionInWorld
+            for (player in serverLevel.players()) {
+                if (player.distanceToSqr(centre.x(), centre.y(), centre.z()) < 128.0 * 128.0) {
+                    player.displayClientMessage(Component.translatable("gui.vs_eureka.disassemble_out_of_world"), true)
+                }
+            }
+            return
+        }
         // ship.die() TODO i think we do need this no? or autodetecting on all air
 
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)

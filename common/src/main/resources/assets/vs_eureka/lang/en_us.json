@@ -35,6 +35,7 @@
   "gui.vs_eureka.engine": "Engine",
   "gui.vs_eureka.assemble": "Assemble",
   "gui.vs_eureka.disassemble": "Disassemble",
+  "gui.vs_eureka.disassemble_out_of_world": "This ship is too high to disassemble - fly it down first",
   "gui.vs_eureka.align": "Align",
   "gui.vs_eureka.aligning": "Aligning...",
   "gui.vs_eureka.keep_active": "Keep Active",

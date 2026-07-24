@@ -127,9 +127,11 @@ object ShipAssembler {
         }
     }
 
-    fun unfillShip(level: ServerLevel, ship: ServerShip, shipCenter: BlockPos, center: BlockPos) {
-        ship.isStatic = true
-
+    /**
+     * Puts [ship]'s blocks back into the world and tears the ship down. Returns false without touching anything if
+     * the ship can't be laid down where it is -- see the height check below.
+     */
+    fun unfillShip(level: ServerLevel, ship: ServerShip, shipCenter: BlockPos, center: BlockPos): Boolean {
         val rotation: Rotation = ship.transform.shipToWorldRotation
             .let(::AxisAngle4d)
             .let(ShipAssembler::snapRotation)
@@ -143,6 +145,35 @@ object ShipAssembler {
                 .scale(shipToWorldScaling)
                 .translate(-positionInShip.x(), -positionInShip.y(), -positionInShip.z())
         }
+
+        // Every block below is written to floor(its world centre), and nothing downstream checks that against the
+        // world's height range: a hull straddling the build ceiling -- which a high-flying ship reaches easily --
+        // relocates blocks into a chunk section that doesn't exist and takes the server down with an out-of-bounds
+        // index. Bail out before anything is mutated. Refusing beats the alternatives: skipping the offending
+        // blocks would silently delete the top of someone's build, and clamping them would fuse it into a slab.
+        // The rotation is snapped to 90* here, so the ship's block AABB through this matrix is exact.
+        val bounds = ship.shipAABB
+        if (bounds != null) {
+            val probe = Vector3d()
+            var lowest = Double.MAX_VALUE
+            var highest = -Double.MAX_VALUE
+            for (x in intArrayOf(bounds.minX(), bounds.maxX() + 1)) {
+                for (y in intArrayOf(bounds.minY(), bounds.maxY() + 1)) {
+                    for (z in intArrayOf(bounds.minZ(), bounds.maxZ() + 1)) {
+                        val corner = shipToWorld.transformPosition(probe.set(x.toDouble(), y.toDouble(), z.toDouble()))
+                        lowest = min(lowest, corner.y)
+                        highest = max(highest, corner.y)
+                    }
+                }
+            }
+            if (level.isOutsideBuildHeight(floor(lowest).toInt()) ||
+                level.isOutsideBuildHeight(floor(highest).toInt() - 1)
+            ) {
+                return false
+            }
+        }
+
+        ship.isStatic = true
 
         val alloc0 = Vector3d()
 
@@ -261,6 +292,7 @@ object ShipAssembler {
                 }
             }
         }
+        return true
     }
 
     private fun bfs(
