@@ -27,6 +27,9 @@ object ArmadaBindings {
 
         child.transformProvider = null
         ValkyrienSkiesMod.getOrCreateGTPA(child.chunkClaimDimension).enableCollisionBetween(parentId, child.id)
+        // Nothing probes this hull once it's flying itself again; the parent's clamp provider is dropped by
+        // ArmadaCollision.tick the moment its last child leaves.
+        ArmadaHullProbe.forget(child.id)
 
         armada.parentShipId = null
         armada.intendedPosInParent = null

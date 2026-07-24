@@ -11,6 +11,7 @@ import org.joml.Quaterniond
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.Ship
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -207,8 +208,20 @@ object ArmadaCommand {
                 )
                 line("centre gap ${fmt(comGap)} blocks; parent speed ${fmt(parent.velocity.length())} m/s")
             }
+            line("hull probe: ${ArmadaHullProbe.sampleCount(ship.id)} sample points")
         } else {
             line("role: PARENT of ${armada.childShipIds}")
+            // The parent answers the whole armada's world contacts, so its clamp is where collision is visible.
+            val clamp = ship.transformProvider as? ArmadaParentClampProvider
+            when {
+                !EurekaConfig.SERVER.armadaChildTerrainCollision ->
+                    line("world collision: OFF (armadaChildTerrainCollision)", ChatFormatting.YELLOW)
+                clamp == null -> line("world collision: no clamp installed yet", ChatFormatting.YELLOW)
+                else -> line(
+                    "world collision: ${clamp.report} (${clamp.samples} child sample points)",
+                    if (clamp.clamp == null) ChatFormatting.GREEN else ChatFormatting.GOLD
+                )
+            }
         }
         src.sendSuccess({ msg }, false)
         return 1

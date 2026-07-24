@@ -29,6 +29,7 @@ import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaClientBonds;
+import org.valkyrienskies.eureka.armada.ArmadaCollision;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
@@ -64,10 +65,13 @@ public class EurekaModFabric implements ModInitializer {
         // Per server-world tick: (1) re-establish persisted armada bonds after a world reload -- the child-side
         // bind is saved on the ArmadaShipControl attachment, but the runtime follow provider that positions each
         // child isn't, so reconcile re-installs it once the parent is loaded (skips already-following children in
-        // O(1)); (2) broadcast the current bonds to clients so the client-side render-follow can smooth child
-        // ships (self-throttles, and only sends while a dimension actually has bonds).
+        // O(1)); (2) solve the armada against the world, so the parent refuses any motion that would put one of its
+        // pose-slaved children inside terrain (runs after reconcile so a bond restored this tick is included);
+        // (3) broadcast the current bonds to clients so the client-side render-follow can smooth child ships
+        // (self-throttles, and only sends while a dimension actually has bonds).
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             ArmadaBindings.INSTANCE.reconcile(level);
+            ArmadaCollision.INSTANCE.tick(level);
             ArmadaNetworkingFabric.INSTANCE.broadcastBonds(level);
         });
     }
