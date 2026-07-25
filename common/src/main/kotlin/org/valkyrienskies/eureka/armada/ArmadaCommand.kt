@@ -42,6 +42,21 @@ object ArmadaCommand {
                     )
                 )
                 .then(literal("list").executes { list(it) })
+                // TEMPORARY -- submarine feasibility experiment, remove with ArmadaSubExperiment.
+                .then(literal("sealed").executes { sealed(it) })
+                // Fills/clears a ship's enclosed air with sub air by hand. Stands in for the helm's
+                // "mark as sub" checkbox until that lands, so the mechanism can be tested on its own.
+                .then(
+                    literal("subair").then(
+                        argument("ship", ShipArgument.ships())
+                            // Explicit modes rather than a bool: "enclosed" only claims air the outside can't
+                            // reach, which under-fills an open-topped hull badly (31 cells where the interior
+                            // is ~174). "all" claims every air cell in the ship's AABB.
+                            .then(literal("enclosed").executes { subAir(it, SubAir.FillMode.ENCLOSED) })
+                            .then(literal("all").executes { subAir(it, SubAir.FillMode.ALL) })
+                            .then(literal("clear").executes { subAir(it, null) })
+                    )
+                )
                 .then(
                     literal("debug").then(
                         argument("ship", ShipArgument.ships()).executes { debug(it) }
@@ -106,6 +121,48 @@ object ArmadaCommand {
         if (count == 0) msg.append(Component.literal("\n  (none)").withStyle(ChatFormatting.GRAY))
         src.sendSuccess({ msg }, false)
         return count
+    }
+
+    /**
+     * Fill a ship's enclosed air with sub air, or put it back to plain air. The helm's "mark as sub" checkbox
+     * will drive this at assembly time; until then this is how a sub gets made.
+     */
+    private fun subAir(ctx: CommandContext<CommandSourceStack>, mode: SubAir.FillMode?): Int {
+        val src = ctx.source
+        val shipAny: Ship = ShipArgument.getShip(ctx, "ship")
+        if (shipAny !is LoadedServerShip) {
+            src.sendFailure(Component.literal("That ship must be loaded -- get closer to it and try again."))
+            return 0
+        }
+        val result =
+            if (mode == null) SubAir.clear(src.level, shipAny) else SubAir.fill(src.level, shipAny, mode)
+        result.error?.let {
+            src.sendFailure(Component.literal(it))
+            return 0
+        }
+        src.sendSuccess({
+            val verb = if (mode == null) "Cleared" else "Filled"
+            val how = if (mode == null) "" else " (${mode.name.lowercase()})"
+            Component.literal("$verb ${result.changed} sub air blocks in ${name(shipAny)}$how.")
+                .withStyle(if (mode == null) ChatFormatting.YELLOW else ChatFormatting.GREEN)
+        }, true)
+        return 1
+    }
+
+    /**
+     * TEMPORARY -- reports what VS2's sealed-area machinery believes at the caller's position, so the
+     * submarine experiment can tell "the feature is off" apart from "the feature is on and disagrees with
+     * me". Remove with [ArmadaSubExperiment].
+     */
+    private fun sealed(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val player = src.player
+        if (player == null) {
+            src.sendFailure(Component.literal("Run this as a player -- it reports on where you're standing."))
+            return 0
+        }
+        src.sendSuccess({ ArmadaSubExperiment.report(src.level, player) }, false)
+        return 1
     }
 
     /**

@@ -24,6 +24,12 @@ object EurekaBlocks {
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
 
+    // A submarine's interior air. No item and no creative tab entry -- it is placed by the assembler, never by
+    // hand. Properties copy vanilla air exactly so that everything which asks "is this air?" says yes.
+    val SUB_AIR = BLOCKS.register("sub_air") {
+        SubAirBlock(blockProps().replaceable().noCollision().noLootTable().air())
+    }
+
     // region Ship Helms
     val OAK_SHIP_HELM = BLOCKS.register("oak_ship_helm") {
         ShipHelmBlock(

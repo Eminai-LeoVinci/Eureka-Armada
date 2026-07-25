@@ -2,9 +2,12 @@
   "required": true,
   "package": "org.valkyrienskies.eureka.fabric.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": [],
+  "mixins": [
+    "MixinEntitySubAir"
+  ],
   "client": [
-    "client.MixinRaycastUtils"
+    "client.MixinRaycastUtils",
+    "client.MixinCameraSubAir"
   ],
   "injectors": {
     "defaultRequire": 1

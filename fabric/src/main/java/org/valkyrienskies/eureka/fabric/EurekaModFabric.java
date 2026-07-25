@@ -32,6 +32,7 @@ import org.valkyrienskies.eureka.armada.ArmadaClientBonds;
 import org.valkyrienskies.eureka.armada.ArmadaCollision;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
+import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
@@ -88,6 +89,11 @@ public class EurekaModFabric implements ModInitializer {
             ArmadaNetworkingFabric.INSTANCE.registerClient();
             ClientTickEvents.END_CLIENT_TICK.register(client -> ArmadaClientBonds.INSTANCE.tick());
 
+            // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea
+            // surface stops drawing inside a hull. Toggled live by "/vs pocket-occluder" so one session can
+            // compare off / on / debug without a relaunch.
+            ArmadaPocketOccluder.register();
+
             BlockEntityRenderers.register(
                 EurekaBlockEntities.INSTANCE.getSHIP_HELM().get(),
                 ShipHelmBlockEntityRenderer::new
@@ -104,6 +110,9 @@ public class EurekaModFabric implements ModInitializer {
             // EurekaConfig object, so this write is seen by the integrated-server cruise logic in single-player.
             // Single-player only by design (a client command can't reach a remote dedicated server); matches the
             // ship-shadows pattern. Candidate for removal at final cleanup.
+            // NOTE: these MUST hang off the client "vs" literal, not "armada". Fabric resolves the CLIENT
+            // command tree first, so registering a client "armada" root would shadow the server's /armada
+            // tree and break bind/unbind/subair entirely.
             ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
                 dispatcher.register(
                     ClientCommandManager.literal("vs")
@@ -117,7 +126,29 @@ public class EurekaModFabric implements ModInitializer {
                                         Component.literal("Eureka cruise-cancel debug " + (enabled ? "enabled" : "disabled"))
                                     );
                                     return 1;
-                                })))));
+                                })))
+                        .then(ClientCommandManager.literal("pocket-occluder")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    ArmadaPocketOccluder.setEnabled(BoolArgumentType.getBool(ctx, "enabled"));
+                                    ctx.getSource().sendFeedback(
+                                        Component.literal("Pocket occluder: " + ArmadaPocketOccluder.describe()));
+                                    return 1;
+                                })))
+                        .then(ClientCommandManager.literal("pocket-occluder-debug")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    ArmadaPocketOccluder.setDebug(BoolArgumentType.getBool(ctx, "enabled"));
+                                    ctx.getSource().sendFeedback(
+                                        Component.literal("Pocket occluder: " + ArmadaPocketOccluder.describe()));
+                                    return 1;
+                                })))
+                        .then(ClientCommandManager.literal("pocket-occluder-status")
+                            .executes(ctx -> {
+                                ctx.getSource().sendFeedback(
+                                    Component.literal("Pocket occluder: " + ArmadaPocketOccluder.describe()));
+                                return 1;
+                            }))));
 
             Registry.register(
                 BuiltInRegistries.CREATIVE_MODE_TAB,
