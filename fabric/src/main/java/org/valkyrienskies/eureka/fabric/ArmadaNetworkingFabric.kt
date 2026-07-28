@@ -19,17 +19,18 @@ import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.armada.ArmadaClientBonds
 
 /**
- * Syncs armada parent/child bonds to clients so the client-side render-follow ([ArmadaClientFollowProvider])
- * can lock each child to its parent's smooth render pose. The bond lives only on the server (an
- * [ArmadaShipControl] attachment, which VS does not sync), so we push a small S2C snapshot.
+ * Syncs armada parent/child bonds to clients so the client knows which ships share an armada. The bond lives
+ * only on the server (an [ArmadaShipControl] attachment, which VS does not sync), so we push a small S2C
+ * snapshot; the client keeps it in [ArmadaClientBonds], where the ship-mounted camera uses it to treat the
+ * whole formation as one. A child is a real welded physics body that VS renders natively, so no render-follow
+ * is involved.
  *
  * Snapshot semantics keep the wire logic trivial: the server sends the complete bond list for a dimension to
  * the players in it, and the client replaces its registry wholesale. That one mechanism covers bind, unbind,
  * join, relog and ship (un)tracking with no per-event bookkeeping. To avoid pointless traffic for the ~all
  * worlds with no armada, we broadcast only while a dimension actually has bonds, plus one trailing empty
- * snapshot the tick its last bond goes away (so clients clear the freed child's follow provider). Sends are
- * throttled to ~5 Hz -- bond changes are rare and a ≤200 ms convergence on a cosmetic smoothing feature is
- * invisible.
+ * snapshot the tick its last bond goes away. Sends are throttled to ~5 Hz -- bond changes are rare and a
+ * ≤200 ms convergence is invisible.
  */
 object ArmadaNetworkingFabric {
 

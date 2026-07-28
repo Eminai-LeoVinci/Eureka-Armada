@@ -11,7 +11,6 @@ import org.joml.Quaterniond
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.Ship
-import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 import org.valkyrienskies.mod.common.shipObjectWorld
 
@@ -193,7 +192,7 @@ object ArmadaCommand {
 
         val parentId = armada.parentShipId
         if (parentId != null) {
-            line("role: CHILD of $parentId (pose-locked)")
+            line("role: CHILD of $parentId (welded)")
             val parent = src.level.shipObjectWorld.loadedShips.getById(parentId)
             if (parent == null) {
                 line("parent not loaded -- can't measure drift", ChatFormatting.RED)
@@ -218,20 +217,24 @@ object ArmadaCommand {
                 )
                 line("centre gap ${fmt(comGap)} blocks; parent speed ${fmt(parent.velocity.length())} m/s")
             }
-            line("hull probe: ${ArmadaHullProbe.sampleCount(ship.id)} sample points")
+            val weldState = when {
+                armada.weldJointIds.isNotEmpty() -> "welded (${armada.weldJointIds.size} joints)"
+                armada.weldPending -> "weld pending"
+                else -> "NOT WELDED"
+            }
+            line("weld: $weldState", if (armada.weldJointIds.isNotEmpty()) ChatFormatting.GREEN else ChatFormatting.RED)
         } else {
             line("role: PARENT of ${armada.childShipIds}")
-            // The parent answers the whole armada's world contacts, so its clamp is where collision is visible.
-            val clamp = ship.transformProvider as? ArmadaParentClampProvider
-            when {
-                !EurekaConfig.SERVER.armadaChildTerrainCollision ->
-                    line("world collision: OFF (armadaChildTerrainCollision)", ChatFormatting.YELLOW)
-                clamp == null -> line("world collision: no clamp installed yet", ChatFormatting.YELLOW)
-                else -> line(
-                    "world collision: ${clamp.report} (${clamp.samples} child sample points)",
-                    if (clamp.clamp == null) ChatFormatting.GREEN else ChatFormatting.GOLD
-                )
+            // Each child is welded to us by a rigid joint and collides with the world itself; the engine resolves
+            // the whole armada's terrain contacts. Report how many of those welds are actually live.
+            val welded = armada.childShipIds.count { id ->
+                src.level.shipObjectWorld.loadedShips.getById(id)
+                    ?.let { ArmadaShipControl.get(it)?.weldJointIds?.isNotEmpty() } == true
             }
+            line(
+                "welds: $welded/${armada.childShipIds.size} children joined (engine-resolved collision)",
+                if (welded == armada.childShipIds.size) ChatFormatting.GREEN else ChatFormatting.YELLOW
+            )
         }
         src.sendSuccess({ msg }, false)
         return 1

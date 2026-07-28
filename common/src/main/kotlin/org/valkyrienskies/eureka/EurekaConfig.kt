@@ -385,51 +385,7 @@ object EurekaConfig {
         )
         // endregion
 
-        // region Armada
-        @JsonSchema(
-            description = "Armada: collide the whole formation with the world. A bound child's pose is written from " +
-                "its parent every tick, so the physics engine cannot collide it -- with this on, the parent refuses " +
-                "any motion that would put a child inside terrain, and the armada stops, slides and grinds as one " +
-                "hull. Turn it off and children fly through the landscape."
-        )
-        var armadaChildTerrainCollision = true
-
-        @JsonSchema(
-            description = "Armada: how many sample points may stand in for one child's hull. Higher = finer contact " +
-                "(the armada stops closer to what it hits, and thin spires are less likely to be missed) at a " +
-                "proportional per-tick cost. Ships bigger than the budget are sampled more coarsely rather than " +
-                "costing more, so this is a hard ceiling on the work per child."
-        )
-        var armadaCollisionSampleBudget = 4096
-
-        @JsonSchema(
-            description = "Armada: fraction of the formation's ALONG-the-surface speed scrubbed off per tick while " +
-                "it is in contact with the world. 0 = frictionless glide, 1 = stops dead the moment it touches " +
-                "anything. Speed heading INTO a surface is always removed regardless of this."
-        )
-        var armadaCollisionSlideFriction = 0.0
-
-        @JsonSchema(
-            description = "Armada: peak speed (m/s) of the push that eases the formation back out of anything it has " +
-                "ended up INSIDE. No sampled hull is exact, so held against a surface long enough some part of it " +
-                "eventually ends up a block or two in; this frees it. Merely touching a surface never triggers it. " +
-                "0 disables the push entirely."
-        )
-        var armadaCollisionRepelSpeed = 3.0
-
-        @JsonSchema(
-            description = "Armada: ticks the repel takes to build from nothing to its full speed, so it reads as a " +
-                "magnet easing the formation out rather than a shove. It cuts out the instant nothing is inside any " +
-                "more -- it never fades out. 20 = one second."
-        )
-        var armadaCollisionRepelRampTicks = 20
-
-        @JsonSchema(
-            description = "Armada: how many ticks ahead of itself the formation is tested. 1 stops as late as " +
-                "possible; higher stops further out and makes it harder for a fast armada to step over a thin wall " +
-                "between two ticks."
-        )
-        var armadaCollisionLookaheadTicks = 2
-        // endregion
+        // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and
+        // collides with the world as a normal physics body, so there is nothing here to tune.
     }
 }

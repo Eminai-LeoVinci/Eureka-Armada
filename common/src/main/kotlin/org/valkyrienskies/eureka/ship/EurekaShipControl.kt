@@ -16,6 +16,7 @@ import org.valkyrienskies.core.api.ships.ServerTickListener
 import org.valkyrienskies.core.api.ships.ShipPhysicsListener
 import org.valkyrienskies.core.api.world.PhysLevel
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.mod.api.SeatedControllingPlayer
 import org.valkyrienskies.mod.common.util.toJOMLD
 import kotlin.math.*
@@ -268,6 +269,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         physShip.doFluidDrag = EurekaConfig.SERVER.doFluidDrag
 
         val ship = ship ?: return
+        // A welded armada child drives off its PARENT's pilot so every ship propels its own mass in lockstep --
+        // but only its LINEAR share (thrust + lift). It contributes NO rotation: the parent steers the whole welded
+        // body, and a child adding its own turn/bank/stabilize on top fought that through the rigid weld and pinned
+        // the heading (a ~7 deg cap). So the child pushes and lifts alongside the parent -- which fixes the veer,
+        // the sink to the child's side and the lost top speed -- while the parent + weld own all turning and upright.
+        val armada = ArmadaShipControl.get(ship)
+        val isArmadaChild = armada?.isChild == true
+        // How much rotation this ship contributes to the armada. A child contributes none (0.0). A parent gets
+        // scaled UP to the armada's combined yaw inertia (see armadaYawTorqueScale) so it steers the whole welded
+        // body at the rate it would steer alone instead of the sluggish fraction its own hull's torque managed.
+        // A lone ship is 1.0, i.e. untouched.
+        val rotationScale = if (isArmadaChild) 0.0 else armadaYawTorqueScale(physShip, physLevel, armada)
         val mass = physShip.mass
         val moiTensor = physShip.momentOfInertia
         val omega: Vector3dc = physShip.omega
@@ -331,7 +344,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         }
         // endregion
 
-        val controllingPlayer = ship.getAttachment(SeatedControllingPlayer::class.java)
+        val controllingPlayer = if (armada?.isChild == true) {
+            // A child drives off its parent's pilot, never its own (locked) helm.
+            armada.parentShip?.getAttachment(SeatedControllingPlayer::class.java)
+        } else {
+            ship.getAttachment(SeatedControllingPlayer::class.java)
+        }
         val validPlayer = controllingPlayer != null && !anchored
 
 
@@ -347,6 +365,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             return
         }
 
+        // Stabilization splits exactly like driving does: EVERY ship brakes its own mass, only the parent rotates.
+        //
+        // The linear brake is applyInvariantForce, i.e. a force at the ship's OWN centre of mass. Leaving it to the
+        // parent alone meant a pilotless armada braked at a point well off the combined centre of mass, and that
+        // lever arm is a pure yaw torque -- so a coasting armada was wrenched into a hard turn toward the child
+        // side (seen on dismount-with-momentum, and while cruising between inputs). Because the brake scales with
+        // mass, every ship braking itself puts the net force back through the combined centre: no yaw at all.
+        // The angular half stays parent-only -- a child righting itself through the rigid weld fights the parent
+        // and pins the heading (that was the old +/-7 deg cap).
         stabilize(
             physShip,
             omega,
@@ -356,7 +383,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // Yaw is braked when there's no pilot -- EXCEPT while a turn-cruise orbit is locked, so a saved/
             // pilotless circling ship keeps its rate instead of being dragged straight. Reads the PERSISTED
             // cruiseTurning (this runs before the resume block rebuilds the transient on the first reload tick).
-            !validPlayer && !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise)
+            !validPlayer && !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise),
+            angular = !isArmadaChild
         )
 
         var idealUpwardVel = Vector3d(0.0, 0.0, 0.0)
@@ -482,7 +510,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         val verticalInputActive = (effective?.upImpulse ?: 0.0f) != 0.0f && (!vanillaControls || !isCruising)
 
         effective?.let { control ->
-            applyPlayerControl(control, physShip, thrustMultiplier)
+            // A child applies only its linear thrust, never its own rotation (rotationScale 0); a parent steers for
+            // the whole welded body (rotationScale > 1). See the rotationScale definition above.
+            applyPlayerControl(control, physShip, thrustMultiplier, rotationScale)
             idealUpwardVel = getPlayerUpwardVel(control, mass)
         }
 
@@ -645,7 +675,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         return currentControlData
     }
 
-    private fun applyPlayerControl(control: ControlData, physShip: PhysShip, thrustMultiplier: Double) {
+    private fun applyPlayerControl(control: ControlData, physShip: PhysShip, thrustMultiplier: Double, rotationScale: Double) {
 
         val ship = ship ?: return
         val transform = physShip.transform
@@ -742,12 +772,78 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             }
         }
 
-        physShip.applyInvariantTorque(moiTensor.transform(Vector3d(0.0, idealAlphaY, 0.0)))
+        // A welded child skips its own rotation entirely (rotationScale 0): the parent steers the whole welded body,
+        // so the child only adds forward thrust below. A parent carrying children gets rotationScale > 1, sizing its
+        // torque for the armada's combined yaw inertia instead of just this hull's. idealAlphaY covers both the turn
+        // and the brake-to-centre, so scaling it here restores the commanded turn rate AND the stopping authority.
+        if (rotationScale > 0.0) {
+            physShip.applyInvariantTorque(moiTensor.transform(Vector3d(0.0, idealAlphaY * rotationScale, 0.0)))
+            // Banking is cosmetic roll into the turn and deliberately stays at this hull's own scale: scaled up with
+            // the armada it would roll the whole formation hard enough to fight stabilize.
+            physShip.applyInvariantTorque(getPlayerControlledBanking(control, physShip, moiTensor, -idealAlphaY))
+        }
         // endregion
 
-        physShip.applyInvariantTorque(getPlayerControlledBanking(control, physShip, moiTensor, -idealAlphaY))
-
         physShip.applyInvariantForce(getPlayerForwardVel(control, physShip).mul(thrustMultiplier))
+    }
+
+    /**
+     * Parent side: the factor that makes this ship's steering torque turn the WHOLE welded armada at the rate this
+     * hull alone would turn.
+     *
+     * The rigid welds make a parent and its children one body for rotation, and that body's yaw inertia is far
+     * larger than the parent's own: each ship contributes its own inertia PLUS mass * distance^2 from the combined
+     * centre of mass -- the parallel-axis term, which dominates once hulls sit side by side. The control code sizes
+     * torque as (own inertia) * alpha, so the armada only ever reached alpha * own / combined: turning was sluggish
+     * and hard turns were slow to stop. Multiplying by combined / own restores the commanded angular acceleration
+     * exactly, so the pilot feels the parent's solo handling no matter how much is bolted to it.
+     *
+     * Yaw inertia is read as the tensor's YY term, matching the world-Y torque the caller applies -- stabilize holds
+     * ships upright, so model Y and world Y agree closely enough.
+     *
+     * Returns 1.0 (no change) for a lone ship, or for a parent whose children are not in the physics world.
+     */
+    private fun armadaYawTorqueScale(physShip: PhysShip, physLevel: PhysLevel, armada: ArmadaShipControl?): Double {
+        val childIds = armada?.childShipIds ?: return 1.0
+        if (childIds.isEmpty()) return 1.0
+
+        val ownYawInertia = physShip.momentOfInertia.m11()
+        if (!ownYawInertia.isFinite() || ownYawInertia <= 0.0) return 1.0
+
+        val members = ArrayList<PhysShip>(childIds.size + 1)
+        members.add(physShip)
+        childIds.forEach { id -> physLevel.getShipById(id)?.let(members::add) }
+        if (members.size < 2) return 1.0
+
+        // Combined centre of mass. Only the horizontal plane matters: yaw lever arms are X/Z.
+        var totalMass = 0.0
+        var comX = 0.0
+        var comZ = 0.0
+        members.forEach { member ->
+            val memberMass = member.mass
+            val pos = member.transform.positionInWorld
+            totalMass += memberMass
+            comX += memberMass * pos.x()
+            comZ += memberMass * pos.z()
+        }
+        if (totalMass <= 0.0) return 1.0
+        comX /= totalMass
+        comZ /= totalMass
+
+        // Parallel-axis sum about that centre: I_combined = sum(I_i + m_i * d_i^2)
+        var combinedYawInertia = 0.0
+        members.forEach { member ->
+            val pos = member.transform.positionInWorld
+            val dx = pos.x() - comX
+            val dz = pos.z() - comZ
+            combinedYawInertia += member.momentOfInertia.m11() + member.mass * (dx * dx + dz * dz)
+        }
+        if (!combinedYawInertia.isFinite()) return 1.0
+
+        // Never below 1: an armada is never easier to turn than the bare hull. The ceiling guards against a stale or
+        // garbage child transform demanding absurd torque -- it is not a tuning limit, and a normal side-by-side
+        // pair of large ships lands well under it.
+        return (combinedYawInertia / ownYawInertia).coerceIn(1.0, MAX_ARMADA_TORQUE_SCALE)
     }
 
     private fun getPlayerControlledBanking(control: ControlData, physShip: PhysShip, moiTensor: Matrix3dc, strength: Double): Vector3d {
@@ -1180,6 +1276,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         private const val ALIGN_THRESHOLD = 0.01
         private const val DISASSEMBLE_THRESHOLD = 0.02
+
+        // Safety ceiling on the armada steering multiplier (see armadaYawTorqueScale). A sane side-by-side pair of
+        // large ships lands well under this; the cap only stops a stale/garbage child transform from demanding a
+        // torque that would fling the formation.
+        private const val MAX_ARMADA_TORQUE_SCALE = 64.0
 
         // Sanity cap on the turn-acceleration phase, as an edge LINEAR speed (m/s); divided by the ship's
         // turn radius to get the max lockable yaw rate. Stops a very long hold from spinning the ship absurdly.

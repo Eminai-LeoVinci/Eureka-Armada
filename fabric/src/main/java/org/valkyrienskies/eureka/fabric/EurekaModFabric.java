@@ -9,7 +9,6 @@ import net.fabricmc.api.Environment;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
@@ -28,8 +27,6 @@ import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
-import org.valkyrienskies.eureka.armada.ArmadaClientBonds;
-import org.valkyrienskies.eureka.armada.ArmadaCollision;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
@@ -64,15 +61,12 @@ public class EurekaModFabric implements ModInitializer {
         ArmadaNetworkingFabric.INSTANCE.registerCommon();
 
         // Per server-world tick: (1) re-establish persisted armada bonds after a world reload -- the child-side
-        // bind is saved on the ArmadaShipControl attachment, but the runtime follow provider that positions each
-        // child isn't, so reconcile re-installs it once the parent is loaded (skips already-following children in
-        // O(1)); (2) solve the armada against the world, so the parent refuses any motion that would put one of its
-        // pose-slaved children inside terrain (runs after reconcile so a bond restored this tick is included);
-        // (3) broadcast the current bonds to clients so the client-side render-follow can smooth child ships
-        // (self-throttles, and only sends while a dimension actually has bonds).
+        // bind is saved on the ArmadaShipControl attachment, but the runtime weld that holds each child isn't, so
+        // reconcile re-welds it once the parent is loaded (skips already-welded children in O(1)); (2) broadcast
+        // the current bonds to clients (self-throttles, and only sends while a dimension actually has bonds).
+        // The armada collides with the world through the weld itself, so there is no per-tick collision solver here.
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             ArmadaBindings.INSTANCE.reconcile(level);
-            ArmadaCollision.INSTANCE.tick(level);
             ArmadaNetworkingFabric.INSTANCE.broadcastBonds(level);
         });
     }
@@ -84,10 +78,10 @@ public class EurekaModFabric implements ModInitializer {
         public void onInitializeClient() {
             EurekaMod.initClient();
 
-            // Armada: receive bond snapshots, and each client tick keep the render-follow provider installed on
-            // every bound child so it renders glued to its parent's smooth pose (fixes the child-ship stutter).
+            // Armada: receive bond snapshots so the client knows which ships share an armada (used by the
+            // ship-mounted camera so the formation doesn't shove the view). Child ships are real physics bodies
+            // now, so VS renders and interpolates them natively -- no client-side render-follow needed.
             ArmadaNetworkingFabric.INSTANCE.registerClient();
-            ClientTickEvents.END_CLIENT_TICK.register(client -> ArmadaClientBonds.INSTANCE.tick());
 
             // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea
             // surface stops drawing inside a hull. Toggled live by "/vs pocket-occluder" so one session can
