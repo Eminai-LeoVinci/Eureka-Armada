@@ -30,6 +30,11 @@ import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
+import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
+import org.valkyrienskies.eureka.fabric.client.PathRenderer;
+import org.valkyrienskies.eureka.path.ClientPathState;
+import org.valkyrienskies.eureka.path.PathCommand;
+import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
@@ -55,10 +60,16 @@ public class EurekaModFabric implements ModInitializer {
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
             ArmadaCommand.INSTANCE.register(dispatcher);
+            // "/armada path list|info|rename|delete|stop" -- merges onto the same "armada" literal.
+            PathCommand.INSTANCE.register(dispatcher);
         });
 
         // Register the S2C armada-bond snapshot payload (both sides need the codec).
         ArmadaNetworkingFabric.INSTANCE.registerCommon();
+
+        // Ship paths: the C2S hotkey action packet and the two S2C snapshots, plus the server-side handler.
+        PathNetworkingFabric.INSTANCE.registerCommon();
+        PathNetworkingFabric.INSTANCE.registerServer();
 
         // Per server-world tick: (1) re-establish persisted armada bonds after a world reload -- the child-side
         // bind is saved on the ArmadaShipControl attachment, but the runtime weld that holds each child isn't, so
@@ -68,6 +79,10 @@ public class EurekaModFabric implements ModInitializer {
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             ArmadaBindings.INSTANCE.reconcile(level);
             ArmadaNetworkingFabric.INSTANCE.broadcastBonds(level);
+            // Ship paths: advance any recording (sampling the keel, arming and closing the loop) and steer any
+            // ship following a route. Returns immediately when neither is happening, which is the usual case.
+            ShipPaths.INSTANCE.tick(level);
+            PathNetworkingFabric.INSTANCE.broadcast(level);
         });
     }
 
@@ -82,6 +97,13 @@ public class EurekaModFabric implements ModInitializer {
             // ship-mounted camera so the formation doesn't shove the view). Child ships are real physics bodies
             // now, so VS renders and interpolates them natively -- no client-side render-follow needed.
             ArmadaNetworkingFabric.INSTANCE.registerClient();
+
+            // Ship paths: receive route geometry and live recording state, register the five SHIFT hotkeys,
+            // and draw routes/snap markers in the world.
+            PathNetworkingFabric.INSTANCE.registerClient();
+            PathKeybinds.INSTANCE.register();
+            PathRenderer.INSTANCE.register();
+            ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
             // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea
             // surface stops drawing inside a hull. Toggled live by "/vs pocket-occluder" so one session can

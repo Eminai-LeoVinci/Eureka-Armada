@@ -1,0 +1,143 @@
+package org.valkyrienskies.eureka.path
+
+import com.mojang.brigadier.CommandDispatcher
+import com.mojang.brigadier.arguments.StringArgumentType
+import com.mojang.brigadier.context.CommandContext
+import net.minecraft.ChatFormatting
+import net.minecraft.commands.CommandSourceStack
+import net.minecraft.commands.Commands.argument
+import net.minecraft.commands.Commands.literal
+import net.minecraft.network.chat.Component
+import org.valkyrienskies.mod.common.shipObjectWorld
+
+/**
+ * "/armada path list|info|rename|delete|stop" -- the housekeeping the hotkeys deliberately don't cover.
+ *
+ * The five SHIFT hotkeys handle the whole record-and-fly loop; this exists for the things you do rarely and
+ * want to be exact about: naming a route something you'll recognise, deleting a bad take, and stopping a ship
+ * you aren't standing on.
+ *
+ * Registered onto the same "armada" root literal as [org.valkyrienskies.eureka.armada.ArmadaCommand] -- separate
+ * `dispatcher.register` calls on the same literal merge, the way Eureka's two "/vs" commands already do.
+ */
+object PathCommand {
+
+    fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
+        dispatcher.register(
+            literal("armada").then(
+                literal("path")
+                    .then(literal("list").executes { list(it) })
+                    .then(
+                        literal("info").then(
+                            argument("route", StringArgumentType.string()).executes { info(it) }
+                        )
+                    )
+                    .then(
+                        literal("rename").then(
+                            argument("route", StringArgumentType.string()).then(
+                                argument("name", StringArgumentType.string()).executes { rename(it) }
+                            )
+                        )
+                    )
+                    .then(
+                        literal("delete").then(
+                            argument("route", StringArgumentType.string()).executes { delete(it) }
+                        )
+                    )
+                    .then(literal("stop").executes { stop(it) })
+            )
+        )
+    }
+
+    private fun list(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val level = src.level
+        val store = PathStore.get(level)
+
+        if (store.isEmpty) {
+            src.sendSuccess({ Component.literal("No routes recorded in this dimension.") }, false)
+            return 0
+        }
+
+        src.sendSuccess({
+            Component.literal("${store.all.size} route(s) in this dimension:").withStyle(ChatFormatting.AQUA)
+        }, false)
+        for (path in store.all) {
+            val flying = ShipPaths.followersIn(level).count { it.path.id == path.id }
+            val suffix = if (flying > 0) " -- $flying ship(s) flying it" else ""
+            src.sendSuccess({
+                Component.literal("  [${path.id}] ${path.name}: ${path.length.toInt()}m$suffix")
+            }, false)
+        }
+        return store.all.size
+    }
+
+    private fun info(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val path = resolve(ctx) ?: return 0
+        src.sendSuccess({
+            Component.literal(
+                "Route '${path.name}' [${path.id}]: ${path.length.toInt()}m, " +
+                    "${path.control.size / 3} stored points, ${path.pointCount} followed points."
+            ).withStyle(ChatFormatting.AQUA)
+        }, false)
+        return 1
+    }
+
+    private fun rename(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val path = resolve(ctx) ?: return 0
+        val name = StringArgumentType.getString(ctx, "name")
+        PathStore.get(src.level).rename(path.id, name)
+        src.sendSuccess({ Component.literal("Renamed route ${path.id} to '$name'.") }, true)
+        return 1
+    }
+
+    private fun delete(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val level = src.level
+        val path = resolve(ctx) ?: return 0
+
+        // Anything flying it has to be released first, or the follower would keep steering a route that no
+        // longer exists for anyone else to see.
+        val world = level.shipObjectWorld
+        var stopped = 0
+        for (follower in ShipPaths.followersIn(level)) {
+            if (follower.path.id != path.id) continue
+            world.loadedShips.getById(follower.shipId)?.let { if (ShipPaths.stopShip(it)) stopped++ }
+        }
+
+        PathStore.get(level).remove(path.id)
+        val note = if (stopped > 0) " ($stopped ship(s) stopped)" else ""
+        src.sendSuccess({ Component.literal("Deleted route '${path.name}'$note.") }, true)
+        return 1
+    }
+
+    private fun stop(ctx: CommandContext<CommandSourceStack>): Int {
+        val src = ctx.source
+        val player = src.entity ?: run {
+            src.sendFailure(Component.literal("Run this as a player standing on the ship."))
+            return 0
+        }
+        val ship = ShipPaths.resolveShip(src.level, player) ?: run {
+            src.sendFailure(Component.literal("Stand on a ship to stop it."))
+            return 0
+        }
+        return if (ShipPaths.stopShip(ship)) {
+            src.sendSuccess({ Component.literal("Stopped following.") }, false)
+            1
+        } else {
+            src.sendFailure(Component.literal("This ship isn't following a route."))
+            0
+        }
+    }
+
+    private fun resolve(ctx: CommandContext<CommandSourceStack>): ShipPath? {
+        val query = StringArgumentType.getString(ctx, "route")
+        val path = PathStore.get(ctx.source.level).find(query)
+        if (path == null) {
+            ctx.source.sendFailure(Component.literal("No route named or numbered '$query' in this dimension."))
+        }
+        return path
+    }
+}

@@ -125,6 +125,33 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     var seatedPlayer: Player? = null
 
+    // region Path following (see the org.valkyrienskies.eureka.path package)
+    // Written on the GAME thread by PathFollower once per tick, read on the PHYSICS thread in physTick --
+    // hence @Volatile, matching turnHold/fwdHold/vertHold. Null means "no path input", which is what lets the
+    // pilot's own controls and the cruise latches behave exactly as they always did when nothing is following.
+    // Never persisted: a ship mid-route stops on reload rather than waking up under its own power.
+    @JsonIgnore
+    @Volatile
+    var pathTurnOmega: Double? = null
+        private set
+
+    @JsonIgnore
+    @Volatile
+    var pathVerticalRate: Float? = null
+        private set
+
+    /**
+     * Seat facing last reported by this ship's helm ([org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity]).
+     *
+     * Path playback has no seated pilot, so it needs a forward to thrust along just as a helm-menu cruise does.
+     * A ship that has cruised before already has one in [cruiseSeatDir]; a ship that never has would otherwise
+     * have nowhere to get it, and would silently sit still when told to fly a route.
+     */
+    @JsonIgnore
+    @Volatile
+    var helmSeatDir: Direction? = null
+    // endregion
+
     @JsonProperty("cruiseSpeed")
     var oldSpeed = 0.0
 
@@ -559,13 +586,32 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // and free sets steer); vertical replays the latched rate while latched, else live. Seat facing + the
         // held oldSpeed give the cruise heading/speed, so steering rotates the held velocity vector (circling).
         // VANILLA freezes the captured controlData while cruising (no additive replay), so effective = controlData.
+        // A recorded route carries elevation, so while one is being followed it owns the vertical -- ahead of
+        // the cruise latch, behind the pilot. Null when nothing is following, which leaves every case below
+        // exactly as it was.
+        val pathVertical = pathVerticalRate
+        val liveUp = liveControl?.upImpulse ?: 0.0f
+
         val effective = if (!vanillaControls && isCruising) {
             controlData?.let { frozen ->
                 ControlData(
                     frozen.seatInDirection,
                     liveControl?.forwardImpulse ?: 0.0f,
                     liveControl?.leftImpulse ?: 0.0f,
-                    if (cruiseVerticalActive) cruiseVerticalRate else (liveControl?.upImpulse ?: 0.0f),
+                    if (pathVertical != null && liveUp == 0.0f) pathVertical
+                    else if (cruiseVerticalActive) cruiseVerticalRate
+                    else liveUp,
+                    frozen.sprintOn
+                )
+            }
+        } else if (pathVertical != null) {
+            // Vanilla mode, or advanced-with-cruise-off: still fly the route's elevation.
+            controlData?.let { frozen ->
+                ControlData(
+                    frozen.seatInDirection,
+                    frozen.forwardImpulse,
+                    frozen.leftImpulse,
+                    if (liveUp != 0.0f) liveUp else pathVertical,
                     frozen.sprintOn
                 )
             }
@@ -811,11 +857,19 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
             val isBelowMaxTurnSpeed = abs(omega.y()) < maxOmegaY
 
-            val normalizedAlphaYMultiplier =
-                if (isBelowMaxTurnSpeed && control.leftImpulse != 0.0f) control.leftImpulse.toDouble()
-                else -omega.y().coerceIn(-1.0, 1.0)
+            // A path command steers a Vanilla-mode ship too. Without this branch, following would simply do
+            // nothing on those ships -- the quietest possible failure -- so it converges omega.y to the
+            // commanded rate within this mode's own acceleration limit. The pilot still outranks it.
+            val pathOmegaVanilla = pathTurnOmega
+            idealAlphaY = if (pathOmegaVanilla != null && control.leftImpulse == 0.0f) {
+                (pathOmegaVanilla - omega.y()).coerceIn(-maxAlphaY, maxAlphaY)
+            } else {
+                val normalizedAlphaYMultiplier =
+                    if (isBelowMaxTurnSpeed && control.leftImpulse != 0.0f) control.leftImpulse.toDouble()
+                    else -omega.y().coerceIn(-1.0, 1.0)
 
-            idealAlphaY = normalizedAlphaYMultiplier * maxAlphaY
+                normalizedAlphaYMultiplier * maxAlphaY
+            }
         } else {
             // === Turn law: engine-independent, with the TURN cruise set (one of the 3 independent sets) ===
             // turnSpeed = base turn rate; turnAcceleration ramps in only after holding past turnAccelDelay.
@@ -848,6 +902,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // error stays well under this cap, so the applied alpha is unchanged).
             val maintainChase = max(chase, cfg.turnAcceleration / r)
 
+            // A live path command outranks both cruise cases but never the pilot: grabbing the wheel always
+            // wins, and pure pursuit simply re-acquires the line once the key is released.
+            val pathOmega = pathTurnOmega
+
             idealAlphaY = when {
                 turnKeyHeld ->
                     // Hold to turn: converge toward the turnSpeed cap (effCap) in the held direction. The ship
@@ -858,6 +916,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                     // on a big ship nothing perceptible happened until acceleration kicked in and then it lurched;
                     // this converges smoothly, with the 0.6 s delay gating only the acceleration as intended.)
                     (effCap * dir - omega.y()).coerceIn(-chase, chase)
+                pathOmega != null ->
+                    // Following a recorded route: converge to the rate the follower asked for. maintainChase
+                    // is the right limit here for the same reason it is for a MENU-TYPED cruise rate (see
+                    // above) -- the command arrives with omega.y at 0 and no hold to ramp it in, so the gentler
+                    // base cap would leave a large hull visibly failing to make the corner.
+                    (pathOmega - omega.y()).coerceIn(-maintainChase, maintainChase)
                 turnLatched ->
                     // Released while armed / a menu-typed rate: converge to and hold the locked orbit rate.
                     ((cruiseTurnOmega ?: 0.0) - omega.y()).coerceIn(-maintainChase, maintainChase)
@@ -1284,6 +1348,84 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             }
         }
     }
+
+    // region Path following (server-side; called from org.valkyrienskies.eureka.path.PathFollower)
+
+    /** Turn radius estimate in blocks, for sizing the follower's aim-ahead distance to the hull. */
+    val pathTurnRadius: Double @JsonIgnore get() = turnRadiusEstimate()
+
+    /** The physical yaw-rate ceiling for this hull, rad/s -- the same cap a typed cruise turn is clamped to. */
+    val pathTurnCap: Double @JsonIgnore get() =
+        minOf(TURN_OMEGA_MAX_LINEAR / turnRadiusEstimate(), CRUISE_TURN_DEG_MAX * PI / 180.0)
+
+    /**
+     * The world-space direction thrust actually pushes along, written into [dest]; null when the ship has no
+     * course yet.
+     *
+     * Derived exactly as [getPlayerForwardVel] derives it -- the seat's facing rotated by the hull's rotation.
+     * A follower that measured heading any other way (the hull's +Z, say, or the velocity vector) would be
+     * steering in a frame the thrust does not use, and the ship would crab along the route at a fixed angle.
+     */
+    fun pathForward(dest: Vector3d): Vector3d? {
+        val dir = controlData?.seatInDirection ?: return null
+        val transform = ship?.transform ?: return null
+        dest.set(dir.unitVec3i.toJOMLD())
+        transform.shipToWorldRotation.transform(dest)
+        dest.y = 0.0
+        return if (dest.lengthSquared() < 1.0e-9) null else dest.normalize()
+    }
+
+    /**
+     * Make sure a course exists so thrust can be applied, and report whether one could be established.
+     *
+     * Same requirement (and same fix) as a helm-menu cruise: with `controlData == null` physTick's `effective`
+     * is null, [applyPlayerControl] never runs, and neither a typed speed nor a path command can move the ship.
+     * See [ensureMenuCourse].
+     */
+    fun pathBegin(): Boolean {
+        val dir = controlData?.seatInDirection
+            ?: helmSeatDir
+            ?: cruiseSeatDir.takeIf { it in 0..5 }?.let { Direction.values()[it] }
+            ?: return false
+        ensureMenuCourse(dir)
+        return true
+    }
+
+    /**
+     * The follower's per-tick command: a yaw RATE (rad/s) and a vertical RATE (m/s), both clamped here rather
+     * than in the follower so the limits stay with the hull that owns them.
+     *
+     * Forward speed is deliberately absent -- the pilot's cruise setting owns it, so a route can be flown fast
+     * or slow without re-recording.
+     */
+    fun pathCommand(turnOmega: Double, verticalMps: Double) {
+        val cap = pathTurnCap
+        pathTurnOmega = turnOmega.coerceIn(-cap, cap)
+
+        // Convert m/s to the -1..1 impulse units the elevation law works in, exactly as setCruiseValueMenu's
+        // vertical axis does: the up and down rates differ, so each direction scales by its own maximum.
+        val upMax = cfg.baseImpulseElevationRate
+        val downMax = cfg.baseImpulseDescendRate
+        val clamped = verticalMps.coerceIn(-downMax, upMax)
+        pathVerticalRate = (if (clamped >= 0.0) (if (upMax > 0.0) clamped / upMax else 0.0)
+                            else (if (downMax > 0.0) clamped / downMax else 0.0))
+            .coerceIn(-1.0, 1.0).toFloat()
+    }
+
+    /**
+     * Release path guidance. [stopShip] also drops cruise, so the ship coasts to rest instead of carrying on
+     * in a straight line -- what "stop" means for a vessel the size of a ship near terrain.
+     */
+    fun pathRelease(stopShip: Boolean) {
+        pathTurnOmega = null
+        pathVerticalRate = null
+        if (stopShip && isCruising) {
+            isCruising = false
+            clearCruiseLatches()
+            showCruiseStatus()
+        }
+    }
+    // endregion
 
     // Ship turn-radius estimate (blocks) for clamping a typed turn rate: half the horizontal diagonal of the
     // ship-local AABB, coerced to the same [0.5, maxSizeForTurnSpeedPenalty] band applyPlayerControl uses.

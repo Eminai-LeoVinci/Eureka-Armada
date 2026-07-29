@@ -397,6 +397,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 seat?.leftImpulse ?: 0.0f,
                 seat?.upImpulse ?: 0.0f
             )
+            // Path playback has no seated pilot and so no seat facing to thrust along. Stamping it from here
+            // means a ship that has never cruised can still be told to fly a route -- the same forward the
+            // helm menu's cruise uses, so both agree on which way is ahead.
+            curControl.helmSeatDir = helmSeatDirection
         }
 
         // The ShipMountingEntity seat does not tick server-side: shipyard chunks are only

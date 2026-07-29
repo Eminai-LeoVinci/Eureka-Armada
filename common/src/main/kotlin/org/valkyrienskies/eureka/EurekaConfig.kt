@@ -54,6 +54,22 @@ object EurekaConfig {
 
         @JsonSchema(description = "Show the piloted ship's compass heading at the top-center of the screen.")
         var displayHeading = false
+
+        @JsonSchema(
+            description = "Show every saved ship path in this dimension as a glowing line. Toggled in-game " +
+                "with SHIFT+O; a route being recorded or flown is always drawn regardless of this."
+        )
+        var showAllPaths = false
+
+        @JsonSchema(
+            description = "How far away, in blocks, path lines stay visible. Path lines are drawn through " +
+                "their own unfogged pipeline with an extended far plane, so this can far exceed your render " +
+                "distance. A few thousand line segments costs well under a millisecond. Default 4096."
+        )
+        var pathRenderDistance = 4096.0
+
+        @JsonSchema(description = "Thickness of drawn path lines. Default 2.0.")
+        var pathLineWidth = 2.0
     }
 
     class Server {
@@ -383,6 +399,112 @@ object EurekaConfig {
             "minecraft:cyan_concrete", "minecraft:purple_concrete", "minecraft:blue_concrete",
             "minecraft:brown_concrete", "minecraft:green_concrete", "minecraft:red_concrete", "minecraft:black_concrete"
         )
+        // endregion
+
+        // region Path recording
+        // Ship paths: a pilot records a loop by flying it (SHIFT+R on deck), the recording closes when the ship
+        // returns to its start, and any ship can then fly it (SHIFT+P). Geometry only -- speed stays cruise
+        // control's job, and heading comes from the recorded line's own tangent. See the `path` package.
+
+        @JsonSchema(
+            description = "Path recording: how far the ship must travel before another point is recorded, in " +
+                "blocks. Corners are always recorded regardless. Lower = finer detail and a bigger save file; " +
+                "higher = coarser. Smoothing runs after recording either way. Default 2.0."
+        )
+        var pathSampleSpacing = 2.0
+
+        @JsonSchema(
+            description = "Path recording: hard cap on recorded points before the recording gives up. At the " +
+                "default spacing this is roughly 16 km of route. Exceeding it cancels the recording rather " +
+                "than silently truncating it."
+        )
+        var pathMaxPoints = 8192
+
+        @JsonSchema(
+            description = "Path recording: minimum route length in blocks before the loop can close. Stops the " +
+                "recording snapping shut the moment you set off, since you start inside the snap radius. " +
+                "Default 48.0."
+        )
+        var pathMinLoopLength = 48.0
+
+        @JsonSchema(
+            description = "Path recording: radius in blocks of the glowing sphere at the route's start point. " +
+                "The loop closes when the ship's keel sphere touches it. Bigger = easier to close, less exact " +
+                "about where. Default 2.0."
+        )
+        var pathSnapRadius = 2.0
+
+        @JsonSchema(
+            description = "Path recording: how many blocks of the route's tail are replaced by a curve that " +
+                "runs smoothly into the start point, so a looping ship gets no steering kick each lap. About a " +
+                "chunk works well. Default 16.0."
+        )
+        var pathSeamBlend = 16.0
+
+        @JsonSchema(
+            description = "Path smoothing: the filter width in blocks. Wobbles shorter than about twice this " +
+                "are erased; curves longer than it survive. Raise it if hand-steering correction still shows " +
+                "in the flown route, lower it if deliberate curves are being rounded off. Default 8.0."
+        )
+        var pathSmoothWindow = 8.0
+
+        @JsonSchema(
+            description = "Path smoothing: how many filter passes to run. More passes deepen the effect " +
+                "without needing a wider window. Default 3."
+        )
+        var pathSmoothIterations = 3
+
+        @JsonSchema(
+            description = "Path smoothing: how jagged a stretch must be, in degrees of average turn per point, " +
+                "before it is fully smoothed. Stretches calmer than this are smoothed proportionally less, and " +
+                "dead-straight ones not at all. Lower = smooths more of the route. Default 6.0."
+        )
+        var pathSmoothJagThreshold = 6.0
+
+        @JsonSchema(
+            description = "Path smoothing: the furthest, in blocks, smoothing may move any point from where it " +
+                "was actually recorded. This is the guard that stops a smoothed corner cutting through the " +
+                "terrain you steered around. Default 2.5."
+        )
+        var pathMaxSmoothDeviation = 2.5
+
+        @JsonSchema(
+            description = "Path playback: how far from a route a ship may be, in blocks, and still start " +
+                "following it. Whatever offset it has at that moment is KEPT for the whole run -- the ship " +
+                "flies the same shape displaced -- so park close if you want it exactly on the line. Default 32.0."
+        )
+        var pathEngageRange = 32.0
+
+        @JsonSchema(
+            description = "Path playback: seconds of travel ahead the ship aims for. Higher = smoother and " +
+                "wider cornering; lower = tighter tracking but twitchier. Default 1.5."
+        )
+        var pathLookaheadSeconds = 1.5
+
+        @JsonSchema(description = "Path playback: shortest aim-ahead distance in blocks, used at low speed. Default 8.0.")
+        var pathLookaheadMin = 8.0
+
+        @JsonSchema(description = "Path playback: longest aim-ahead distance in blocks, used at high speed. Default 40.0.")
+        var pathLookaheadMax = 40.0
+
+        @JsonSchema(
+            description = "Path playback: steering strength -- commanded turn rate per radian of heading error. " +
+                "Higher = corrects back onto the line harder, but too high oscillates. Default 1.2."
+        )
+        var pathTurnGain = 1.2
+
+        @JsonSchema(
+            description = "Path playback: climb/dive strength -- commanded vertical speed per block of altitude " +
+                "error. Higher = holds the recorded elevation more tightly. Default 0.5."
+        )
+        var pathVerticalGain = 0.5
+
+        @JsonSchema(
+            description = "Path playback: fraction per second of the start-of-run offset to bleed away, so a " +
+                "ship that engaged off to one side gradually converges onto the line. 0 = keep the offset for " +
+                "the whole run (the default, and what makes 'fly a parallel course' predictable)."
+        )
+        var pathOffsetDecay = 0.0
         // endregion
 
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and
