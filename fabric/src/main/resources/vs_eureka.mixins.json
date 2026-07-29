@@ -3,7 +3,8 @@
   "package": "org.valkyrienskies.eureka.fabric.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "MixinEntitySubAir"
+    "MixinEntitySubAir",
+    "MixinVSCoreTeleport"
   ],
   "client": [
     "client.MixinRaycastUtils",

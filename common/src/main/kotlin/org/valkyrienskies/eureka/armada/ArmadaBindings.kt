@@ -37,6 +37,10 @@ object ArmadaBindings {
     // flexes, the fix is more weld points, not a stiffer single one.
     private const val WELD_COMPLIANCE = 1.0e-10
 
+    // Server ticks to wait before re-welding an armada whose welds were dropped for a teleport, so every member
+    // has landed before the joints freeze the relative pose they find. Short enough to be imperceptible.
+    private const val WELD_REGRIP_DELAY = 3
+
     /**
      * Lock [child] into [parent]'s frame. Shared by `/armada bind` and the helm menu's "Armada Child" checkbox,
      * so both enforce the same rules and produce the same bond. Returns null on success, or the reason it
@@ -178,6 +182,10 @@ object ArmadaBindings {
             val armada = ArmadaShipControl.get(child) ?: continue
             val parentId = armada.parentShipId ?: continue
             if (armada.hasWeld) continue // already welded, or the weld is on its way
+            if (armada.weldGraceTicks > 0) { // a teleport is still landing -- see weldGraceTicks
+                armada.weldGraceTicks--
+                continue
+            }
             val parent = world.loadedShips.getById(parentId) ?: continue // parent not loaded yet; retry next tick
 
             // Pairs against whichever siblings have already reconciled; the ones that haven't will pair against
@@ -216,6 +224,20 @@ object ArmadaBindings {
             if (armada.mirroredKeepActive == keepActive) continue
             armada.mirroredKeepActive = keepActive
             for (child in armada.childShips.values) child.settings.keepActive = keepActive
+        }
+    }
+
+    /**
+     * Drop the welds holding every child of [parent] and hold reconcile off for a few ticks, so the armada can be
+     * moved as a whole without the joints fighting the move. Used by [ArmadaTeleport]; reconcile re-welds each
+     * child at its new relative pose once the grace expires.
+     */
+    fun dropWelds(parent: LoadedServerShip) {
+        val armada = ArmadaShipControl.get(parent) ?: return
+        for (child in armada.childShips.values) {
+            val childArmada = ArmadaShipControl.get(child) ?: continue
+            removeWeld(child, childArmada)
+            childArmada.weldGraceTicks = WELD_REGRIP_DELAY
         }
     }
 

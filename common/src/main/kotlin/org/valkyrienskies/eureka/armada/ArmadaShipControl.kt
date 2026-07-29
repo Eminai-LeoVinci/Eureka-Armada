@@ -95,6 +95,17 @@ class ArmadaShipControl {
     var weldPending: Boolean = false
 
     /**
+     * Server ticks [ArmadaBindings.reconcile] must wait before re-welding this child, counted down there.
+     *
+     * Set when the welds are dropped for an armada teleport ([ArmadaTeleport]). Reconcile welds at whatever
+     * relative pose it finds, so it must not look until the whole formation has actually landed -- catch the
+     * parent moved and a child not yet and it would freeze the armada into a pose it was never meant to hold.
+     * Runtime only.
+     */
+    @JsonIgnore
+    var weldGraceTicks: Int = 0
+
+    /**
      * Child side: a live handle to the parent ship, set on the game thread at bind/reconcile and read on the
      * PHYSICS thread by [org.valkyrienskies.eureka.ship.EurekaShipControl] so a welded child can drive itself from
      * the parent's pilot input (every ship in the armada propels its own mass in lockstep). Volatile for the
