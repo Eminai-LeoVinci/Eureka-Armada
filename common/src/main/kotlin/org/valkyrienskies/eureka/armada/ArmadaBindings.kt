@@ -66,9 +66,10 @@ object ArmadaBindings {
         val relRot = Quaterniond(parent.transform.shipToWorldRotation).invert()
             .mul(child.transform.shipToWorldRotation, Quaterniond())
 
-        // Ships collide with each other by default; welded hulls sit flush and would otherwise shove each other,
-        // so turn ship-ship collision off between exactly these two. Each still collides with the world.
-        ValkyrienSkiesMod.getOrCreateGTPA(parent.chunkClaimDimension).disableCollisionBetween(parent.id, child.id)
+        // Ships collide with each other by default; welded hulls sit flush and would otherwise shove each
+        // other, so turn ship-ship collision off across the armada. Before the child is added to the parent's
+        // list below, so it pairs against the siblings that were already there.
+        disableArmadaCollisions(parent, child)
 
         childArmada.parentShipId = parent.id
         childArmada.parentShip = parent
@@ -76,7 +77,7 @@ object ArmadaBindings {
         childArmada.intendedRotInParent = Quaterniond(relRot)
         createWeld(parent, child, childArmada)
 
-        ArmadaShipControl.getOrCreate(parent).childShipIds.add(child.id)
+        ArmadaShipControl.getOrCreate(parent).childShips[child.id] = child
         // A ship that just became a child can't also be someone's marked parent.
         ArmadaSelection.forgetShip(child.id)
         return null
@@ -92,17 +93,46 @@ object ArmadaBindings {
         val parentId = armada.parentShipId ?: return false
 
         removeWeld(child, armada)
-        ValkyrienSkiesMod.getOrCreateGTPA(child.chunkClaimDimension).enableCollisionBetween(parentId, child.id)
+        // While it is still listed as a child, so the siblings it stops sharing an armada with are still known.
+        val parentArmada = level.shipObjectWorld.loadedShips.getById(parentId)?.let { ArmadaShipControl.get(it) }
+        enableArmadaCollisions(child, parentId, parentArmada)
 
         armada.parentShipId = null
         armada.parentShip = null
         armada.intendedPosInParent = null
         armada.intendedRotInParent = null
 
-        level.shipObjectWorld.loadedShips.getById(parentId)
-            ?.let { ArmadaShipControl.get(it) }
-            ?.childShipIds?.remove(child.id)
+        parentArmada?.childShips?.remove(child.id)
         return true
+    }
+
+    /**
+     * Turn ship-ship collision off between [child] and every other ship in the armada: the parent AND the
+     * siblings already bound to it.
+     *
+     * The engine takes these a PAIR at a time, so each new member has to be paired off against all of them. With
+     * only the parent pair disabled, two children welded side by side still collided with each other -- and since
+     * neither weld yields, the contact and the joints fought to a standstill and the armada stopped moving
+     * altogether. That is what a third ship did to it: two ships have no sibling pair to miss.
+     *
+     * Call BEFORE adding [child] to the parent's children (it skips itself either way). Every ship still collides
+     * with the world on its own.
+     */
+    private fun disableArmadaCollisions(parent: LoadedServerShip, child: LoadedServerShip) {
+        val gtpa = ValkyrienSkiesMod.getOrCreateGTPA(parent.chunkClaimDimension)
+        gtpa.disableCollisionBetween(parent.id, child.id)
+        ArmadaShipControl.get(parent)?.childShipIds?.forEach { siblingId ->
+            if (siblingId != child.id) gtpa.disableCollisionBetween(siblingId, child.id)
+        }
+    }
+
+    /** Undoes [disableArmadaCollisions]: [child] collides with its former parent and siblings again. */
+    private fun enableArmadaCollisions(child: LoadedServerShip, parentId: Long, parentArmada: ArmadaShipControl?) {
+        val gtpa = ValkyrienSkiesMod.getOrCreateGTPA(child.chunkClaimDimension)
+        gtpa.enableCollisionBetween(parentId, child.id)
+        parentArmada?.childShipIds?.forEach { siblingId ->
+            if (siblingId != child.id) gtpa.enableCollisionBetween(siblingId, child.id)
+        }
     }
 
     /**
@@ -126,8 +156,8 @@ object ArmadaBindings {
      * persisted on [ArmadaShipControl], but the weld that actually holds the child is a runtime physics object and
      * isn't serialized -- so just after load a bound child has its parent id but no weld and would drift as a free
      * ship. Called every server-world tick: for each loaded child whose weld is missing and whose parent is
-     * loaded, it re-welds them at their current relative pose, re-disables ship-ship collision with the parent, and
-     * rebuilds the parent's [ArmadaShipControl.childShipIds] entry. Idempotent -- a child that already has (or has
+     * loaded, it re-welds them at their current relative pose, re-disables ship-ship collision across the armada,
+     * and rebuilds the parent's [ArmadaShipControl.childShipIds] entry. Idempotent -- a child that already has (or has
      * requested) a weld is skipped in O(1), so the steady-state cost is negligible.
      */
     fun reconcile(level: ServerLevel) {
@@ -138,10 +168,12 @@ object ArmadaBindings {
             if (armada.hasWeld) continue // already welded, or the weld is on its way
             val parent = world.loadedShips.getById(parentId) ?: continue // parent not loaded yet; retry next tick
 
-            ValkyrienSkiesMod.getOrCreateGTPA(parent.chunkClaimDimension).disableCollisionBetween(parent.id, child.id)
+            // Pairs against whichever siblings have already reconciled; the ones that haven't will pair against
+            // this child when their turn comes, so every pair is covered whatever order they load in.
+            disableArmadaCollisions(parent, child)
             armada.parentShip = parent
             createWeld(parent, child, armada)
-            ArmadaShipControl.getOrCreate(parent).childShipIds.add(child.id)
+            ArmadaShipControl.getOrCreate(parent).childShips[child.id] = child
         }
     }
 

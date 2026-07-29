@@ -16,6 +16,7 @@ import org.valkyrienskies.core.api.ships.ServerTickListener
 import org.valkyrienskies.core.api.ships.ShipPhysicsListener
 import org.valkyrienskies.core.api.world.PhysLevel
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.armada.ArmadaBody
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.mod.api.SeatedControllingPlayer
 import org.valkyrienskies.mod.common.util.toJOMLD
@@ -33,13 +34,32 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     internal var ship: LoadedServerShip? = null
 
+    // Engine power, refreshed from this ship's engines once per SERVER tick and read on the PHYSICS thread --
+    // by this ship, and by the parent when this one is a welded armada member. Volatile for that cross-thread,
+    // cross-ship read.
+    @Volatile
     private var extraForceLinear = 0.0
+    @Volatile
     private var extraForceAngular = 0.0
+
+    /**
+     * Engine linear power of the WHOLE armada this ship leads -- its own plus every welded member's. Engines
+     * pool for the same reason balloons do: an armada is one vessel, so it is driven by every engine aboard it
+     * against its total mass, exactly as a single assembled hull would be.
+     *
+     * Valid only after the gather loop at the top of physTick has refreshed [armadaMembers]; it is this ship's
+     * own power alone for a lone ship.
+     */
+    private val pooledForceLinear: Double
+        get() {
+            var total = extraForceLinear
+            for (member in armadaMembers) total += member.extraForceLinear
+            return total
+        }
 
     var aligning = false
     var disassembling = false // Disassembling also affects position
     private var physConsumption = 0f
-    private val anchored get() = anchorsActive > 0
 
     private var angleUntilAligned = 0.0
     private var positionUntilAligned = Vector3d()
@@ -76,14 +96,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // Only the 6 engine/elevation reads + the 2 turn fields inside this class route through cfg; everything
     // else (engineHeatGain, maxShipBlocks, blockBlacklist, water-altitude-hold, debugCruiseCancel, and all the
     // fields identical across presets) stays GLOBAL on EurekaConfig.SERVER. Computed getter, no backing field --
-    // not serialized (the class uses getterVisibility = NONE), like the `anchored`/`canDisassemble` getters.
+    // not serialized (the class uses getterVisibility = NONE), like the `canDisassemble` getter.
     private val cfg get() = if (vanillaControls) EurekaConfig.VANILLA else EurekaConfig.ADVANCED
 
     // Public view of this ship's mode-affected preset, for off-class consumers that must honor the per-ship
     // mode. EngineBlockEntity reads it for enginePowerLinear (the force this attachment's boost threshold is
     // scaled against) and engineHeatGain, so a vanilla ship's engine force/heat match its 500000f/0.03f preset
     // instead of the global ADVANCED defaults. Same instance as [cfg]; exposed read-only. Computed getter with
-    // no backing field, so it isn't serialized (the class sets getterVisibility = NONE), like [cfg]/[anchored].
+    // no backing field, so it isn't serialized (the class sets getterVisibility = NONE), like [cfg]/[canDisassemble].
     val engineCfg: EurekaConfig.Server get() = cfg
 
     @JsonIgnore
@@ -179,6 +199,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     private val scratchAxisAngle = AxisAngle4d()
 
+    // The armada this ship leads, seen as one rigid body -- just this ship when nothing is bound to it. Rebuilt
+    // from the live members at the top of every physTick and reused, so a steady state allocates nothing. Only
+    // the LEAD of an armada (or a lone ship) uses its own; a welded child returns before this is touched.
+    @JsonIgnore
+    private val armadaBody = ArmadaBody()
+
+    // The welded children's controls, gathered alongside [armadaBody] each tick. Held so the pooled block
+    // counts and the engine-fuel burn can reach them; empty for a lone ship. Physics-thread only.
+    @JsonIgnore
+    private val armadaMembers = ArrayList<EurekaShipControl>(3)
+
     // Water altitude-hold state. Transient (re-latches from the ship's current Y on load): while a
     // hybrid ship (floaters + balloons) has its keel in water, the vertical axis is pinned to
     // holdTargetY instead of letting balloon lift float it back above the surface. holdEngaged adds
@@ -269,28 +300,79 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         physShip.doFluidDrag = EurekaConfig.SERVER.doFluidDrag
 
         val ship = ship ?: return
-        // A welded armada child drives off its PARENT's pilot so every ship propels its own mass in lockstep --
-        // but only its LINEAR share (thrust + lift). It contributes NO rotation: the parent steers the whole welded
-        // body, and a child adding its own turn/bank/stabilize on top fought that through the rigid weld and pinned
-        // the heading (a ~7 deg cap). So the child pushes and lifts alongside the parent -- which fixes the veer,
-        // the sink to the child's side and the lost top speed -- while the parent + weld own all turning and upright.
         val armada = ArmadaShipControl.get(ship)
-        val isArmadaChild = armada?.isChild == true
-        // How much rotation this ship contributes to the armada. A child contributes none (0.0). A parent gets
-        // scaled UP to the armada's combined yaw inertia (see armadaYawTorqueScale) so it steers the whole welded
-        // body at the rate it would steer alone instead of the sluggish fraction its own hull's torque managed.
-        // A lone ship is 1.0, i.e. untouched.
-        val rotationScale = if (isArmadaChild) 0.0 else armadaYawTorqueScale(physShip, physLevel, armada)
-        val mass = physShip.mass
-        val moiTensor = physShip.momentOfInertia
-        val omega: Vector3dc = physShip.omega
-        val vel: Vector3dc = physShip.velocity
-        var balloonForceProvided = balloons * forcePerBalloon
 
-        if (EurekaConfig.SERVER.maxBalloonsPerEngine > 0) {
+        // A welded child does NOT run its own control law. Its parent computes for the armada as ONE body and
+        // applies this ship's share directly (see ArmadaBody), which is the only way the numbers can come out
+        // right: every term here is sized from one hull's mass, inertia and block counts, so two instances
+        // driving two rigidly welded bodies produce a result neither of them modelled. That is what pinned the
+        // armada's heading, sank the child's side, and yawed the whole formation the moment the pilot stood up.
+        if (armada != null && armada.isChild && armada.parentShip != null) {
+            physShip.isStatic = armadaAnchored(armada.parentShip!!)
+            return
+        }
+
+        // Gather the armada this ship leads as a single rigid body -- just this ship when nothing is bound to
+        // it, in which case everything below is exactly the stock single-ship control law. The parent goes in
+        // FIRST: it is the body's lead, so the armada steers, points and rights itself as the parent would.
+        //
+        // Block counts pool the same way the physics does. In one assembled Eureka ship it makes no difference
+        // where the balloons sit; an armada is meant to be one vessel, so an over-ballooned parent carries an
+        // under-ballooned child rather than each hull holding up only itself. Left un-pooled, each ship lifted
+        // min(its own capacity, its own weight) -- not its share of the armada -- and the mismatch was a
+        // standing roll the parent's own righting torque was far too small to clear.
+        val body = armadaBody
+        body.clear()
+        body.add(physShip)
+        armadaMembers.clear()
+
+        var pooledBalloons = balloons
+        var pooledFloaters = floaters
+        var pooledKeelInWater = keelInWater
+        var pooledLiquidOverlap = physShip.liquidOverlap
+        var pooledAnchorsActive = anchorsActive
+
+        armada?.childShips?.forEach { (childId, childShip) ->
+            val childControl = childShip.getAttachment(EurekaShipControl::class.java)
+
+            // Anchors pool FIRST, before anything can drop a member from the rest of the gather: an anchor makes
+            // its ship static, and a static member is exactly what the body below has to leave out. Read any
+            // later and an anchored child would fall out of the gather, the armada would decide it wasn't
+            // anchored, the child would go free, and the two would flip states against each other every tick.
+            if (childControl != null) pooledAnchorsActive += childControl.anchorsActive
+
+            val childPhys = physLevel.getShipById(childId) ?: return@forEach
+            // Never include a static member: PhysShip.applyQueuedForces skips those, so its share would pile up
+            // in a queue that is never drained instead of being applied or dropped.
+            if (childPhys.isStatic) return@forEach
+
+            // Into the body regardless of what it still has aboard: it is welded on, so its mass and inertia
+            // are part of the armada whether or not it can contribute anything. A child stripped of its last
+            // Eureka block drops its attachment, and leaving it out here would make it dead weight hanging off
+            // one side -- which is exactly the off-centre load this whole design exists to avoid.
+            body.add(childPhys)
+
+            if (childControl == null) return@forEach
+            armadaMembers.add(childControl)
+            pooledBalloons += childControl.balloons
+            pooledFloaters += childControl.floaters
+            pooledKeelInWater = pooledKeelInWater || childControl.keelInWater
+            pooledLiquidOverlap = max(pooledLiquidOverlap, childPhys.liquidOverlap)
+        }
+        body.build()
+
+        // Anchors hold the VESSEL, so one dropped anywhere in the armada holds all of it -- see [armadaAnchored].
+        val armadaAnchored = pooledAnchorsActive > 0
+
+        val mass = body.mass
+        val omega: Vector3dc = body.angularVelocity
+        val vel: Vector3dc = body.velocity
+        var balloonForceProvided = pooledBalloons * forcePerBalloon
+
+        if (EurekaConfig.SERVER.maxBalloonsPerEngine > 0 && pooledBalloons > 0) {
             balloonForceProvided *= min(
                 1.0,
-                ( extraForceLinear * EurekaConfig.SERVER.maxBalloonsPerEngine ) / ( cfg.enginePowerLinear * balloons )
+                ( pooledForceLinear * EurekaConfig.SERVER.maxBalloonsPerEngine ) / ( cfg.enginePowerLinear * pooledBalloons )
             )
         }
 
@@ -302,10 +384,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // sea-level plane, so it's 0 for water away from Y=sea-level. keelInWater (sampled game-side from
         // real blocks) makes the hold engage on ANY body of water -- rivers, lakes, man-made, at any
         // altitude. Hysteresis: engage when the keel reaches water; stay until the hull fully clears it.
-        val inWater = keelInWater || physShip.liquidOverlap > EurekaConfig.SERVER.waterAltitudeHoldMinOverlap
-        val stillInWater = keelInWater || physShip.liquidOverlap > 0.0
-        holdEngaged = EurekaConfig.SERVER.enableWaterAltitudeHold && !disassembling && !anchored &&
-            floaters > 0 && balloons > 0 && (inWater || (holdEngaged && stillInWater))
+        val inWater = pooledKeelInWater || pooledLiquidOverlap > EurekaConfig.SERVER.waterAltitudeHoldMinOverlap
+        val stillInWater = pooledKeelInWater || pooledLiquidOverlap > 0.0
+        holdEngaged = EurekaConfig.SERVER.enableWaterAltitudeHold && !disassembling && !armadaAnchored &&
+            pooledFloaters > 0 && pooledBalloons > 0 && (inWater || (holdEngaged && stillInWater))
         if (!holdEngaged) holdTargetY = null
 
         val buoyantFactorPerFloater = min(
@@ -315,7 +397,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         // While the altitude-hold owns the vertical axis, keep core buoyancy neutral (1.0) so the
         // hold isn't fighting a large floater-driven up-force; otherwise apply the floater buoyancy.
-        physShip.buoyantFactor = if (holdEngaged) 1.0 else 1.0 + floaters * buoyantFactorPerFloater
+        // Every member gets the SAME armada-wide factor, from the pooled floaters and combined mass: floaters
+        // hold up the vessel, not the hull they happen to sit in. The lead owns this for the whole formation --
+        // a child never sets it, so the two can't race depending on which ship's physTick ran last.
+        val buoyantFactor = if (holdEngaged) 1.0 else 1.0 + pooledFloaters * buoyantFactorPerFloater
+        physShip.buoyantFactor = buoyantFactor
+        for (i in 1 until body.size) body.memberAt(i).buoyantFactor = buoyantFactor
 
         // region Aligning
 
@@ -328,7 +415,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             val pos = ship.transform.positionInWorld
             positionUntilAligned = pos.floor(Vector3d())
             val direction = pos.sub(positionUntilAligned, Vector3d())
-            physShip.applyInvariantForce(direction)
+            body.applyForce(direction)
         }
         if ((aligning) && abs(angleUntilAligned) > ALIGN_THRESHOLD) {
             if (angleUntilAligned < 0.3 && angleUntilAligned > 0.0) angleUntilAligned = 0.3
@@ -338,22 +425,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 .mul(-angleUntilAligned)
                 .mul(EurekaConfig.SERVER.stabilizationSpeed)
 
-            val idealTorque = moiTensor.transform(idealOmega)
-
-            physShip.applyInvariantTorque(idealTorque)
+            body.applyAngularAcceleration(idealOmega)
         }
         // endregion
 
-        val controllingPlayer = if (armada?.isChild == true) {
-            // A child drives off its parent's pilot, never its own (locked) helm.
-            armada.parentShip?.getAttachment(SeatedControllingPlayer::class.java)
-        } else {
-            ship.getAttachment(SeatedControllingPlayer::class.java)
-        }
-        val validPlayer = controllingPlayer != null && !anchored
+        val controllingPlayer = ship.getAttachment(SeatedControllingPlayer::class.java)
+        val validPlayer = controllingPlayer != null && !armadaAnchored
 
 
-        if (anchored) {
+        if (armadaAnchored) {
             if (isCruising) {
                 isCruising = false
                 showCruiseStatus()
@@ -365,26 +445,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             return
         }
 
-        // Stabilization splits exactly like driving does: EVERY ship brakes its own mass, only the parent rotates.
-        //
-        // The linear brake is applyInvariantForce, i.e. a force at the ship's OWN centre of mass. Leaving it to the
-        // parent alone meant a pilotless armada braked at a point well off the combined centre of mass, and that
-        // lever arm is a pure yaw torque -- so a coasting armada was wrenched into a hard turn toward the child
-        // side (seen on dismount-with-momentum, and while cruising between inputs). Because the brake scales with
-        // mass, every ship braking itself puts the net force back through the combined centre: no yaw at all.
-        // The angular half stays parent-only -- a child righting itself through the rigid weld fights the parent
-        // and pins the heading (that was the old +/-7 deg cap).
+        // Braking and righting run against the armada as one body, so the brake is a single force through the
+        // combined centre of mass (no lever arm, so no yaw) and the righting torque is sized for the whole
+        // formation's inertia. This is the path that runs when nobody is at the helm, and getting it wrong is
+        // what made a coasting armada wrench itself into a turn the moment the pilot stood up.
         stabilize(
-            physShip,
-            omega,
-            vel,
-            physShip,
+            body,
             !validPlayer && !aligning,
             // Yaw is braked when there's no pilot -- EXCEPT while a turn-cruise orbit is locked, so a saved/
             // pilotless circling ship keeps its rate instead of being dragged straight. Reads the PERSISTED
             // cruiseTurning (this runs before the resume block rebuilds the transient on the first reload tick).
-            !validPlayer && !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise),
-            angular = !isArmadaChild
+            !validPlayer && !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise)
         )
 
         var idealUpwardVel = Vector3d(0.0, 0.0, 0.0)
@@ -510,10 +581,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         val verticalInputActive = (effective?.upImpulse ?: 0.0f) != 0.0f && (!vanillaControls || !isCruising)
 
         effective?.let { control ->
-            // A child applies only its linear thrust, never its own rotation (rotationScale 0); a parent steers for
-            // the whole welded body (rotationScale > 1). See the rotationScale definition above.
-            applyPlayerControl(control, physShip, thrustMultiplier, rotationScale)
-            idealUpwardVel = getPlayerUpwardVel(control, mass)
+            applyPlayerControl(control, body, thrustMultiplier)
+            idealUpwardVel = getPlayerUpwardVel(control, body.mass, balloonForceProvided)
         }
 
         // region Elevation
@@ -521,12 +590,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // verticalInputActive (computed above) is true whenever the pilot actively presses
             // ascend/descend -- including while cruising -- so cruise holds the depth only until you
             // press a key, and ascend/descend never drops cruise.
-            applyWaterAltitudeHold(physShip, idealUpwardVel, vel, mass, verticalInputActive)
+            applyWaterAltitudeHold(body, idealUpwardVel, verticalInputActive)
         } else {
             val idealUpwardForce = (idealUpwardVel.y() - vel.y() - (GRAVITY / EurekaConfig.SERVER.elevationSnappiness)) *
                     mass * EurekaConfig.SERVER.elevationSnappiness
 
-            physShip.applyInvariantForce(Vector3d(0.0,
+            body.applyForce(Vector3d(0.0,
                 min(balloonForceProvided, max(idealUpwardForce, 0.0)) +
                 // Add drag to the y-component
                 vel.y() * -mass,
@@ -579,7 +648,30 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // (Removed) auto-off when every set is canceled: cruise now persists idle until an explicit off.
         }
 
-        physShip.isStatic = anchored
+        physShip.isStatic = armadaAnchored
+    }
+
+    /**
+     * True when ANY ship in the armada led by [parent] has an anchor down -- [parent]'s own, or any welded
+     * member's.
+     *
+     * Anchors hold the VESSEL, not the hull that happens to carry them, for the same reason balloons and engines
+     * pool. Left per-hull it went wrong in both directions: a child that anchored itself went static while the
+     * rest of the armada drove, so the welds turned it into a mooring the control law never saw -- the formation
+     * simply refused to move, with nothing at the helm to say why. And an anchored parent went static while its
+     * children stayed free, leaving them hanging off the joints.
+     *
+     * The lead reaches the same answer through its own pooled count, so this is only for the child side. Both
+     * read the same game-thread fields rather than each other's results, so it holds whatever order their phys
+     * ticks run in.
+     */
+    private fun armadaAnchored(parent: LoadedServerShip): Boolean {
+        if ((parent.getAttachment(EurekaShipControl::class.java)?.anchorsActive ?: 0) > 0) return true
+        val parentArmada = ArmadaShipControl.get(parent) ?: return false
+        for (member in parentArmada.childShips.values) {
+            if ((member.getAttachment(EurekaShipControl::class.java)?.anchorsActive ?: 0) > 0) return true
+        }
+        return false
     }
 
     // Vertical controller used while the water altitude-hold is engaged. It OWNS the Y axis and
@@ -590,13 +682,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // that would otherwise float it out of the water. The force is purely vertical, so horizontal
     // sailing speed and momentum are never touched -- no jolt, no slow-down.
     private fun applyWaterAltitudeHold(
-        physShip: PhysShip,
+        body: ArmadaBody,
         idealUpwardVel: Vector3dc,
-        vel: Vector3dc,
-        mass: Double,
         verticalInputActive: Boolean
     ) {
-        val currentY = physShip.transform.positionInWorld.y()
+        val vel = body.velocity
+        val mass = body.mass
+        // The armada's own centre, so a formation holds ITS depth rather than the lead hull's -- and the hold
+        // force, being distributed by mass share, lifts it level instead of tipping it about that hull.
+        val currentY = body.centerOfMass.y()
         val appliedY = if (verticalInputActive) {
             // Actively moving: drive toward the same commanded vertical velocity the helm already uses
             // (so it feels identical), and keep the setpoint pinned here so releasing the key holds at
@@ -612,7 +706,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             val c = 2.0 * sqrt(k) // critical damping: firm hold, no oscillation/bounce
             ((target - currentY) * k - vel.y() * c - GRAVITY) * mass
         }
-        physShip.applyInvariantForce(Vector3d(0.0, appliedY, 0.0))
+        body.applyForce(Vector3d(0.0, appliedY, 0.0))
     }
 
     private fun getControlData(player: SeatedControllingPlayer): ControlData {
@@ -675,16 +769,22 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         return currentControlData
     }
 
-    private fun applyPlayerControl(control: ControlData, physShip: PhysShip, thrustMultiplier: Double, rotationScale: Double) {
+    /**
+     * [body] is the armada this ship leads seen as one rigid body, or just this ship when nothing is bound to
+     * it. Note that the TURN RADIUS reference below stays the lead hull's own: the armada is deliberately
+     * steered at the rate the parent would manage alone, rather than the slower rate its total size implies.
+     * The body then delivers that commanded rate against the formation's real inertia.
+     */
+    private fun applyPlayerControl(control: ControlData, body: ArmadaBody, thrustMultiplier: Double) {
 
         val ship = ship ?: return
-        val transform = physShip.transform
+        val lead = body.lead
+        val transform = lead.transform
         val aabb = ship.worldAABB
         val center = transform.positionInWorld
 
         // region Player controlled rotation
-        val moiTensor = physShip.momentOfInertia
-        val omega: Vector3dc = physShip.omega
+        val omega: Vector3dc = body.angularVelocity
 
         val largestDistance = run {
             var dist = center.distance(aabb.minX(), center.y(), aabb.minZ())
@@ -772,109 +872,50 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             }
         }
 
-        // A welded child skips its own rotation entirely (rotationScale 0): the parent steers the whole welded body,
-        // so the child only adds forward thrust below. A parent carrying children gets rotationScale > 1, sizing its
-        // torque for the armada's combined yaw inertia instead of just this hull's. idealAlphaY covers both the turn
-        // and the brake-to-centre, so scaling it here restores the commanded turn rate AND the stopping authority.
-        if (rotationScale > 0.0) {
-            physShip.applyInvariantTorque(moiTensor.transform(Vector3d(0.0, idealAlphaY * rotationScale, 0.0)))
-            // Banking is cosmetic roll into the turn and deliberately stays at this hull's own scale: scaled up with
-            // the armada it would roll the whole formation hard enough to fight stabilize.
-            physShip.applyInvariantTorque(getPlayerControlledBanking(control, physShip, moiTensor, -idealAlphaY))
-        }
+        // The commanded yaw acceleration (which covers both the turn and the brake back to centre, since they
+        // share idealAlphaY) plus the cosmetic roll into it. The two are about perpendicular axes, so they add
+        // exactly and the body only has to distribute once. Sizing this for the armada's real inertia rather
+        // than one hull's is the body's job -- nothing here needs to know how much is bound on.
+        val idealAlpha = Vector3d(0.0, idealAlphaY, 0.0)
+            .add(getPlayerControlledBankingAlpha(control, lead, -idealAlphaY))
+        body.applyAngularAcceleration(idealAlpha)
         // endregion
 
-        physShip.applyInvariantForce(getPlayerForwardVel(control, physShip).mul(thrustMultiplier))
+        body.applyForce(getPlayerForwardVel(control, body).mul(thrustMultiplier))
     }
 
     /**
-     * Parent side: the factor that makes this ship's steering torque turn the WHOLE welded armada at the rate this
-     * hull alone would turn.
+     * The roll INTO a turn, as an angular acceleration about the lead's left/right axis. Cosmetic: it banks the
+     * hull the way an aircraft leans into a corner.
      *
-     * The rigid welds make a parent and its children one body for rotation, and that body's yaw inertia is far
-     * larger than the parent's own: each ship contributes its own inertia PLUS mass * distance^2 from the combined
-     * centre of mass -- the parallel-axis term, which dominates once hulls sit side by side. The control code sizes
-     * torque as (own inertia) * alpha, so the armada only ever reached alpha * own / combined: turning was sluggish
-     * and hard turns were slow to stop. Multiplying by combined / own restores the commanded angular acceleration
-     * exactly, so the pilot feels the parent's solo handling no matter how much is bolted to it.
-     *
-     * Yaw inertia is read as the tensor's YY term, matching the world-Y torque the caller applies -- stabilize holds
-     * ships upright, so model Y and world Y agree closely enough.
-     *
-     * Returns 1.0 (no change) for a lone ship, or for a parent whose children are not in the physics world.
+     * Returns an acceleration rather than a torque because the caller hands it to the body, which is what knows
+     * the inertia to convert it against -- one hull's, or the whole armada's.
      */
-    private fun armadaYawTorqueScale(physShip: PhysShip, physLevel: PhysLevel, armada: ArmadaShipControl?): Double {
-        val childIds = armada?.childShipIds ?: return 1.0
-        if (childIds.isEmpty()) return 1.0
-
-        val ownYawInertia = physShip.momentOfInertia.m11()
-        if (!ownYawInertia.isFinite() || ownYawInertia <= 0.0) return 1.0
-
-        val members = ArrayList<PhysShip>(childIds.size + 1)
-        members.add(physShip)
-        childIds.forEach { id -> physLevel.getShipById(id)?.let(members::add) }
-        if (members.size < 2) return 1.0
-
-        // Combined centre of mass. Only the horizontal plane matters: yaw lever arms are X/Z.
-        var totalMass = 0.0
-        var comX = 0.0
-        var comZ = 0.0
-        members.forEach { member ->
-            val memberMass = member.mass
-            val pos = member.transform.positionInWorld
-            totalMass += memberMass
-            comX += memberMass * pos.x()
-            comZ += memberMass * pos.z()
-        }
-        if (totalMass <= 0.0) return 1.0
-        comX /= totalMass
-        comZ /= totalMass
-
-        // Parallel-axis sum about that centre: I_combined = sum(I_i + m_i * d_i^2)
-        var combinedYawInertia = 0.0
-        members.forEach { member ->
-            val pos = member.transform.positionInWorld
-            val dx = pos.x() - comX
-            val dz = pos.z() - comZ
-            combinedYawInertia += member.momentOfInertia.m11() + member.mass * (dx * dx + dz * dz)
-        }
-        if (!combinedYawInertia.isFinite()) return 1.0
-
-        // Never below 1: an armada is never easier to turn than the bare hull. The ceiling guards against a stale or
-        // garbage child transform demanding absurd torque -- it is not a tuning limit, and a normal side-by-side
-        // pair of large ships lands well under it.
-        return (combinedYawInertia / ownYawInertia).coerceIn(1.0, MAX_ARMADA_TORQUE_SCALE)
-    }
-
-    private fun getPlayerControlledBanking(control: ControlData, physShip: PhysShip, moiTensor: Matrix3dc, strength: Double): Vector3d {
+    private fun getPlayerControlledBankingAlpha(control: ControlData, lead: PhysShip, strength: Double): Vector3d {
         val rotationVector = control.seatInDirection.unitVec3i.toJOMLD()
-        physShip.transform.shipToWorldRotation.transform(rotationVector)
+        lead.transform.shipToWorldRotation.transform(rotationVector)
         rotationVector.y = 0.0
         rotationVector.mul(strength * 1.5)
-
-        physShip.transform.shipToWorldRotation.transform(
-            moiTensor.transform(
-                physShip.transform.shipToWorldRotation.transformInverse(rotationVector)
-            )
-        )
 
         return rotationVector
     }
 
     // Player controlled forward and backward thrust
-    private fun getPlayerForwardVel(control: ControlData, physShip: PhysShip): Vector3d {
+    private fun getPlayerForwardVel(control: ControlData, body: ArmadaBody): Vector3d {
 
-        val scaledMass = physShip.mass * EurekaConfig.SERVER.speedMassScale
-        val vel: Vector3dc = physShip.velocity
+        val lead = body.lead
+        val scaledMass = body.mass * EurekaConfig.SERVER.speedMassScale
+        val vel: Vector3dc = body.velocity
 
         // region Player controlled forward and backward thrust
+        // Heading is the LEAD's: the seat that reports "forward" is bolted to the parent.
         val forwardVector = control.seatInDirection.unitVec3i.toJOMLD()
-        physShip.transform.shipToWorldRotation.transform(forwardVector)
+        lead.transform.shipToWorldRotation.transform(forwardVector)
         forwardVector.normalize()
 
         val s = 1 / smoothingATanMax(
             EurekaConfig.SERVER.linearMaxMass,
-            physShip.mass * EurekaConfig.SERVER.linearMassScaling + EurekaConfig.SERVER.linearBaseMass
+            body.mass * EurekaConfig.SERVER.linearMassScaling + EurekaConfig.SERVER.linearBaseMass
         )
 
         // Throttle smoothing. When the HORIZONTAL set is latched it's ADDITIVE: only update oldSpeed while a
@@ -899,9 +940,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // baseSpeed converts it to m/s, so an engine-less ship still tops out at exactly baseSpeed.
         var speed = oldSpeed * EurekaConfig.SERVER.linearCasualSpeed / 3 * EurekaConfig.SERVER.baseSpeed
 
-        if (extraForceLinear != 0.0) {
+        val engineForceLinear = pooledForceLinear
+        if (engineForceLinear != 0.0) {
             // engine boost
-            val boost = max((extraForceLinear - cfg.enginePowerLinear * cfg.engineBoostOffset) * cfg.engineBoost, 0.0)
+            val boost = max((engineForceLinear - cfg.enginePowerLinear * cfg.engineBoostOffset) * cfg.engineBoost, 0.0)
             // Kept in a local. extraForceLinear is a FIELD that onServerTick refreshes from the engines once
             // per SERVER tick, while this runs once per PHYSICS tick, and there are more of those. Boosting
             // and dividing it in place therefore CONSUMED it: the first physics tick after a server tick saw
@@ -911,7 +953,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // shortfall behaved like textbook linear drag and kept the same ratio however the config was
             // scaled. It was never drag; it was the engine force being spent on the first tick that read it.
             val enginePower =
-                (extraForceLinear + boost + boost * boost * EurekaConfig.SERVER.engineBoostExponentialPower) /
+                (engineForceLinear + boost + boost * boost * EurekaConfig.SERVER.engineBoostExponentialPower) /
                     scaledMass
 
             speed += if (speed < 0) {
@@ -926,7 +968,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // EngineBlockEntity subtracts from its heat. Upstream removed its equivalent line in
             // a2f1f7b ("Fixed ships flying way too fast"), silently making heat drain a no-op;
             // this restores the intended fuel-burn feedback loop.
-            physConsumption += if (control.sprintOn) 1f else min(abs(oldSpeed), 1.0).toFloat()
+            val consumption = if (control.sprintOn) 1f else min(abs(oldSpeed), 1.0).toFloat()
+            physConsumption += consumption
+            // Every welded member's engines run at the armada's throttle, so they burn their fuel at it too --
+            // otherwise a child's engines would push the formation (its power is pooled above) for free.
+            for (member in armadaMembers) member.physConsumption += consumption
         }
 
         // Drag trim: integrate the shortfall between the speed being asked for and the speed actually
@@ -961,7 +1007,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // and the config key finally means what it says.
         forwardVector.mul(speed)
 
-        val playerUpDirection = physShip.transform.shipToWorldRotation.transform(Vector3d(0.0, 1.0, 0.0))
+        val playerUpDirection = lead.transform.shipToWorldRotation.transform(Vector3d(0.0, 1.0, 0.0))
         val velOrthogonalToPlayerUp = vel.sub(playerUpDirection.mul(playerUpDirection.dot(vel)), Vector3d())
 
         // Velocity-error P controller: the target is a true ceiling, since overshooting it flips the sign.
@@ -970,11 +1016,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         return forwardForce
     }
 
-    // Player controlled elevation
-    private fun getPlayerUpwardVel(control: ControlData, mass: Double): Vector3d {
+    // Player controlled elevation. [mass] and [balloonForceProvided] are the ARMADA's (pooled), so a formation
+    // climbs on the lift it carries as a whole rather than on whatever the lead hull happens to hold.
+    private fun getPlayerUpwardVel(control: ControlData, mass: Double, balloonForceProvided: Double): Vector3d {
         if (control.upImpulse != 0.0f) {
-
-            val balloonForceProvided = balloons * forcePerBalloon
 
             return Vector3d(0.0, 1.0, 0.0)
                 .mul(control.upImpulse.toDouble())
@@ -1062,7 +1107,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             field = v; deleteIfEmpty()
         }
 
+    // Counted on the GAME thread and read on the PHYSICS thread -- by this ship, and across the armada by every
+    // other member, since one anchor holds the whole vessel ([armadaAnchored]). Volatile for that cross-thread,
+    // cross-ship read.
+    @Volatile
     var anchorsActive = 0 // Anchors that are active
+
+    // balloons/floaters are counted on the GAME thread and read on the PHYSICS thread -- by this ship, and by
+    // the parent when this one is a welded armada member, which pools them across the formation. Volatile for
+    // that cross-thread, cross-ship read.
+    @Volatile
     var balloons = 0 // Amount of balloons
         set(v) {
             field = v; deleteIfEmpty()
@@ -1073,6 +1127,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             field = v; deleteIfEmpty()
         }
 
+    @Volatile
     var floaters = 0 // Amount of floaters * 15
         set(v) {
             field = v; deleteIfEmpty()
@@ -1276,11 +1331,6 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         private const val ALIGN_THRESHOLD = 0.01
         private const val DISASSEMBLE_THRESHOLD = 0.02
-
-        // Safety ceiling on the armada steering multiplier (see armadaYawTorqueScale). A sane side-by-side pair of
-        // large ships lands well under this; the cap only stops a stale/garbage child transform from demanding a
-        // torque that would fling the formation.
-        private const val MAX_ARMADA_TORQUE_SCALE = 64.0
 
         // Sanity cap on the turn-acceleration phase, as an edge LINEAR speed (m/s); divided by the ship's
         // turn radius to get the max lockable yaw rate. Stops a very long hold from spinning the ship absurdly.

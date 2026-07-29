@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
  * [ArmadaBindings.reconcile] re-creates it each server tick for any loaded child whose parent is loaded but
  * whose weld is missing (i.e. just after load).
  *
- * [childShipIds] is deliberately NOT persisted: it's rebuilt at runtime by reconcile from the children's
+ * [childShips] is deliberately NOT persisted: it's rebuilt at runtime by reconcile from the children's
  * [parentShipId], which keeps the child's link the single source of truth (the two sides can't disagree after
  * a half-loaded reload where only one of the pair came back).
  */
@@ -53,14 +53,21 @@ class ArmadaShipControl {
     var intendedRotInParent: Quaterniond? = null
 
     /**
-     * Parent side: the ships locked to this one as children. Rebuilt at runtime (see class doc), not persisted.
+     * Parent side: the ships locked to this one as children, by id. Rebuilt at runtime (see class doc), not
+     * persisted.
      *
-     * Concurrent because bind/unbind write it on the GAME thread while
-     * [org.valkyrienskies.eureka.ship.EurekaShipControl] iterates it on the PHYSICS thread (to size the parent's
-     * steering for the armada's combined inertia); a plain LinkedHashSet would throw on that read.
+     * Holds live ship handles rather than bare ids because the PHYSICS thread needs more than identity: the
+     * parent gathers each child's mass, pose and Eureka attachment every tick to drive the armada as one body
+     * (see [org.valkyrienskies.eureka.armada.ArmadaBody]), and only a handle gets it there.
+     *
+     * Concurrent because bind/unbind write it on the GAME thread while the physics thread iterates it; a plain
+     * LinkedHashMap would throw on that read.
      */
     @JsonIgnore
-    val childShipIds: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+    val childShips: MutableMap<Long, LoadedServerShip> = ConcurrentHashMap()
+
+    /** Read-only view of [childShips]' keys, for the command/helm code that only cares about identity. */
+    val childShipIds: Set<Long> get() = childShips.keys
 
     /**
      * Child side: the live ids of the rigid welds holding this ship to its parent (several, at spread hull points,
