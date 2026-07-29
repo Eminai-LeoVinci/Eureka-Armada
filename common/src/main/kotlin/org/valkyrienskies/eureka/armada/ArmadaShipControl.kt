@@ -70,6 +70,18 @@ class ArmadaShipControl {
     val childShipIds: Set<Long> get() = childShips.keys
 
     /**
+     * Parent side: the Keep Active value this armada last pushed onto its children, so
+     * [ArmadaBindings.reconcile] can push again only when it CHANGES.
+     *
+     * Edge-triggered rather than mirrored every tick because a continuous mirror silently overwrites any
+     * deliberate per-ship change -- turn the flag off anywhere in the armada and it was simply back on a tick
+     * later, with nothing to say why. Null until the first push, which is what makes a freshly loaded armada
+     * take the parent's value once. Runtime only.
+     */
+    @JsonIgnore
+    var mirroredKeepActive: Boolean? = null
+
+    /**
      * Child side: the live ids of the rigid welds holding this ship to its parent (several, at spread hull points,
      * so the armada can't twist on a lever arm). Delivered asynchronously by the physics adapter after
      * [ArmadaBindings] requests them. Runtime only -- joints are physics objects, re-created by

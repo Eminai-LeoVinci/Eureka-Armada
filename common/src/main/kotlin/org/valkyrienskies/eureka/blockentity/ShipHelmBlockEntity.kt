@@ -125,6 +125,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             return
         }
 
+        // Keep Active from the moment a ship is nominated to lead, before any child has bound: a parent that
+        // falls out of simulation strands the formation, and the point of marking one is that ships are about to
+        // be locked to it. ArmadaBindings.bindChild does the same for both ends of each bond.
+        ship.settings.keepActive = true
         ArmadaSelection.select(player.uuid, ship.id)
         armadaFeedback(player, "Marked as armada parent. Tick Armada Child at another ship's helm to add it.")
     }
@@ -585,6 +589,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         InfluenceOrientationBridge.seedForward(shipId, forwardAtAssembly)
 
         fun applyControl(loadedShip: LoadedServerShip) {
+            // Keep Active on by default for anything Eureka assembles. A ship only physics-ticks while a player
+            // is within vanilla simulation distance, so without this a ship left cruising, hovering or holding
+            // altitude quietly stops the moment you walk away and is found wherever it stalled. Turn it off per
+            // ship from the helm or `/vs set-keep-active` if you'd rather a parked hull cost nothing.
+            loadedShip.settings.keepActive = true
             val control = EurekaShipControl.getOrCreate(loadedShip)
             // Set helms (>= 1 for any real ship) first so the deleteIfEmpty() in the
             // remaining setters can't drop the attachment mid-update when a count is 0.

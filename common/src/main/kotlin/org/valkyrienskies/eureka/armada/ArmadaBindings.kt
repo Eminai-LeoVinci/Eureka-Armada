@@ -10,6 +10,7 @@ import org.valkyrienskies.core.internal.joints.VSJointPose
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.common.util.settings
 
 /**
  * Server-side make/break of armada bonds, shared by [ArmadaCommand], the helm menu's Armada Parent/Child
@@ -77,7 +78,17 @@ object ArmadaBindings {
         childArmada.intendedRotInParent = Quaterniond(relRot)
         createWeld(parent, child, childArmada)
 
-        ArmadaShipControl.getOrCreate(parent).childShips[child.id] = child
+        val parentArmada = ArmadaShipControl.getOrCreate(parent)
+        parentArmada.childShips[child.id] = child
+
+        // An armada has to keep itself loaded as ONE thing, so forming one turns Keep Active on for both ends
+        // rather than waiting for someone to notice. A parent that falls out of simulation strands its children;
+        // a child that does is a welded body that has stopped stepping, which stalls the whole formation dead.
+        // Recorded as the mirrored value so the edge-triggered push in reconcile doesn't read this as a change.
+        parent.settings.keepActive = true
+        child.settings.keepActive = true
+        parentArmada.mirroredKeepActive = true
+
         // A ship that just became a child can't also be someone's marked parent.
         ArmadaSelection.forgetShip(child.id)
         return null
@@ -162,6 +173,7 @@ object ArmadaBindings {
      */
     fun reconcile(level: ServerLevel) {
         val world = level.shipObjectWorld
+        syncArmadaSettings(level)
         for (child in world.loadedShips) {
             val armada = ArmadaShipControl.get(child) ?: continue
             val parentId = armada.parentShipId ?: continue
@@ -174,6 +186,36 @@ object ArmadaBindings {
             armada.parentShip = parent
             createWeld(parent, child, armada)
             ArmadaShipControl.getOrCreate(parent).childShips[child.id] = child
+        }
+    }
+
+    /**
+     * Push VS's **Keep Active** from each armada parent onto its children whenever the parent's value CHANGES.
+     *
+     * Keep Active belongs to the vessel, not to one hull: a child left un-kept while the parent flies out of
+     * anyone's simulation range stops being simulated, and the armada -- welded to a ship that is no longer
+     * stepping -- stalls and stops dead. So it is carried from the parent, whichever way it was set there (the
+     * helm's "Keep Active?" checkbox, `/vs set-keep-active`, or anything else), rather than hooked at any one
+     * click.
+     *
+     * **Edge-triggered, deliberately.** Mirroring the parent's value onto the children EVERY tick meant no
+     * deliberate change could survive: turn Keep Active off and the next tick put it straight back, so the flag
+     * read as permanently stuck on with nothing to explain it. Pushing only on a change leaves the armada in
+     * lockstep whenever the parent is touched, while still letting a single ship be set on its own afterwards.
+     * The null start ([ArmadaShipControl.mirroredKeepActive]) makes a freshly loaded armada take the parent's
+     * value once.
+     */
+    private fun syncArmadaSettings(level: ServerLevel) {
+        val dimension = level.dimensionId
+        for (ship in level.shipObjectWorld.loadedShips) {
+            // loadedShips spans every dimension while this runs once per level -- see reconcile's callers.
+            if (ship.chunkClaimDimension != dimension) continue
+            val armada = ArmadaShipControl.get(ship) ?: continue
+            if (armada.isChild || armada.childShips.isEmpty()) continue
+            val keepActive = ship.settings.keepActive
+            if (armada.mirroredKeepActive == keepActive) continue
+            armada.mirroredKeepActive = keepActive
+            for (child in armada.childShips.values) child.settings.keepActive = keepActive
         }
     }
 
