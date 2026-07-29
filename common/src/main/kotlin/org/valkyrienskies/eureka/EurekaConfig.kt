@@ -70,6 +70,12 @@ object EurekaConfig {
 
         @JsonSchema(description = "Thickness of drawn path lines. Default 2.0.")
         var pathLineWidth = 2.0
+
+        @JsonSchema(
+            description = "Seconds each path message stays on screen before fading. Messages stack rather " +
+                "than overwriting one another, so a burst of them is all readable. Default 6.0."
+        )
+        var pathMessageSeconds = 6.0
     }
 
     class Server {
@@ -505,6 +511,33 @@ object EurekaConfig {
                 "the whole run (the default, and what makes 'fly a parallel course' predictable)."
         )
         var pathOffsetDecay = 0.0
+
+        @JsonSchema(
+            description = "Path playback: slow into corners the hull cannot hold at its current speed, so it " +
+                "tracks the line instead of running wide and converging back. Speed is still the pilot's -- " +
+                "this only ever asks for LESS. Default true."
+        )
+        var pathCornerSlowdown = true
+
+        @JsonSchema(
+            description = "Path playback: fraction of the theoretical cornering speed to actually allow. " +
+                "1.0 corners at the hull's absolute yaw limit with nothing in hand for waves or tracking " +
+                "error; lower is more conservative and hugs the line harder. Default 0.8."
+        )
+        var pathCornerSpeedMargin = 0.8
+
+        @JsonSchema(
+            description = "Path playback: floor in m/s for the corner slowdown, so a hairpin slows a ship " +
+                "down rather than stopping it dead. Default 2.0."
+        )
+        var pathCornerMinSpeed = 2.0
+
+        @JsonSchema(
+            description = "Path playback: seconds a manual turn or ascend/descend input must be HELD to stop " +
+                "following the route. Brief inputs still steer -- the route simply re-acquires afterwards -- " +
+                "so this is what separates a nudge from letting go. Default 0.6."
+        )
+        var pathManualCancelHold = 0.6
         // endregion
 
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and

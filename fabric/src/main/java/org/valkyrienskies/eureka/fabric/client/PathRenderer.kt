@@ -100,6 +100,7 @@ object PathRenderer {
 
         for (route in state.routes.values) {
             val offset = flown[route.id]
+            if (route.id in state.hiddenRoutes) continue
             if (offset == null && !state.showAll) continue
             drawRoute(consumer, pose, route.path, offset, cam.x, cam.y, cam.z, maxDistSq, colorFor(route.id, offset != null))
         }

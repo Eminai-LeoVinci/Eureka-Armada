@@ -2,9 +2,12 @@ package org.valkyrienskies.eureka.path
 
 import org.joml.Vector3d
 import org.joml.Vector3dc
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -123,6 +126,47 @@ class ShipPath(
     }
 
     /**
+     * The tightest horizontal turn radius, in blocks, anywhere in the [span] blocks of route ahead of [s].
+     *
+     * Only the horizontal component counts, because this exists to bound YAW rate and a climb costs no yaw.
+     * Sampled in [CURVATURE_STEP] chunks and minimised rather than averaged over the whole window: a short
+     * hairpin inside an otherwise gentle sweep is exactly the case worth slowing for, and an average would
+     * dissolve it.
+     *
+     * Returns [Double.MAX_VALUE] for a straight, which callers read as "no limit".
+     */
+    fun minTurnRadius(s: Double, span: Double): Double {
+        if (span <= CURVATURE_STEP) return Double.MAX_VALUE
+
+        var tightest = Double.MAX_VALUE
+        val here = Vector3d()
+        val next = Vector3d()
+        var travelled = 0.0
+
+        while (travelled < span) {
+            val step = CURVATURE_STEP.coerceAtMost(span - travelled)
+            if (step < 1.0e-6) break
+
+            tangentAt(s + travelled, here)
+            tangentAt(s + travelled + step, next)
+
+            // Signed horizontal heading change across the step. atan2 of cross and dot, so it is already
+            // wrapped to +/-pi and needs no unwrapping case at due north.
+            val cross = here.x * next.z - here.z * next.x
+            val dot = here.x * next.x + here.z * next.z
+            val turn = abs(atan2(cross, dot))
+
+            // radius = arc / angle. A turn too small to measure is a straight, and dividing by it would
+            // manufacture a radius from floating-point noise.
+            if (turn > MIN_MEASURABLE_TURN) tightest = min(tightest, step / turn)
+
+            travelled += step
+        }
+
+        return tightest
+    }
+
+    /**
      * Arc length of the point on the loop closest to [pos].
      *
      * [hint] is the previous tick's answer; the search only covers [SEARCH_WINDOW] blocks either side of it,
@@ -187,6 +231,12 @@ class ShipPath(
 
         /** How far either side of the hint [nearestArcLength] looks. */
         private const val SEARCH_WINDOW = 32.0
+
+        /** Arc length each curvature probe spans in [minTurnRadius]. */
+        private const val CURVATURE_STEP = 4.0
+
+        /** Heading change (radians) below which a probe counts as straight rather than a very wide arc. */
+        private const val MIN_MEASURABLE_TURN = 1.0e-4
 
         /** Below this a "loop" is a degenerate blob that no smoothing or follower can make sense of. */
         const val MIN_CONTROL_POINTS = 4

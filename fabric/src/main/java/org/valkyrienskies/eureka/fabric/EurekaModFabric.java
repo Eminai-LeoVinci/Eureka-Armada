@@ -30,6 +30,7 @@ import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
+import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
 import org.valkyrienskies.eureka.path.ClientPathState;
@@ -103,6 +104,7 @@ public class EurekaModFabric implements ModInitializer {
             PathNetworkingFabric.INSTANCE.registerClient();
             PathKeybinds.INSTANCE.register();
             PathRenderer.INSTANCE.register();
+            PathHud.INSTANCE.register();
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
             // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea

@@ -57,8 +57,41 @@ object PathKeybinds {
         cancel = bind("cancel", GLFW.GLFW_KEY_C)
         show = bind("show", GLFW.GLFW_KEY_O)
 
+        // Vanilla suppression has to run BEFORE Minecraft.handleKeybinds, which END_CLIENT_TICK is far too late
+        // for -- by then the colliding action has already happened.
+        ClientTickEvents.START_CLIENT_TICK.register { client -> suppressVanillaCollisions(client) }
         ClientTickEvents.END_CLIENT_TICK.register { client -> tick(client) }
     }
+
+    /**
+     * Swallow the clicks of any VANILLA binding that shares a key with one of ours, while sneak is held.
+     *
+     * SHIFT+P is the case that showed up: `P` is vanilla's Social Interactions key, and vanilla does not care
+     * that sneak is down, so playing a route also fired it -- "Social interactions are only available in
+     * Multiplayer worlds" in singleplayer, and the actual screen opening in multiplayer.
+     *
+     * Done by scanning for collisions rather than hard-coding Social Interactions, so it keeps holding after a
+     * rebind in either direction: rebind ours off `P` and vanilla's key works normally again with sneak held;
+     * rebind ours onto some other occupied key and that one is covered too.
+     *
+     * Only CLICKS are drained. Movement and other held keys read `isDown`, which is untouched -- so
+     * sneak-walking backwards still walks backwards even though `S` is our stop key.
+     */
+    private fun suppressVanillaCollisions(client: Minecraft) {
+        if (client.player == null || client.screen != null) return
+        if (!client.options.keyShift.isDown) return
+
+        for (mapping in client.options.keyMappings) {
+            if (mapping === record || mapping === play || mapping === stop ||
+                mapping === cancel || mapping === show
+            ) continue
+            // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
+            if (ours.none { mapping.same(it) }) continue
+            while (mapping.consumeClick()) Unit
+        }
+    }
+
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, stop, cancel, show) }
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -114,12 +147,33 @@ object PathKeybinds {
         val next = held + 1
         when {
             next == HOLD_TICKS -> action()
-            next < HOLD_TICKS -> client.player?.displayClientMessage(Component.literal(prompt), true)
+            next < HOLD_TICKS -> PathHud.prompt(Component.literal(prompt))
         }
         return next
     }
 
+    /**
+     * SHIFT+O, which means one of two things depending on where you are standing.
+     *
+     * Aboard a ship that is flying a route, it toggles THAT route's line -- because the one place a route line
+     * is least wanted is out the window of the ship following it, and that was previously the one case with no
+     * way to turn it off (a route being flown drew unconditionally).
+     *
+     * Anywhere else it is the global show-everything toggle, which is what you want when picking a route to fly
+     * rather than flying one.
+     */
     private fun toggleShowAll(client: Minecraft) {
+        val local = ClientPathState.localRouteId
+        if (local != 0L) {
+            val hidden = ClientPathState.toggleHidden(local)
+            val name = ClientPathState.routes[local]?.name ?: "this route"
+            PathHud.add(
+                Component.literal(if (hidden) "Hid '$name' -- the ship keeps following it" else "Showing '$name'"),
+                SHOW_ARGB
+            )
+            return
+        }
+
         val enabled = !ClientPathState.showAll
         ClientPathState.showAll = enabled
         EurekaConfig.CLIENT.showAllPaths = enabled
@@ -128,14 +182,19 @@ object PathKeybinds {
         if (enabled) {
             // Pull the current set in case a route was recorded while we weren't looking.
             PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_REQUEST_ROUTES)
+            // "Show me everything" has to mean everything, or a route hidden from a cockpit stays invisible
+            // with no obvious way back -- you would have to work out which ship to go and stand on.
+            ClientPathState.hiddenRoutes.clear()
         }
-        client.player?.displayClientMessage(
+        PathHud.add(
             Component.literal(
                 if (enabled) "Showing ${ClientPathState.routes.size} saved route(s)" else "Saved routes hidden"
             ),
-            true
+            SHOW_ARGB
         )
     }
+
+    private const val SHOW_ARGB = 0xFF9BE38A.toInt()
 
     /** Swallow presses that happened without shift so they can't fire later when shift goes down. */
     private fun drainClicks() {

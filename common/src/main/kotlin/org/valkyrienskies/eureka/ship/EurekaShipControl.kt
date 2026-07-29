@@ -141,6 +141,39 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         private set
 
     /**
+     * True from [pathBegin] until [pathRelease]: this ship is under a recorded route's guidance.
+     *
+     * Distinct from `pathTurnOmega != null`, which only becomes true once the follower has actually issued a
+     * command. That gap matters, because everything this flag suppresses would otherwise fire on the very first
+     * tick -- before the first command exists -- and dismantle the course the follower is about to steer.
+     *
+     * A path-following ship has no seated pilot, so as far as the rest of physTick is concerned it looks
+     * abandoned. Three things follow from that and all three are wrong here:
+     *
+     *  - `controlData` is cleared every tick when nobody is aboard and no cruise is set, which wiped the course
+     *    [pathBegin] had just established and left the follower with nothing to steer.
+     *  - [stabilize] brakes yaw for an unpiloted hull, cancelling the follower's commanded turn -- which is why
+     *    turning appeared to need the helm's Turn checkbox, that being the one other thing that lifts the brake.
+     *  - [stabilize] also brakes linear velocity, fighting the thrust that carries the ship along the route.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathFollowing = false
+        private set
+
+    /**
+     * Forward speed ceiling in m/s while following, or null for no ceiling.
+     *
+     * The follower lowers this into a corner so the hull can physically hold the line it is being asked to hold
+     * (see [org.valkyrienskies.eureka.path.PathFollower]). Strictly a CEILING -- it never adds speed, so the
+     * pilot's throttle or cruise setting still owns how fast the route is flown.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathSpeedCap: Double? = null
+        private set
+
+    /**
      * Seat facing last reported by this ship's helm ([org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity]).
      *
      * Path playback has no seated pilot, so it needs a forward to thrust along just as a helm-menu cruise does.
@@ -478,11 +511,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // what made a coasting armada wrench itself into a turn the moment the pilot stood up.
         stabilize(
             body,
-            !validPlayer && !aligning,
+            // A ship following a route counts as piloted for both brakes below: the follower IS the pilot, it
+            // just isn't sitting down. Without this the anti-velocity brake fights the thrust carrying the ship
+            // along its route.
+            !validPlayer && !aligning && !pathFollowing,
             // Yaw is braked when there's no pilot -- EXCEPT while a turn-cruise orbit is locked, so a saved/
             // pilotless circling ship keeps its rate instead of being dragged straight. Reads the PERSISTED
             // cruiseTurning (this runs before the resume block rebuilds the transient on the first reload tick).
-            !validPlayer && !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise)
+            // A route being followed lifts the brake for the same reason a locked orbit does -- something is
+            // deliberately commanding yaw. Leaving it on is what made a followed route steer only while the
+            // helm's Turn box happened to be ticked: the ship turned, and the brake immediately undid it.
+            !validPlayer && !pathFollowing &&
+                !(isCruising && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise)
         )
 
         var idealUpwardVel = Vector3d(0.0, 0.0, 0.0)
@@ -533,7 +573,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
             wasCruisePressed = player.cruise
         } else {
-            if (!isCruising) {
+            // A followed route holds the course open the same way a cruise does. Clearing it here is what made
+            // binding a stationary, non-cruising ship to a route fail instantly: pathBegin() set the course, the
+            // very next physics tick wiped it, and the follower reported having lost its way. Speed is untouched
+            // either way -- the route steers, the pilot's throttle or cruise still drives.
+            if (!isCruising && !pathFollowing) {
                 // If the player isn't controlling the ship, and not cruising, reset the control data
                 controlData = null
                 oldSpeed = 0.0
@@ -1063,6 +1107,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         }
         speed += dragTrimMps
 
+        // Corner ceiling: a route can ask for a turn tighter than the hull can hold at the speed it is making,
+        // and the ship then runs wide and has to converge back. The follower works out the fastest speed at
+        // which this hull can actually stay on the line through what is coming up, and that lands here as a
+        // CEILING -- clamped, never raised, and never sign-flipped, so a slower throttle setting stays slower
+        // and reverse stays reverse. The pilot keeps the throttle; the route only ever asks for less of it.
+        pathSpeedCap?.let { cap -> speed = speed.coerceIn(-cap, cap) }
+
         // Target velocity, already in m/s. This used to be scaled by baseSpeed a SECOND time here, which
         // was right for the base term (it cancelled the /3 above) but silently tripled the engine term as
         // well -- so maxSpeedFromEngines = 24 actually commanded ~72 m/s, and the helm's "Top Speed"
@@ -1388,6 +1439,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             ?: cruiseSeatDir.takeIf { it in 0..5 }?.let { Direction.values()[it] }
             ?: return false
         ensureMenuCourse(dir)
+        pathFollowing = true
         return true
     }
 
@@ -1398,9 +1450,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      * Forward speed is deliberately absent -- the pilot's cruise setting owns it, so a route can be flown fast
      * or slow without re-recording.
      */
-    fun pathCommand(turnOmega: Double, verticalMps: Double) {
+    fun pathCommand(turnOmega: Double, verticalMps: Double, speedCap: Double?) {
         val cap = pathTurnCap
         pathTurnOmega = turnOmega.coerceIn(-cap, cap)
+        pathSpeedCap = speedCap
 
         // Convert m/s to the -1..1 impulse units the elevation law works in, exactly as setCruiseValueMenu's
         // vertical axis does: the up and down rates differ, so each direction scales by its own maximum.
@@ -1417,8 +1470,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      * in a straight line -- what "stop" means for a vessel the size of a ship near terrain.
      */
     fun pathRelease(stopShip: Boolean) {
+        pathFollowing = false
         pathTurnOmega = null
         pathVerticalRate = null
+        pathSpeedCap = null
         if (stopShip && isCruising) {
             isCruising = false
             clearCruiseLatches()

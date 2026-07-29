@@ -1,7 +1,5 @@
 package org.valkyrienskies.eureka.path
 
-import net.minecraft.ChatFormatting
-import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.Entity
@@ -16,6 +14,8 @@ import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
+import kotlin.math.max
 
 /**
  * Owns every in-progress recording and every ship currently flying a route, and drives them from the server
@@ -129,6 +129,9 @@ object ShipPaths {
             followers.remove(ship.id)
             return
         }
+
+        if (checkManualTakeover(level, ship, control, follower)) return
+
         val keel = KeelAnchor.world(level, ship, scratchKeel) ?: return
 
         if (!follower.tick(keel, control, ship.velocity.length())) {
@@ -136,6 +139,58 @@ object ShipPaths {
             control.pathRelease(stopShip = true)
             tell(level, follower.playerId, "Stopped following -- the ship lost its course.", error = true)
         }
+    }
+
+    /**
+     * Hand the ship back to the pilot when they hold a turn or an elevation input, and report having done so.
+     *
+     * The same hold gesture SHIFT+C uses, for the same reason: a brief input is how you nudge a following ship
+     * past an obstacle, and it should stay a nudge -- the route simply re-acquires afterwards, which is the
+     * whole point of pure pursuit. Only a sustained input means "I have the wheel now".
+     *
+     * Forward/back is deliberately NOT included. Speed was never the route's to own, so driving or stopping
+     * while bound to a line is ordinary use, not a takeover.
+     *
+     * Returns true if the ship was released, in which case the caller must not steer it this tick.
+     */
+    private fun checkManualTakeover(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        control: EurekaShipControl,
+        follower: PathFollower
+    ): Boolean {
+        val hold = EurekaConfig.SERVER.pathManualCancelHold
+        if (hold <= 0.0) return false
+
+        // Both are signed seconds accumulated on the game thread and zeroed the moment the input stops, so a
+        // stale reading can't build up while nobody is at the helm.
+        val turning = abs(control.turnHold)
+        val climbing = abs(control.vertHold)
+        val held = max(turning, climbing)
+        if (held <= 0.0) return false
+
+        if (held >= hold) {
+            followers.remove(ship.id)
+            // Not stopShip: the pilot is taking over, so leave whatever cruise they had running rather than
+            // dropping a moving vessel's throttle out from under them.
+            control.pathRelease(stopShip = false)
+            tell(
+                level, follower.playerId,
+                "You have the wheel -- '${follower.path.name}' released.",
+                PathMessages.Kind.WARN
+            )
+            return true
+        }
+
+        if (held >= hold * PROMPT_AT) {
+            val what = if (turning >= climbing) "turning" else "climbing"
+            tell(
+                level, follower.playerId,
+                "Keep $what to stop following '${follower.path.name}'…",
+                PathMessages.Kind.PROMPT
+            )
+        }
+        return false
     }
 
     // endregion
@@ -210,8 +265,15 @@ object ShipPaths {
             ok(player, "Following '${path.name}', holding a ${distance.toInt()}m offset from the line.")
         }
 
-        if (!control.cruiseHorizontalArmed) {
-            tell(level, player.uuid, "Set a cruise speed at the helm to get under way.", error = false)
+        // Binding a stopped ship is perfectly valid -- the route owns steering, never the throttle, so it can
+        // sit bound to the line indefinitely and be driven by hand. Say so rather than implying something is
+        // missing: the old wording read as an error on a ship that was working exactly as intended.
+        if (!control.cruiseHorizontalArmed && ship.velocity.length() < UNDER_WAY_SPEED) {
+            tell(
+                level, player.uuid,
+                "Bound and stopped -- steer with the throttle or set a cruise speed to get under way.",
+                PathMessages.Kind.WARN
+            )
         }
     }
 
@@ -279,21 +341,28 @@ object ShipPaths {
         return world.loadedShips.getById(parentId) ?: direct
     }
 
-    private fun ok(player: ServerPlayer, message: String) {
-        player.displayClientMessage(Component.literal(message).withStyle(ChatFormatting.AQUA), true)
-    }
+    private fun ok(player: ServerPlayer, message: String) =
+        PathMessages.send(player, message, PathMessages.Kind.GOOD)
 
-    private fun fail(player: ServerPlayer, message: String) {
-        player.displayClientMessage(Component.literal(message).withStyle(ChatFormatting.RED), true)
-    }
+    private fun fail(player: ServerPlayer, message: String) =
+        PathMessages.send(player, message, PathMessages.Kind.ERROR)
 
-    private fun tell(level: ServerLevel, playerId: UUID, message: String, error: Boolean) {
+    private fun tell(level: ServerLevel, playerId: UUID, message: String, error: Boolean) =
+        tell(level, playerId, message, if (error) PathMessages.Kind.ERROR else PathMessages.Kind.GOOD)
+
+    private fun tell(level: ServerLevel, playerId: UUID, message: String, kind: PathMessages.Kind) {
         val player = level.server.playerList.getPlayer(playerId) ?: return
-        if (error) fail(player, message) else ok(player, message)
+        PathMessages.send(player, message, kind)
     }
 
     /** How far off the line still counts as "on it" for the engage message. */
     private const val ON_LINE_TOLERANCE = 3.0
+
+    /** Fraction of the cancel hold at which the "keep holding" prompt appears. */
+    private const val PROMPT_AT = 0.25
+
+    /** Below this (m/s) a ship counts as stopped for the "you'll need some throttle" hint. */
+    private const val UNDER_WAY_SPEED = 0.5
 
     /**
      * Decimation tolerance in blocks. Storage-only: [ShipPath] rebuilds a spline through the kept points, so

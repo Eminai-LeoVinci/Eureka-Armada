@@ -108,8 +108,36 @@ class PathFollower(
 
         val verticalMps = cfg.pathVerticalGain * (target.y - keel.y())
 
-        control.pathCommand(cfg.pathTurnGain * error, verticalMps)
+        control.pathCommand(cfg.pathTurnGain * error, verticalMps, cornerSpeedCap(control, lookahead))
         return true
+    }
+
+    /**
+     * The fastest this hull can be going and still hold the corner that is coming up, or null on a straight.
+     *
+     * A ship turns at some maximum yaw rate w, and holding a circle of radius R at speed v needs w = v / R. Run
+     * that backwards and the fastest speed that still fits inside the tightest radius ahead is v = w * R. Above
+     * it the ship is not being steered badly, it is being asked for something the hull cannot do, and it runs
+     * wide -- gently on a sweeping curve, which is why wide turns already looked right, and badly on a hairpin.
+     *
+     * The window looked at is the aim-ahead distance, so the ship starts shedding speed roughly when it starts
+     * aiming into the corner rather than on top of it.
+     *
+     * This is a CEILING handed to the hull, never a throttle setting: on a straight there is none at all, and
+     * where there is one the pilot's own speed still applies if it is lower.
+     */
+    private fun cornerSpeedCap(control: EurekaShipControl, lookahead: Double): Double? {
+        val cfg = EurekaConfig.SERVER
+        if (!cfg.pathCornerSlowdown) return null
+
+        val radius = path.minTurnRadius(arc, lookahead.coerceAtLeast(cfg.pathLookaheadMin))
+        if (radius >= STRAIGHT_RADIUS) return null
+
+        // pathTurnCap is the hull's own yaw ceiling, so this is its physical cornering speed. The margin backs
+        // off from that limit, because arriving at a corner at exactly the speed that needs the ship's absolute
+        // maximum yaw rate leaves nothing in hand for the wave, the gust or the tracking error that follows.
+        return (control.pathTurnCap * radius * cfg.pathCornerSpeedMargin)
+            .coerceAtLeast(cfg.pathCornerMinSpeed)
     }
 
     companion object {
@@ -117,5 +145,8 @@ class PathFollower(
 
         /** Aim at least this many turn radii ahead, so the target is never inside the hull's turning circle. */
         private const val TURN_RADIUS_LOOKAHEAD = 1.5
+
+        /** A "corner" this wide is a straight as far as any ship is concerned; don't cap speed for it. */
+        private const val STRAIGHT_RADIUS = 1.0e4
     }
 }

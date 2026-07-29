@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
 import net.minecraft.network.FriendlyByteBuf
+import net.minecraft.network.chat.Component
 import net.minecraft.network.codec.ByteBufCodecs
 import net.minecraft.network.codec.StreamCodec
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload
@@ -15,12 +16,15 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.fabric.client.PathHud
 import org.valkyrienskies.eureka.path.ClientPathState
 import org.valkyrienskies.eureka.path.PathFollower
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.path.PathStore
 import org.valkyrienskies.eureka.path.ShipPath
 import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.path.ShipPaths
+import java.util.UUID
 
 /**
  * Wire protocol for ship paths: one tiny C2S action packet, and two S2C snapshots.
@@ -47,10 +51,12 @@ object PathNetworkingFabric {
     private val ACTION_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_action")
     private val ROUTES_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_routes")
     private val LIVE_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_live")
+    private val MESSAGE_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_message")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
     private val ROUTES_TYPE = CustomPacketPayload.Type<RoutesPayload>(ROUTES_RL)
     private val LIVE_TYPE = CustomPacketPayload.Type<LivePayload>(LIVE_RL)
+    private val MESSAGE_TYPE = CustomPacketPayload.Type<MessagePayload>(MESSAGE_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ActionPayload::data) { ActionPayload(it) }
@@ -58,6 +64,8 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, RoutesPayload::data) { RoutesPayload(it) }
     private val LIVE_CODEC: StreamCodec<FriendlyByteBuf, LivePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, LivePayload::data) { LivePayload(it) }
+    private val MESSAGE_CODEC: StreamCodec<FriendlyByteBuf, MessagePayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, MessagePayload::data) { MessagePayload(it) }
 
     class ActionPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = ACTION_TYPE
@@ -71,12 +79,19 @@ object PathNetworkingFabric {
         override fun type() = LIVE_TYPE
     }
 
+    class MessagePayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = MESSAGE_TYPE
+    }
+
     // The hotkey actions a client can ask for. Ordinals are the wire format; append only.
     const val ACTION_RECORD_START: Byte = 0
     const val ACTION_RECORD_CANCEL: Byte = 1
     const val ACTION_PLAY: Byte = 2
     const val ACTION_STOP: Byte = 3
     const val ACTION_REQUEST_ROUTES: Byte = 4
+
+    /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
+    private const val NO_ROUTE = 0L
 
     /**
      * How much of a recording each player has already been sent, so updates can be incremental.
@@ -95,10 +110,34 @@ object PathNetworkingFabric {
     /** Route sets already pushed this session, so we only resend when something actually changed. */
     private val lastRouteStamp = HashMap<String, Int>()
 
+    /**
+     * Who was sent a live snapshot on the previous broadcast, per dimension.
+     *
+     * The client's overlay is driven entirely by these packets, so it can only be taken down by one. Keeping the
+     * previous recipient set is what lets a recording that has just closed its loop -- or a follower that has
+     * just stopped -- push one final empty snapshot to exactly the players who are still drawing something.
+     */
+    private val liveRecipients = HashMap<String, MutableSet<UUID>>()
+
     fun registerCommon() {
         PayloadTypeRegistry.playC2S().register(ACTION_TYPE, ACTION_CODEC)
         PayloadTypeRegistry.playS2C().register(ROUTES_TYPE, ROUTES_CODEC)
         PayloadTypeRegistry.playS2C().register(LIVE_TYPE, LIVE_CODEC)
+        PayloadTypeRegistry.playS2C().register(MESSAGE_TYPE, MESSAGE_CODEC)
+
+        // Point `:common`'s feedback at the stacking HUD, but only for players whose client actually declared
+        // the channel -- sending to one that didn't is an error, not a no-op. Anyone else keeps the action bar,
+        // which is the whole reason PathMessages has a fallback.
+        PathMessages.sender = { player, text, kind ->
+            if (ServerPlayNetworking.canSend(player, MESSAGE_TYPE)) {
+                val buf = FriendlyByteBuf(Unpooled.buffer())
+                buf.writeByte(kind.ordinal)
+                buf.writeUtf(text)
+                ServerPlayNetworking.send(player, MessagePayload(toArray(buf)))
+            } else {
+                player.displayClientMessage(Component.literal(text).withStyle(kind.formatting), true)
+            }
+        }
     }
 
     /** Server: handle hotkey actions. Registered from the common initializer. */
@@ -128,6 +167,15 @@ object PathNetworkingFabric {
         ClientPlayNetworking.registerGlobalReceiver(LIVE_TYPE) { payload, context ->
             val update = decodeLive(payload.data)
             context.client().execute { update.apply() }
+        }
+        ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val kind = PathMessages.Kind.entries.getOrElse(buf.readByte().toInt()) { PathMessages.Kind.GOOD }
+            val text = buf.readUtf()
+            context.client().execute {
+                if (kind == PathMessages.Kind.PROMPT) PathHud.prompt(Component.literal(text))
+                else PathHud.add(Component.literal(text), kind.argb)
+            }
         }
     }
 
@@ -180,10 +228,26 @@ object PathNetworkingFabric {
             val live = recorders.mapTo(HashSet()) { it.shipId }
             sent.keys.retainAll(live)
         }
-        if (recorders.isEmpty() && followers.isEmpty()) return
+
+        val dimKey = ArmadaBindings.dimKey(level)
+        val previous = liveRecipients[dimKey]
+
+        if (recorders.isEmpty() && followers.isEmpty()) {
+            // Everything has gone quiet -- but a client only ever DROPS its overlay on being told to, so simply
+            // falling silent here is what left a finished recording's trail and snap spheres on screen until
+            // another recording replaced them. Send exactly one empty snapshot to whoever was watching, then go
+            // quiet properly.
+            if (previous.isNullOrEmpty()) return
+            clearLive(level, previous)
+            liveRecipients.remove(dimKey)
+            return
+        }
+
+        val recipients = HashSet<UUID>()
 
         for (recorder in recorders) {
             val player = level.server.playerList.getPlayer(recorder.playerId) ?: continue
+            recipients.add(player.uuid)
 
             val state = sent[recorder.shipId]
             val from = if (state == null || state.player !== player) 0 else state.count
@@ -209,22 +273,56 @@ object PathNetworkingFabric {
 
             // Followers ride along in the same packet; the list is short and changes rarely.
             writeFollowers(buf, followers)
+            buf.writeLong(localRoute(level, player))
 
             ServerPlayNetworking.send(player, LivePayload(toArray(buf)))
         }
 
         // Players who aren't recording still need follower state (to draw a flown route), but only when there
         // is any, and only when nobody already sent it to them above.
-        if (followers.isEmpty()) return
-        val recordingPlayers = recorders.mapTo(HashSet()) { it.playerId }
-        val buf = FriendlyByteBuf(Unpooled.buffer())
-        buf.writeVarInt(0)
-        writeFollowers(buf, followers)
-        val payload = LivePayload(toArray(buf))
-        for (player in level.players()) {
-            if (player.uuid in recordingPlayers) continue
-            ServerPlayNetworking.send(player, payload)
+        if (followers.isNotEmpty()) {
+            val recordingPlayers = recorders.mapTo(HashSet()) { it.playerId }
+            for (player in level.players()) {
+                if (player.uuid in recordingPlayers) continue
+                // Built per player rather than once, because of the last field: which route the player's OWN
+                // ship is flying. That is what lets SHIFT+O mean "hide the line I'm riding" instead of the
+                // global show-all toggle, and only the server can resolve a player to their ship (and a
+                // child of an armada to its parent).
+                val buf = FriendlyByteBuf(Unpooled.buffer())
+                buf.writeVarInt(0)
+                writeFollowers(buf, followers)
+                buf.writeLong(localRoute(level, player))
+                ServerPlayNetworking.send(player, LivePayload(toArray(buf)))
+                recipients.add(player.uuid)
+            }
         }
+
+        // Anyone who was being sent live state and no longer is -- a player who walked off the ship that is
+        // being flown, say -- needs the same one-shot clear as the all-quiet case above.
+        previous?.forEach { if (it !in recipients) clearLive(level, setOf(it)) }
+        liveRecipients[dimKey] = recipients
+    }
+
+    /** Tell [players] that nothing is live: no recording trail, no followers. Drops their whole overlay. */
+    private fun clearLive(level: ServerLevel, players: Set<UUID>) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeVarInt(0) // no recording
+        buf.writeVarInt(0) // no followers
+        buf.writeLong(NO_ROUTE) // not aboard anything that's flying one
+        val payload = LivePayload(toArray(buf))
+        for (id in players) level.server.playerList.getPlayer(id)?.let { ServerPlayNetworking.send(it, payload) }
+    }
+
+    /**
+     * The id of the route the ship [player] is aboard is currently flying, or [NO_ROUTE].
+     *
+     * Resolved server-side because that is where the answer lives: the standing-on-deck case comes from the
+     * dragger's bookkeeping, and a child of an armada has to resolve to the parent, which is the ship that
+     * actually holds the follower.
+     */
+    private fun localRoute(level: ServerLevel, player: ServerPlayer): Long {
+        val ship = ShipPaths.resolveShip(level, player) ?: return NO_ROUTE
+        return ShipPaths.followerFor(ship.id)?.path?.id ?: NO_ROUTE
     }
 
     private fun writeFollowers(buf: FriendlyByteBuf, followers: List<PathFollower>) {
@@ -288,9 +386,11 @@ object PathNetworkingFabric {
         val start: Vector3d,
         val keel: Vector3d,
         val gap: Double,
-        val followers: List<ClientPathState.Following>
+        val followers: List<ClientPathState.Following>,
+        val localRouteId: Long
     ) {
         fun apply() {
+            ClientPathState.localRouteId = localRouteId
             if (recordingShipId != null) {
                 val rec = ClientPathState.appendRecording(recordingShipId, from, points)
                 rec.armed = armed
@@ -339,7 +439,7 @@ object PathNetworkingFabric {
             followers.add(ClientPathState.Following(followShipId, pathId, offset))
         }
 
-        return LiveUpdate(shipId, from, points, armed, start, keel, gap, followers)
+        return LiveUpdate(shipId, from, points, armed, start, keel, gap, followers, buf.readLong())
     }
 
     private fun writeVec(buf: FriendlyByteBuf, x: Double, y: Double, z: Double) {

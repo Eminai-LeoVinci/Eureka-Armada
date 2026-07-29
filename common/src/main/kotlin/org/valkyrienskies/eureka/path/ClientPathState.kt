@@ -37,6 +37,28 @@ object ClientPathState {
     @Volatile
     var showAll = false
 
+    /**
+     * The route the ship this player is standing on is currently flying, or 0 for none.
+     *
+     * Server-resolved (it is the only side that can turn a player into a ship, and a child of an armada into
+     * the parent that actually holds the follower) and refreshed with every live snapshot.
+     */
+    @Volatile
+    var localRouteId = 0L
+
+    /**
+     * Routes the player has explicitly hidden with SHIFT+O while riding them.
+     *
+     * Beats BOTH reasons a route would otherwise draw -- [showAll] and being actively flown. That is the whole
+     * point: a ship on autopilot is exactly when you want the view out the window rather than a line down the
+     * middle of it, and "being flown" was previously an unconditional reason to draw.
+     */
+    val hiddenRoutes: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Returns true if the route is now hidden. */
+    fun toggleHidden(routeId: Long): Boolean =
+        if (!hiddenRoutes.add(routeId)) { hiddenRoutes.remove(routeId); false } else true
+
     fun replaceRoutes(incoming: Map<Long, Route>) {
         routes.keys.retainAll(incoming.keys)
         routes.putAll(incoming)
@@ -62,5 +84,7 @@ object ClientPathState {
         routes.clear()
         recordings.clear()
         following.clear()
+        hiddenRoutes.clear()
+        localRouteId = 0L
     }
 }
