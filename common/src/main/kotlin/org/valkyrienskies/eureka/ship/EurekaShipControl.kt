@@ -129,7 +129,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // Written on the GAME thread by PathFollower once per tick, read on the PHYSICS thread in physTick --
     // hence @Volatile, matching turnHold/fwdHold/vertHold. Null means "no path input", which is what lets the
     // pilot's own controls and the cruise latches behave exactly as they always did when nothing is following.
-    // Never persisted: a ship mid-route stops on reload rather than waking up under its own power.
+    // None of it is persisted -- these are one tick's guidance, meaningless after a reload. What DOES survive is
+    // the binding that generates them, saved on the ship as a PathBinding and re-armed by ShipPaths.tick, which
+    // then calls pathBegin() again and starts issuing fresh commands.
     @JsonIgnore
     @Volatile
     var pathTurnOmega: Double? = null
@@ -1403,6 +1405,20 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // region Path following (server-side; called from org.valkyrienskies.eureka.path.PathFollower)
 
     /** Turn radius estimate in blocks, for sizing the follower's aim-ahead distance to the hull. */
+    /**
+     * Whether this attachment is wired up to its hull yet, and so whether [pathForward] can answer at all.
+     *
+     * False on a freshly loaded ship, because an [EurekaShipControl] only learns its own ship on the first tick of
+     * its helm block entity (`ShipHelmBlockEntity.tick`), and a ship appears in VS's loaded-ship index before its
+     * shipyard chunks are ticking block entities. [physTick] returns early on the same condition, so nothing about
+     * the hull is live in that window either -- waiting for the helm is simply how this mod comes up.
+     *
+     * Path playback has to check it because it is the one thing here that gets STARTED by something other than a
+     * pilot: a binding re-armed from the save file (see `ShipPaths.restore`) has no seated player whose presence
+     * would have implied the helm was already running.
+     */
+    val pathHullReady: Boolean @JsonIgnore get() = ship != null
+
     val pathTurnRadius: Double @JsonIgnore get() = turnRadiusEstimate()
 
     /** The physical yaw-rate ceiling for this hull, rad/s -- the same cap a typed cruise turn is clamped to. */
@@ -1438,8 +1454,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             ?: helmSeatDir
             ?: cruiseSeatDir.takeIf { it in 0..5 }?.let { Direction.values()[it] }
             ?: return false
-        ensureMenuCourse(dir)
+        // BEFORE the course, not after. This runs on the game thread while physTick runs on the physics thread,
+        // and physTick clears `controlData` for a hull that is neither cruising nor following -- so setting the
+        // course first leaves a window where the physics thread sees a course with nothing yet claiming it, and
+        // wipes it. Nothing re-establishes it after that, because by then the flag says a course exists.
         pathFollowing = true
+        ensureMenuCourse(dir)
+        // Stamp the flat mirror unconditionally, not just via ensureMenuCourse's controlData == null branch. The
+        // mirror at the top of physTick only runs while CRUISING, so a bound-but-not-cruising ship would save
+        // with cruiseSeatDir still -1 -- and then this method, which is the first thing a re-armed binding calls
+        // after a reload, would have nothing left to derive a course from and refuse. `dir` is already whatever
+        // course the ship is on, so writing it is only ever recording what is true.
+        cruiseSeatDir = dir.ordinal
         return true
     }
 

@@ -8,8 +8,10 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
@@ -61,7 +63,7 @@ public class EurekaModFabric implements ModInitializer {
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
             ArmadaCommand.INSTANCE.register(dispatcher);
-            // "/armada path list|info|rename|delete|stop" -- merges onto the same "armada" literal.
+            // "/armada route list|info|rename|delete|stop" -- merges onto the same "armada" literal.
             PathCommand.INSTANCE.register(dispatcher);
         });
 
@@ -80,10 +82,19 @@ public class EurekaModFabric implements ModInitializer {
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             ArmadaBindings.INSTANCE.reconcile(level);
             ArmadaNetworkingFabric.INSTANCE.broadcastBonds(level);
-            // Ship paths: advance any recording (sampling the keel, arming and closing the loop) and steer any
-            // ship following a route. Returns immediately when neither is happening, which is the usual case.
+            // Ship paths: re-arm any ship whose saved route binding outlived its follower (a world reload, or a
+            // ship that drifted out of simulation and back), then advance any recording (sampling the keel,
+            // arming and closing the loop) and steer any ship following a route.
             ShipPaths.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
+        });
+
+        // Ship paths are held in singletons, which in single player outlive the world -- quitting to the title
+        // screen stops the server but leaves them standing. Dropping them here is what makes logging back in look
+        // like a fresh load, which is the whole basis of the saved-binding resume. See ShipPaths.reset.
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            ShipPaths.INSTANCE.reset();
+            PathNetworkingFabric.INSTANCE.resetServer();
         });
     }
 
@@ -106,6 +117,13 @@ public class EurekaModFabric implements ModInitializer {
             PathRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
+
+            // The overlay is a singleton too, and every route in it belongs to the world we just left. Without
+            // this, the next world draws the last one's lines until a snapshot happens to replace them -- and any
+            // route hidden with SHIFT+O stays hidden into a world where that id means something else.
+            ClientPlayConnectionEvents.DISCONNECT.register(
+                (handler, client) -> ClientPathState.INSTANCE.clear()
+            );
 
             // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea
             // surface stops drawing inside a hull. Toggled live by "/vs pocket-occluder" so one session can

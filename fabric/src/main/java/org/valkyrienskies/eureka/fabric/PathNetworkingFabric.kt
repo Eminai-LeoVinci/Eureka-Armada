@@ -104,11 +104,20 @@ object PathNetworkingFabric {
 
     private val sent = HashMap<Long, SentState>()
 
-    /** Dimensions whose last route broadcast was non-empty, so one trailing empty snapshot can clear clients. */
-    private val dimensionsWithRoutes = HashSet<String>()
+    /**
+     * The route set a dimension last pushed, and which of its players are actually holding it.
+     *
+     * Per-PLAYER as well as per-dimension, because the set changing is not the only reason someone needs it: a
+     * player who has just joined, relogged or stepped through a portal holds nothing, and no change is coming to
+     * tell them. That gap didn't show while following was runtime only -- SHIFT+O asked for the set outright, and
+     * nothing else drew until you did. A ship that resumes its route on load has to draw its line with nobody
+     * pressing anything, so arrival has to count as a reason to send.
+     */
+    private class RouteState(var stamp: Int) {
+        val holders = HashSet<UUID>()
+    }
 
-    /** Route sets already pushed this session, so we only resend when something actually changed. */
-    private val lastRouteStamp = HashMap<String, Int>()
+    private val routeState = HashMap<String, RouteState>()
 
     /**
      * Who was sent a live snapshot on the previous broadcast, per dimension.
@@ -207,17 +216,51 @@ object PathNetworkingFabric {
         for (path in store.all) stamp = stamp * 31 + path.id.toInt()
 
         if (store.isEmpty) {
-            if (!dimensionsWithRoutes.remove(dimKey)) return
-            lastRouteStamp.remove(dimKey)
-        } else {
-            if (lastRouteStamp[dimKey] == stamp) return
-            lastRouteStamp[dimKey] = stamp
-            dimensionsWithRoutes.add(dimKey)
+            // Every route was deleted. One trailing empty snapshot to whoever is still holding some, then quiet.
+            val state = routeState.remove(dimKey) ?: return
+            if (state.holders.isEmpty()) return
+            val payload = RoutesPayload(encodeRoutes(store))
+            for (player in level.players()) {
+                if (player.uuid in state.holders && canReceive(player, ROUTES_TYPE)) {
+                    ServerPlayNetworking.send(player, payload)
+                }
+            }
+            return
         }
 
-        val payload = RoutesPayload(encodeRoutes(store))
-        for (player in level.players()) ServerPlayNetworking.send(player, payload)
+        val state = routeState.getOrPut(dimKey) { RouteState(stamp) }
+        if (state.stamp != stamp) {
+            // The set changed, so everybody's copy is stale -- including their own.
+            state.stamp = stamp
+            state.holders.clear()
+        }
+
+        val here = HashSet<UUID>()
+        var payload: RoutesPayload? = null
+        for (player in level.players()) {
+            if (!canReceive(player, ROUTES_TYPE)) continue
+            here.add(player.uuid)
+            if (player.uuid in state.holders) continue
+            // Encoded at most once per broadcast, and only when somebody actually needs it.
+            if (payload == null) payload = RoutesPayload(encodeRoutes(store))
+            ServerPlayNetworking.send(player, payload)
+        }
+
+        // Rebuilt rather than added to, so leaving the dimension drops you from it -- and coming back therefore
+        // counts as an arrival that needs the routes again.
+        state.holders.clear()
+        state.holders.addAll(here)
     }
+
+    /**
+     * Whether [player]'s client has declared the channel for [type] yet.
+     *
+     * Guards every S2C send, because Fabric treats a send on an undeclared channel as an ERROR rather than a
+     * no-op, and a player who has only just joined has a short window before their declaration arrives. Both
+     * snapshots are polls, so a false here costs nothing -- the next pass 200 ms later sends it.
+     */
+    private fun <T : CustomPacketPayload> canReceive(player: ServerPlayer, type: CustomPacketPayload.Type<T>) =
+        ServerPlayNetworking.canSend(player, type)
 
     private fun broadcastLive(level: ServerLevel) {
         val recorders = ShipPaths.recordersIn(level)
@@ -247,6 +290,9 @@ object PathNetworkingFabric {
 
         for (recorder in recorders) {
             val player = level.server.playerList.getPlayer(recorder.playerId) ?: continue
+            // Before the send-state bookkeeping below, not after: advancing `count` for a packet we then didn't
+            // send would drop those samples from the client's trail for good.
+            if (!canReceive(player, LIVE_TYPE)) continue
             recipients.add(player.uuid)
 
             val state = sent[recorder.shipId]
@@ -284,6 +330,9 @@ object PathNetworkingFabric {
             val recordingPlayers = recorders.mapTo(HashSet()) { it.playerId }
             for (player in level.players()) {
                 if (player.uuid in recordingPlayers) continue
+                // A player who joined into a dimension where a ship is already flying a route hits this on their
+                // first broadcast, which is exactly the window where the channel may not be declared yet.
+                if (!canReceive(player, LIVE_TYPE)) continue
                 // Built per player rather than once, because of the last field: which route the player's OWN
                 // ship is flying. That is what lets SHIFT+O mean "hide the line I'm riding" instead of the
                 // global show-all toggle, and only the server can resolve a player to their ship (and a
@@ -310,7 +359,10 @@ object PathNetworkingFabric {
         buf.writeVarInt(0) // no followers
         buf.writeLong(NO_ROUTE) // not aboard anything that's flying one
         val payload = LivePayload(toArray(buf))
-        for (id in players) level.server.playerList.getPlayer(id)?.let { ServerPlayNetworking.send(it, payload) }
+        for (id in players) {
+            val player = level.server.playerList.getPlayer(id) ?: continue
+            if (canReceive(player, LIVE_TYPE)) ServerPlayNetworking.send(player, payload)
+        }
     }
 
     /**
@@ -341,6 +393,19 @@ object PathNetworkingFabric {
     /** Push the route set to one player, in answer to a request. */
     private fun sendRoutes(player: ServerPlayer, store: PathStore) {
         ServerPlayNetworking.send(player, RoutesPayload(encodeRoutes(store)))
+    }
+
+    /**
+     * Forget who has been sent what. Called when the server stops, alongside [ShipPaths.reset] -- see there for
+     * why a singleton surviving a world matters rather than merely being untidy.
+     *
+     * Here the consequence is milder but still wrong: the next world would start with players already recorded as
+     * holding a route set they have never seen.
+     */
+    fun resetServer() {
+        sent.clear()
+        routeState.clear()
+        liveRecipients.clear()
     }
 
     // endregion

@@ -167,10 +167,9 @@ object PathKeybinds {
         if (local != 0L) {
             val hidden = ClientPathState.toggleHidden(local)
             val name = ClientPathState.routes[local]?.name ?: "this route"
-            PathHud.add(
-                Component.literal(if (hidden) "Hid '$name' -- the ship keeps following it" else "Showing '$name'"),
-                SHOW_ARGB
-            )
+            // Just the route name: hiding a line obviously doesn't stop the ship flying it, and saying so every
+            // time was noise.
+            PathHud.add(Component.literal(if (hidden) "Hid '$name'" else "Showing '$name'"), SHOW_ARGB)
             return
         }
 

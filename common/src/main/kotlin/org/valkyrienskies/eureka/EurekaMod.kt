@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka
 
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
+import org.valkyrienskies.eureka.path.PathBinding
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 
@@ -34,6 +35,14 @@ object EurekaMod {
         // provider that positions each child is re-installed every server tick by ArmadaBindings.reconcile.
         // Legacy serializer matches this class's @JsonAutoDetect(fieldVisibility = ANY) design.
         ValkyrienSkiesMod.vsCore.registerAttachment(ArmadaShipControl::class.java) {
+            useLegacySerializer()
+        }
+
+        // Which recorded route a ship is flying, PERSISTED so following survives a world reload. Same division
+        // of labour as the armada bind above: the relationship is saved here, and the runtime machinery that
+        // acts on it (a PathFollower, rather than a physics weld) is rebuilt by ShipPaths.tick once the ship and
+        // its route store are both loaded.
+        ValkyrienSkiesMod.vsCore.registerAttachment(PathBinding::class.java) {
             useLegacySerializer()
         }
     }

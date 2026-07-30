@@ -11,7 +11,11 @@ import net.minecraft.network.chat.Component
 import org.valkyrienskies.mod.common.shipObjectWorld
 
 /**
- * "/armada path list|info|rename|delete|stop" -- the housekeeping the hotkeys deliberately don't cover.
+ * "/armada route list|info|rename|delete|stop" -- the housekeeping the hotkeys deliberately don't cover.
+ *
+ * "route" rather than "path": a path is the mechanism, a route is the thing a pilot means -- and every message
+ * this feature prints already said "route", so the command was the odd one out. The code keeps the `path` package
+ * naming, which describes the geometry it works on.
  *
  * The five SHIFT hotkeys handle the whole record-and-fly loop; this exists for the things you do rarely and
  * want to be exact about: naming a route something you'll recognise, deleting a bad take, and stopping a ship
@@ -25,7 +29,7 @@ object PathCommand {
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
             literal("armada").then(
-                literal("path")
+                literal("route")
                     .then(literal("list").executes { list(it) })
                     .then(
                         literal("info").then(

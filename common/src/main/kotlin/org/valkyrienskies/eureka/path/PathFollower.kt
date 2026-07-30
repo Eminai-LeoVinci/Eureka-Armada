@@ -36,21 +36,36 @@ import kotlin.math.atan2
  * rotating "outer lane" offset inverts into a cusp wherever the offset exceeds the local turn radius -- and at
  * the default 32-block engage range, any corner tighter than that would do it. A translation has no such
  * failure mode at any offset.
+ *
+ * ## Resuming
+ * A follower is a runtime object, but the binding behind it is saved on the ship ([PathBinding]), so one gets
+ * rebuilt after a world reload with the offset, arc and lap count it had. [playerId] is null on a follower that
+ * was rebuilt from a binding with no owner recorded, which only means nobody is told when this ship reports
+ * something -- it steers exactly the same either way.
  */
 class PathFollower(
     val shipId: Long,
-    val playerId: UUID,
+    val playerId: UUID?,
     val path: ShipPath,
-    offset: Vector3dc
+    offset: Vector3dc,
+    startArc: Double = -1.0,
+    startLaps: Int = 0
 ) {
 
     private val offset = Vector3d(offset)
 
-    /** Last known progress along the route, in blocks of arc length. Negative until the first tick. */
-    private var arc = -1.0
+    /**
+     * Progress along the route, in blocks of arc length. Negative means "not established yet", which makes the
+     * next lookup search the whole loop instead of a window around this value.
+     *
+     * Readable so [ShipPaths] can mirror it onto the ship's persisted [PathBinding]; a re-armed follower is
+     * handed it back as `startArc`.
+     */
+    var arc = startArc
+        private set
 
     /** Completed laps, for the status readout. */
-    var laps = 0
+    var laps = startLaps
         private set
 
     /** Live distance from the ship's keel to where it should be, for the status readout. */

@@ -22,9 +22,13 @@ import kotlin.math.max
  * tick. This is the only entry point the rest of the mod needs: hotkeys, commands and networking all come
  * through here.
  *
- * State here is deliberately RUNTIME ONLY. Finished routes persist ([PathStore]); the act of recording or
- * following does not. A ship that was mid-route when the world was saved comes back stopped, which beats the
- * alternative of a freighter waking up under power in a chunk nobody is standing in.
+ * Recording is RUNTIME ONLY: a half-flown loop is a gesture in progress, not a thing, and a recording that
+ * survived a reload would be missing however much of the route was flown before the save. Cancel and fly it
+ * again.
+ *
+ * FOLLOWING is persisted, on the ship rather than here ([PathBinding]), and [tick] re-arms it. See that class
+ * for why -- briefly: cruise already persists, so the old runtime-only behaviour didn't stop a reloaded ship, it
+ * only stopped it steering.
  */
 object ShipPaths {
 
@@ -36,7 +40,8 @@ object ShipPaths {
     // region tick
 
     /**
-     * Advance every recording and every follower whose ship lives in [level].
+     * Re-arm any saved binding that has no follower yet, then advance every recording and every follower whose
+     * ship lives in [level].
      *
      * Call once per server world tick, beside `ArmadaBindings.reconcile`.
      *
@@ -47,6 +52,7 @@ object ShipPaths {
      * unloaded, which is what makes the cleanup below safe.
      */
     fun tick(level: ServerLevel) {
+        restoreBindings(level)
         if (recorders.isEmpty() && followers.isEmpty()) return
 
         val dimension = level.dimensionId
@@ -67,6 +73,9 @@ object ShipPaths {
         for ((shipId, follower) in followers) {
             val ship = world.loadedShips.getById(shipId)
             if (ship == null) {
+                // Deliberately silent, and deliberately leaves the ship's binding alone: an unloaded ship has
+                // not stopped following, it has stopped existing for now, and [restoreBindings] re-arms it from
+                // the binding the moment it comes back. This is the same path a world reload takes.
                 followers.remove(shipId)
                 KeelAnchor.forget(shipId)
                 continue
@@ -126,7 +135,9 @@ object ShipPaths {
     private fun tickFollower(level: ServerLevel, ship: LoadedServerShip, follower: PathFollower) {
         val control = ship.getAttachment(EurekaShipControl::class.java)
         if (control == null) {
-            followers.remove(ship.id)
+            // The helm is gone, so there is nothing left to steer with -- and the binding has to go with it, or
+            // the reload path would keep trying to re-arm a ship that can no longer follow anything.
+            release(ship, stopShip = false)
             return
         }
 
@@ -135,9 +146,18 @@ object ShipPaths {
         val keel = KeelAnchor.world(level, ship, scratchKeel) ?: return
 
         if (!follower.tick(keel, control, ship.velocity.length())) {
-            followers.remove(ship.id)
-            control.pathRelease(stopShip = true)
+            release(ship, stopShip = true)
             tell(level, follower.playerId, "Stopped following -- the ship lost its course.", error = true)
+            return
+        }
+
+        // Mirror the follower's progress onto the saved binding, the same way physTick mirrors the live cruise
+        // course onto its flat persisted fields. Three field stores a tick, and it is what lets a reload pick the
+        // route up where the ship actually was rather than re-acquiring from scratch.
+        PathBinding.get(ship)?.let { binding ->
+            binding.arc = follower.arc
+            binding.laps = follower.laps
+            follower.copyOffset(binding.offset)
         }
     }
 
@@ -170,10 +190,9 @@ object ShipPaths {
         if (held <= 0.0) return false
 
         if (held >= hold) {
-            followers.remove(ship.id)
             // Not stopShip: the pilot is taking over, so leave whatever cruise they had running rather than
             // dropping a moving vessel's throttle out from under them.
-            control.pathRelease(stopShip = false)
+            release(ship, stopShip = false)
             tell(
                 level, follower.playerId,
                 "You have the wheel -- '${follower.path.name}' released.",
@@ -191,6 +210,137 @@ object ShipPaths {
             )
         }
         return false
+    }
+
+    // endregion
+
+    // region resuming
+
+    /**
+     * Rebuild a [PathFollower] for every loaded ship in [level] that has a saved binding but no live follower.
+     *
+     * Structured exactly like `ArmadaBindings.reconcile`, and for the same reasons: it is idempotent, so it can
+     * simply run every tick; it is O(1) per ship in the steady state (one attachment lookup, then the `isBound`
+     * test); and being a poll rather than a load hook it does not care what order the ship, the level and the
+     * route store came up in -- whatever isn't ready yet is retried next tick.
+     *
+     * This is the path a WORLD RELOAD takes, and also the path a ship that simply drifted out of simulation and
+     * back takes. They are the same event as far as this is concerned.
+     */
+    private fun restoreBindings(level: ServerLevel) {
+        if (!EurekaConfig.SERVER.pathResumeOnLoad) return
+
+        val dimension = level.dimensionId
+        val world = level.shipObjectWorld
+        // Lazy: a dimension with no bound ships must not create a route store, because asking for one WRITES one.
+        val store by lazy { PathStore.get(level) }
+
+        for (ship in world.loadedShips) {
+            val binding = PathBinding.get(ship) ?: continue
+            if (!binding.isBound) continue
+            if (followers.containsKey(ship.id)) continue
+            // loadedShips spans every dimension while this runs once per level -- see [tick].
+            if (ship.chunkClaimDimension != dimension) continue
+            restore(level, ship, binding, store)
+        }
+    }
+
+    /**
+     * Re-arm one ship's saved binding, or drop the binding if it can no longer be honoured.
+     *
+     * The distinction that matters here is STALE versus NOT READY YET. A route that no longer exists, a helm that
+     * was dismantled, a ship that has since joined an armada -- those bindings will never become valid again, so
+     * they are cleared rather than retried forever. A ship whose voxels aren't there yet is merely early, so it
+     * is left for the next tick.
+     */
+    private fun restore(level: ServerLevel, ship: LoadedServerShip, binding: PathBinding, store: PathStore) {
+        // A ship that has become an armada child no longer steers itself -- the parent drives the whole vessel --
+        // so its own binding is stale, not pending. Left in place it would fight the weld every tick.
+        if (ArmadaShipControl.get(ship)?.isChild == true) return binding.clear()
+
+        val path = store.byId(binding.routeId) ?: return binding.clear()
+        val control = ship.getAttachment(EurekaShipControl::class.java) ?: return binding.clear()
+
+        // NOT READY, not stale -- and this one is the whole ballgame on a reload. A ship turns up in VS's loaded
+        // -ship index before its shipyard chunks tick block entities, and the helm's tick is the only thing that
+        // ever hands EurekaShipControl its own ship. Arm before that and `pathForward` has no transform to derive
+        // a heading from, so the follower reports a lost course on the very tick it resumed -- and the release
+        // that follows would clear the binding, destroying exactly what was saved.
+        if (!control.pathHullReady) return
+
+        // Likewise: the ship is loaded but its blocks aren't readable yet, so try again next tick rather than
+        // freezing an offset measured from a fallback anchor.
+        val keel = KeelAnchor.world(level, ship, Vector3d()) ?: return
+
+        if (!control.pathBegin()) {
+            binding.clear()
+            tell(
+                level, binding.ownerId,
+                "'${path.name}' was dropped on load -- the ship has no course to steer from.",
+                PathMessages.Kind.ERROR
+            )
+            return
+        }
+
+        val offset = Vector3d(binding.offset)
+
+        // Trust the saved progress only while it still describes where the ship IS. It is worth saving: a route
+        // that crosses itself has two answers to "where am I on this loop" and only this one is right. But a hull
+        // that moved while it was out of simulation would be aimed at a point it has already passed -- possibly
+        // most of a lap back -- and a full re-acquire from position is the better answer past that point.
+        val saved = binding.arc
+        val stillThere = saved >= 0.0 &&
+            path.sampleAt(saved, Vector3d()).add(offset).distance(keel) <= EurekaConfig.SERVER.pathEngageRange
+
+        followers[ship.id] = PathFollower(
+            ship.id, binding.ownerId, path, offset,
+            startArc = if (stillThere) saved else -1.0,
+            startLaps = binding.laps
+        )
+
+        // Worth saying out loud. The ship is about to start steering itself with nobody aboard who asked it to,
+        // and silence there reads as a bug rather than as a feature working.
+        tell(
+            level, binding.ownerId,
+            if (stillThere) "Resumed '${path.name}' where the ship left off."
+            else "Resumed '${path.name}' -- the ship had drifted, so it is re-acquiring the line.",
+            PathMessages.Kind.GOOD
+        )
+    }
+
+    /**
+     * Take a ship off its route: drop the follower, release the hull's path guidance and forget the saved
+     * binding. Returns the follower that was removed, or null if it wasn't following.
+     *
+     * Every way OFF a route goes through here, because the binding is the thing that would otherwise be left
+     * behind -- and a stale binding doesn't fail quietly, it re-arms the route on the next reload.
+     */
+    private fun release(ship: LoadedServerShip, stopShip: Boolean): PathFollower? {
+        val follower = followers.remove(ship.id)
+        // Guarded, unlike the binding clear below: `stopShip` drops the ship's cruise too, and a ship that was
+        // never following must not lose its throttle just because something asked whether it was.
+        if (follower != null) ship.getAttachment(EurekaShipControl::class.java)?.pathRelease(stopShip)
+        PathBinding.clear(ship)
+        return follower
+    }
+
+    /**
+     * Drop every scrap of runtime state. Call when the SERVER stops, not when a level unloads.
+     *
+     * This object outlives a world. In single player, quitting to the title screen stops the integrated server
+     * but leaves every singleton in the JVM standing -- so without this, a route being flown when you logged out
+     * is still sitting in [followers] when you log back in. That is not a tidiness problem, it defeats the whole
+     * resume: [restoreBindings] skips a ship that already has a follower, so the hull never gets handed back to
+     * `pathBegin`, comes up with `pathFollowing` false (it is transient), loses its course on the first physics
+     * tick and reports having stopped -- clearing the very binding that was saved to prevent exactly that.
+     *
+     * The stale follower would ALSO be steering by ship id alone, so a ship in the next world that happened to
+     * take that id would be flown along a route from the last one.
+     */
+    fun reset() {
+        recorders.clear()
+        followers.clear()
+        KeelAnchor.clear()
     }
 
     // endregion
@@ -258,6 +408,9 @@ object ShipPaths {
         val offset = Vector3d(keel).sub(onPath)
 
         followers[ship.id] = PathFollower(ship.id, player.uuid, path, offset)
+        // Saved on the ship, so a reload (or the ship drifting out of simulation and back) re-arms all of this
+        // rather than dropping the route. Arc and laps start unset; the follower mirrors them in from here on.
+        PathBinding.getOrCreate(ship).bind(path.id, offset, player.uuid, arc = -1.0, laps = 0)
 
         if (distance < ON_LINE_TOLERANCE) {
             ok(player, "Following '${path.name}'.")
@@ -280,17 +433,12 @@ object ShipPaths {
     /** SHIFT+S. Stop following, and bring the ship to rest. */
     fun stop(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to stop it.")
-        val follower = followers.remove(ship.id) ?: return fail(player, "This ship isn't following a route.")
-        ship.getAttachment(EurekaShipControl::class.java)?.pathRelease(stopShip = true)
+        val follower = release(ship, stopShip = true) ?: return fail(player, "This ship isn't following a route.")
         ok(player, "Stopped following '${follower.path.name}'.")
     }
 
     /** Stop a ship following a route, without needing a player. Used by the command and by unbinding. */
-    fun stopShip(ship: LoadedServerShip): Boolean {
-        val removed = followers.remove(ship.id) != null
-        if (removed) ship.getAttachment(EurekaShipControl::class.java)?.pathRelease(stopShip = true)
-        return removed
-    }
+    fun stopShip(ship: LoadedServerShip): Boolean = release(ship, stopShip = true) != null
 
     // endregion
 
@@ -347,11 +495,12 @@ object ShipPaths {
     private fun fail(player: ServerPlayer, message: String) =
         PathMessages.send(player, message, PathMessages.Kind.ERROR)
 
-    private fun tell(level: ServerLevel, playerId: UUID, message: String, error: Boolean) =
+    private fun tell(level: ServerLevel, playerId: UUID?, message: String, error: Boolean) =
         tell(level, playerId, message, if (error) PathMessages.Kind.ERROR else PathMessages.Kind.GOOD)
 
-    private fun tell(level: ServerLevel, playerId: UUID, message: String, kind: PathMessages.Kind) {
-        val player = level.server.playerList.getPlayer(playerId) ?: return
+    /** No-op when [playerId] is null (a follower resumed with no owner recorded) or that player is offline. */
+    private fun tell(level: ServerLevel, playerId: UUID?, message: String, kind: PathMessages.Kind) {
+        val player = playerId?.let { level.server.playerList.getPlayer(it) } ?: return
         PathMessages.send(player, message, kind)
     }
 

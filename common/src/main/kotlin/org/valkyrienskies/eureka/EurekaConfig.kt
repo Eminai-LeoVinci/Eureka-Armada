@@ -538,6 +538,14 @@ object EurekaConfig {
                 "so this is what separates a nudge from letting go. Default 0.6."
         )
         var pathManualCancelHold = 0.6
+
+        @JsonSchema(
+            description = "Path playback: a ship keeps following its route across a world reload, or after " +
+                "drifting out of simulation and back. Note that turning this OFF does not stop a reloaded ship " +
+                "-- cruise persists on its own -- it only stops it STEERING, which is how a route used to be " +
+                "lost. Default true."
+        )
+        var pathResumeOnLoad = true
         // endregion
 
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and
