@@ -129,7 +129,7 @@ public class EurekaModFabric implements ModInitializer {
 
             // The overlay is a singleton too, and every route in it belongs to the world we just left. Without
             // this, the next world draws the last one's lines until a snapshot happens to replace them -- and any
-            // route hidden with SHIFT+O stays hidden into a world where that id means something else.
+            // route hidden with SHIFT+H stays hidden into a world where that id means something else.
             ClientPlayConnectionEvents.DISCONNECT.register(
                 (handler, client) -> ClientPathState.INSTANCE.clear()
             );

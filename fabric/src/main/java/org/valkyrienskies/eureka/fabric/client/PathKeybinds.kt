@@ -57,7 +57,8 @@ object PathKeybinds {
         play = bind("play", GLFW.GLFW_KEY_P)
         stop = bind("stop", GLFW.GLFW_KEY_S)
         cancel = bind("cancel", GLFW.GLFW_KEY_C)
-        show = bind("show", GLFW.GLFW_KEY_O)
+        // `H` for hide, which is what this key is reached for nine times out of ten.
+        show = bind("show", GLFW.GLFW_KEY_H)
         // `F` is vanilla's swap-offhand. That collision is handled for free by suppressVanillaCollisions, which
         // scans for whatever shares a key with one of `ours` rather than hard-coding any particular binding.
         follow = bind("follow", GLFW.GLFW_KEY_F)
@@ -163,7 +164,7 @@ object PathKeybinds {
     }
 
     /**
-     * SHIFT+O, which means one of two things depending on where you are standing.
+     * SHIFT+H, which means one of two things depending on where you are standing.
      *
      * Aboard a ship that is flying a route, it toggles THAT route's line -- because the one place a route line
      * is least wanted is out the window of the ship following it, and that was previously the one case with no

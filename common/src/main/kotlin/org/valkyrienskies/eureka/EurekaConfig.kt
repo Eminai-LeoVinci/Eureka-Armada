@@ -57,7 +57,7 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Show every saved ship path in this dimension as a glowing line. Toggled in-game " +
-                "with SHIFT+O; a route being recorded or flown is always drawn regardless of this."
+                "with SHIFT+H; a route being recorded or flown is always drawn regardless of this."
         )
         var showAllPaths = false
 

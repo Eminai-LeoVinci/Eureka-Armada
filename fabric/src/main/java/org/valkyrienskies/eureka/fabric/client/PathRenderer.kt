@@ -31,7 +31,7 @@ import kotlin.math.sqrt
  * - The two SNAP MARKERS: only once the recording arms (back in the start chunk, far enough round to be a
  *   loop). They pulse, and brighten as the gap closes, so "nearly touching" reads at a glance.
  * - A route being FLOWN: always, offset to where the ship is actually flying it.
- * - Every SAVED route: only while SHIFT+O is on.
+ * - Every SAVED route: only while SHIFT+H is on.
  *
  * ## Draw distance
  * Vertices are emitted in camera-relative double precision, so a route stays exact however far from the world

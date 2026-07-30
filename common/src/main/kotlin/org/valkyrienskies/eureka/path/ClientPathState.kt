@@ -33,7 +33,7 @@ object ClientPathState {
     val recordings = ConcurrentHashMap<Long, Recording>()
     val following = ConcurrentHashMap<Long, Following>()
 
-    /** Client-side render toggle, driven by SHIFT+O. Routes being recorded or flown draw regardless. */
+    /** Client-side render toggle, driven by SHIFT+H. Routes being recorded or flown draw regardless. */
     @Volatile
     var showAll = false
 
@@ -47,7 +47,7 @@ object ClientPathState {
     var localRouteId = 0L
 
     /**
-     * Routes the player has explicitly hidden with SHIFT+O while riding them.
+     * Routes the player has explicitly hidden with SHIFT+H while riding them.
      *
      * Beats BOTH reasons a route would otherwise draw -- [showAll] and being actively flown. That is the whole
      * point: a ship on autopilot is exactly when you want the view out the window rather than a line down the

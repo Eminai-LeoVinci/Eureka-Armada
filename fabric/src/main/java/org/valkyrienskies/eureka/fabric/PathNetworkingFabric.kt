@@ -36,7 +36,7 @@ import java.util.UUID
  *
  * ## What goes where, and why
  * ROUTES (saved geometry) go to everyone in the dimension, but only when the set actually changes -- recording
- * a route is a rare event, so pushing the whole set then costs nothing and means SHIFT+O is instant rather
+ * a route is a rare event, so pushing the whole set then costs nothing and means SHIFT+H is instant rather
  * than round-tripping to the server.
  *
  * Routes travel as their DECIMATED control points, not their dense followed form, and the client re-expands
@@ -118,7 +118,7 @@ object PathNetworkingFabric {
      *
      * Per-PLAYER as well as per-dimension, because the set changing is not the only reason someone needs it: a
      * player who has just joined, relogged or stepped through a portal holds nothing, and no change is coming to
-     * tell them. That gap didn't show while following was runtime only -- SHIFT+O asked for the set outright, and
+     * tell them. That gap didn't show while following was runtime only -- SHIFT+H asked for the set outright, and
      * nothing else drew until you did. A ship that resumes its route on load has to draw its line with nobody
      * pressing anything, so arrival has to count as a reason to send.
      */
@@ -344,7 +344,7 @@ object PathNetworkingFabric {
                 // first broadcast, which is exactly the window where the channel may not be declared yet.
                 if (!canReceive(player, LIVE_TYPE)) continue
                 // Built per player rather than once, because of the last field: which route the player's OWN
-                // ship is flying. That is what lets SHIFT+O mean "hide the line I'm riding" instead of the
+                // ship is flying. That is what lets SHIFT+H mean "hide the line I'm riding" instead of the
                 // global show-all toggle, and only the server can resolve a player to their ship (and a
                 // child of an armada to its parent).
                 val buf = FriendlyByteBuf(Unpooled.buffer())
