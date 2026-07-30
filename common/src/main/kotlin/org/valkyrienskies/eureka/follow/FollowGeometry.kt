@@ -1,0 +1,196 @@
+package org.valkyrienskies.eureka.follow
+
+import org.joml.Quaterniond
+import org.joml.Vector3d
+import org.joml.Vector3dc
+import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.mod.common.util.toJOMLD
+import kotlin.math.abs
+
+/**
+ * Where a ship is, which way it is pointing, and how big it is along a given direction.
+ *
+ * All of station-keeping reduces to those three questions asked about two hulls, so they live here as plain
+ * functions rather than being spread through the controller. Nothing in this file has state or side effects;
+ * everything is derived from the ships' live transforms each tick.
+ */
+object FollowGeometry {
+
+    /**
+     * A leader reduced to the frame a follower takes station in.
+     *
+     * [alignTrusted] is the honest bit. Three of the four ways we can work out which way a hull points give a
+     * direction whose SIGN means something -- that end is the bow. The last one, falling back to the hull's
+     * longest axis, gives a line rather than an arrow: it is exactly as true reversed. The controller uses the
+     * frame either way (a beam is a beam whichever end is the bow) but must not try to match heading with it,
+     * because half the time it would square the follower up facing backwards.
+     */
+    class Frame(
+        /** Geometric centre of the hull, world space. */
+        val centre: Vector3d,
+        /** Horizontal unit vector along the hull's length. Bow-ward when [alignTrusted]. */
+        val forward: Vector3d,
+        /** Horizontal unit vector across the hull's beam, `up x forward`. */
+        val beam: Vector3d,
+        /** Whether [forward] points at the bow rather than merely along the keel line. */
+        val alignTrusted: Boolean
+    )
+
+    /**
+     * Build a leader's frame, or null if the ship has no blocks to measure.
+     *
+     * The order the forward direction is looked for matters more than it looks:
+     *
+     *  1. **The live course.** If the ship is being driven or is cruising, this is the direction its own thrust
+     *     is pointing, so a follower matching it ends up genuinely parallel rather than merely alongside.
+     *  2. **The helm's facing.** Survives with nobody aboard, because the helm block entity restamps it every
+     *     tick, so a ship parked at anchor still has a bow.
+     *  3. **Velocity.** For a hull with no helm at all that is nonetheless moving -- under tow, or shoved.
+     *  4. **The longest horizontal axis.** A guess at the keel line, sign unknown.
+     *
+     * Velocity is deliberately BELOW the two hull-orientation sources rather than above them. A ship making way
+     * astern is still to be come alongside by its hull, not by where it happens to be going, and a leader hard
+     * over in a turn has a velocity that swings about while its bow does not.
+     */
+    fun frameOf(ship: LoadedServerShip): Frame? {
+        val centre = centreOf(ship, Vector3d()) ?: return null
+        val forward = Vector3d()
+        val control = ship.getAttachment(EurekaShipControl::class.java)
+
+        // Read once into a local: helmSeatDir is @Volatile and written from the helm's own tick, so testing the
+        // field and then dereferencing it are two different reads.
+        val helmDir = control?.helmSeatDir
+
+        var trusted = true
+        val found = when {
+            control?.pathForward(forward) != null -> true
+
+            helmDir != null -> {
+                forward.set(helmDir.unitVec3i.toJOMLD())
+                ship.transform.shipToWorldRotation.transform(forward)
+                // False for a helm facing UP or DOWN, which flattens to nothing -- falls through to the axis guess.
+                flatten(forward)
+            }
+
+            // Speed is tested BEFORE flattening, because flattening normalizes and there would be no magnitude
+            // left to test afterwards.
+            ship.velocity.length() > MOVING_SPEED -> flatten(forward.set(ship.velocity))
+
+            else -> false
+        }
+
+        if (!found) {
+            // Longest horizontal axis of the voxel box, rotated out to the world. A line, not an arrow.
+            trusted = false
+            if (!longAxis(ship, forward)) return null
+        }
+
+        // up x forward. Which side this names is arbitrary and never surfaced -- the follower's side is captured
+        // as a sign against this same vector, so whichever way round it is, it cancels.
+        val beam = Vector3d(forward.z, 0.0, -forward.x)
+        if (beam.lengthSquared() < EPSILON) return null
+        beam.normalize()
+
+        return Frame(centre, forward, beam, trusted)
+    }
+
+    /**
+     * The hull's geometric centre in world space, written into [dest]; null if it has no voxel bounds yet.
+     *
+     * The voxel box centre rather than the centre of mass, for two reasons. The user's ask is that the two ships'
+     * CENTRES line up, and a centre of mass sits wherever the ballast happens to be -- often well below and aft
+     * of what anyone looking at the ship would call its middle. And the half-extents below are measured about
+     * this same box, so a gap computed from it is actually the gap between the hulls.
+     */
+    fun centreOf(ship: LoadedServerShip, dest: Vector3d): Vector3d? {
+        val aabb = ship.shipAABB ?: return null
+        // maxX is the last OCCUPIED block index, so the box spans [minX, maxX + 1] -- hence the +1 before halving.
+        dest.set(
+            (aabb.minX() + aabb.maxX() + 1) * 0.5,
+            (aabb.minY() + aabb.maxY() + 1) * 0.5,
+            (aabb.minZ() + aabb.maxZ() + 1) * 0.5
+        )
+        return ship.transform.shipToWorld.transformPosition(dest)
+    }
+
+    /**
+     * Half the hull's width measured along a world-space direction, in blocks. 0 if it has no bounds.
+     *
+     * This is a box's support radius: rotate the direction into ship space and take the sum of each half-extent
+     * times the size of that component. Exact for a box at any orientation, and it errs large on a hull that
+     * doesn't fill its box -- which is the right way to be wrong here, since it opens the gap rather than
+     * closing it.
+     */
+    fun halfExtentAlong(ship: LoadedServerShip, worldDir: Vector3dc): Double {
+        val aabb = ship.shipAABB ?: return 0.0
+        val local = Quaterniond(ship.transform.shipToWorldRotation).invert()
+            .transform(Vector3d(worldDir))
+
+        val hx = (aabb.maxX() + 1 - aabb.minX()) * 0.5
+        val hy = (aabb.maxY() + 1 - aabb.minY()) * 0.5
+        val hz = (aabb.maxZ() + 1 - aabb.minZ()) * 0.5
+
+        return abs(local.x) * hx + abs(local.y) * hy + abs(local.z) * hz
+    }
+
+    /**
+     * Centre-to-centre lateral distance that leaves [gap] blocks of clear water between the two hulls.
+     *
+     * Measured hull to hull rather than centre to centre so a sloop and a galleon leave the same visible gap.
+     * A fixed centre distance would put the galleon's bulwark through the sloop's rail.
+     */
+    fun standoff(leader: LoadedServerShip, follower: LoadedServerShip, frame: Frame, gap: Double): Double =
+        halfExtentAlong(leader, frame.beam) + halfExtentAlong(follower, frame.beam) + gap
+
+    /**
+     * Where the follower should be sitting, written into [dest].
+     *
+     * `slot` 0 is abeam -- level with the leader's centre, which is the position the feature is really about.
+     * Higher slots queue astern of it so a second and third ship joining the same side form a line rather than
+     * all converging on one point.
+     *
+     * Height is the leader's, not the follower's: coming alongside means alongside, and a ship holding station
+     * ten blocks below the leader is not in the fight.
+     */
+    fun stationPoint(
+        leader: Frame,
+        side: Int,
+        standoff: Double,
+        astern: Double,
+        dest: Vector3d
+    ): Vector3d = dest.set(leader.centre)
+        .fma(side * standoff, leader.beam)
+        .fma(-astern, leader.forward)
+        .also { it.y = leader.centre.y }
+
+    /** Which side of the leader a point is on: +1, -1, or 0 when it is dead on the centreline. */
+    fun sideOf(leader: Frame, point: Vector3dc, deadband: Double): Int {
+        val lateral = (point.x() - leader.centre.x) * leader.beam.x +
+            (point.z() - leader.centre.z) * leader.beam.z
+        return if (lateral > deadband) 1 else if (lateral < -deadband) -1 else 0
+    }
+
+    /** Flatten to horizontal and normalize in place; false if there was nothing horizontal left to keep. */
+    private fun flatten(v: Vector3d): Boolean {
+        v.y = 0.0
+        if (v.lengthSquared() < EPSILON) return false
+        v.normalize()
+        return true
+    }
+
+    /** The longer of the hull's two horizontal axes, rotated to world space. False if it has no bounds. */
+    private fun longAxis(ship: LoadedServerShip, dest: Vector3d): Boolean {
+        val aabb = ship.shipAABB ?: return false
+        val spanX = aabb.maxX() - aabb.minX()
+        val spanZ = aabb.maxZ() - aabb.minZ()
+        dest.set(if (spanX >= spanZ) 1.0 else 0.0, 0.0, if (spanX >= spanZ) 0.0 else 1.0)
+        ship.transform.shipToWorldRotation.transform(dest)
+        return flatten(dest)
+    }
+
+    /** Below this (m/s) a hull's velocity says nothing about which way it is pointing. */
+    private const val MOVING_SPEED = 0.5
+
+    private const val EPSILON = 1.0e-9
+}

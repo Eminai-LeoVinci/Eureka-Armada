@@ -548,6 +548,95 @@ object EurekaConfig {
         var pathResumeOnLoad = true
         // endregion
 
+        // region Ship following (Sneak+F -- see the org.valkyrienskies.eureka.follow package)
+        // Station-keeping on another ship. Unlike a route, this owns the THROTTLE as well as the wheel, because
+        // holding position beside a moving vessel is a speed problem before it is a steering one.
+
+        @JsonSchema(
+            description = "Ship following: how far Sneak+F will reach to pick up a target ship, in blocks. The " +
+                "ray is blocked by terrain and by hulls in the way, so you must actually be able to see what " +
+                "you are pointing at. May exceed followBreakRange: a pursuit begun beyond that distance is " +
+                "given until it stops closing before it is called off. Default 160.0."
+        )
+        var followTargetRange = 160.0
+
+        @JsonSchema(
+            description = "Ship following: hull-to-hull standoff held alongside the leader, in blocks. Measured " +
+                "between the two hulls' beams rather than between their centres, so big ships and small ones " +
+                "leave the same gap. Default 11.0."
+        )
+        var followGap = 11.0
+
+        @JsonSchema(
+            description = "Ship following: centre-to-centre distance at which a follower gives up and coasts to " +
+                "a stop, in blocks. This is what happens when a leader is simply faster -- the follower is never " +
+                "given speed it doesn't have, so it falls behind until this trips. A pursuit that started " +
+                "further out than this keeps going while it is still closing, and only breaks off once it " +
+                "starts losing ground again. Default 90.0."
+        )
+        var followBreakRange = 90.0
+
+        @JsonSchema(
+            description = "Ship following: distance from station, in blocks, over which steering blends from " +
+                "chasing the station point to matching the leader's heading. Higher = lines up with the leader " +
+                "from further out; lower = chases the point harder and squares up late. Default 40.0."
+        )
+        var followBlendRange = 40.0
+
+        @JsonSchema(description = "Ship following: commanded yaw rate per radian of heading error. Default 1.2.")
+        var followTurnGain = 1.2
+
+        @JsonSchema(
+            description = "Ship following: m/s of closing speed asked for per block of along-track error. This " +
+                "is the 'gradually come alongside' knob -- lower is a more patient approach. Default 0.25."
+        )
+        var followClosingGain = 0.25
+
+        @JsonSchema(
+            description = "Ship following: cap in m/s on how much FASTER than the leader a follower will try to " +
+                "go while closing. A cap on the closing rate rather than on absolute speed, so a follower can " +
+                "still chase a fast leader -- it just doesn't rush the last stretch. Default 6.0."
+        )
+        var followClosingSpeed = 6.0
+
+        @JsonSchema(
+            description = "Ship following: how hard a follower may back up, in m/s, when it has overshot its " +
+                "station. Small on purpose -- normally it just eases off and lets the leader draw ahead. " +
+                "Default 2.0."
+        )
+        var followReverseSpeed = 2.0
+
+        @JsonSchema(
+            description = "Ship following: commanded climb/dive speed in m/s per block of altitude error, for " +
+                "matching the leader's level. Default 0.5."
+        )
+        var followVerticalGain = 0.5
+
+        @JsonSchema(
+            description = "Ship following: altitude error in blocks below which no vertical is commanded at all. " +
+                "Not just a nicety -- the water altitude hold latches its depth only while the commanded " +
+                "vertical is exactly zero, so without a deadband a ship at station would flick the hold on and " +
+                "off every tick. Default 1.5."
+        )
+        var followVerticalDeadband = 1.5
+
+        @JsonSchema(
+            description = "Ship following: seconds a manual input must be HELD to break off the follow. Steering " +
+                "AND throttle count here, unlike a route -- following owns the throttle, so a pilot pushing it " +
+                "is arguing with the ship and has to be able to win. Brief nudges still just nudge; the station " +
+                "re-acquires afterwards. Default 3.0."
+        )
+        var followCancelHold = 3.0
+
+        @JsonSchema(
+            description = "Ship following: how far onto the leader's OTHER side a follower must end up, as a " +
+                "fraction of the standoff, before it gives up its side and takes station on that one. This is " +
+                "hysteresis: a follower sitting directly astern is on neither side, and without a margin it " +
+                "would flip between port and starboard every tick. Raise it to make sides stickier. Default 0.5."
+        )
+        var followSideFlipMargin = 0.5
+        // endregion
+
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and
         // collides with the world as a normal physics body, so there is nothing here to tune.
     }

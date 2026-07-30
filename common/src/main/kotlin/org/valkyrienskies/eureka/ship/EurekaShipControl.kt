@@ -125,8 +125,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     var seatedPlayer: Player? = null
 
-    // region Path following (see the org.valkyrienskies.eureka.path package)
-    // Written on the GAME thread by PathFollower once per tick, read on the PHYSICS thread in physTick --
+    // region Path following (see the org.valkyrienskies.eureka.path and .follow packages)
+    // Two things drive these: a recorded route (PathFollower) and station-keeping on another ship (ShipFollower).
+    // They are deliberately the same plumbing, because as far as the hull is concerned both are the same thing --
+    // guidance arriving from something that isn't a seated pilot -- and everything below that has to be
+    // suppressed for one has to be suppressed for the other.
+    // Written on the GAME thread once per tick, read on the PHYSICS thread in physTick --
     // hence @Volatile, matching turnHold/fwdHold/vertHold. Null means "no path input", which is what lets the
     // pilot's own controls and the cruise latches behave exactly as they always did when nothing is following.
     // None of it is persisted -- these are one tick's guidance, meaningless after a reload. What DOES survive is
@@ -173,6 +177,25 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     @Volatile
     var pathSpeedCap: Double? = null
+        private set
+
+    /**
+     * Forward speed COMMAND in m/s while following, or null to leave the throttle alone.
+     *
+     * The one thing a route never needed. A route only ever lowered [pathSpeedCap], because the pilot's cruise
+     * setting owned how fast the line was flown -- there was no right answer for the route to have an opinion
+     * about. Station-keeping on another ship is the opposite: the whole task IS a speed, since holding position
+     * beside a moving vessel means matching its speed and adding just enough to close the remaining gap.
+     *
+     * Held closed-loop against the ship's REAL forward speed in [getPlayerForwardVel], exactly as a typed cruise
+     * speed is, so it converges on the number asked for rather than drifting with engine heat and fuel. It is a
+     * request, not a guarantee: the throttle it drives is clamped to +/-1, so a hull simply cannot be commanded
+     * past its own top speed. That is what makes a follower fall behind a faster leader instead of matching it,
+     * with no code anywhere having to know either ship's capability.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathTargetSpeed: Double? = null
         private set
 
     /**
@@ -1032,7 +1055,21 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // forward/back input is held (a held key nudges the speed toward +/-1 -- tap = small, hold = ramp), and
         // HOLD it on release so the ship keeps that speed. When not latched it's live (decays to 0 on release).
         // Steering rotates the held velocity (forwardVector uses the live heading), so a turn makes it circle.
-        if (!cruiseHorizontalActive || control.forwardImpulse != 0.0f) {
+        // Follow guidance owns the throttle outright while it is engaged, which is the one way it differs from a
+        // route (see [pathTargetSpeed]). Same closed loop as the typed cruise speed below, and deliberately
+        // AHEAD of the latch test: a ship can be told to hold station whether or not it was ever cruising, so
+        // gating this on cruiseHorizontalActive would silently do nothing on a ship that had never used cruise.
+        //
+        // Yielding the moment a real forward/back input appears is what makes the pilot's throttle authoritative
+        // instantly -- the follow doesn't have to notice and let go first, so there is never a tick where the two
+        // are pulling against each other. Holding that input is separately what ends the follow, but that is the
+        // orchestrator's business and takes three seconds; this takes effect on the next physics tick.
+        val followTarget = pathTargetSpeed
+        if (followTarget != null && control.forwardImpulse == 0.0f) {
+            val actualForward = vel.dot(forwardVector)
+            val topRef = max(estimateTopSpeed(), 1.0)
+            oldSpeed = (oldSpeed + (followTarget - actualForward) / topRef * CRUISE_SPEED_TRIM).coerceIn(-1.0, 1.0)
+        } else if (!cruiseHorizontalActive || control.forwardImpulse != 0.0f) {
             oldSpeed = oldSpeed * (1 - s) + control.forwardImpulse.toDouble() * s // from -1 to 1.
             // A live forward/back input hands control back to the pilot: drop the exact typed target so driving
             // isn't fought by the trim below.
@@ -1091,7 +1128,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // own loop on real speed by trimming the throttle -- two integrators on one plant would fight.
         // forwardVector is still the unit heading here, so this dot product is the forward component of
         // velocity, which ignores any sideways drift.
-        if (cruiseTargetSpeedMps == null && abs(speed) > DRAG_TRIM_DEAD_ZONE) {
+        // pathTargetSpeed is excluded for exactly the reason cruiseTargetSpeedMps is: it runs its own closed loop
+        // on real speed above, and two integrators correcting the same shortfall wind each other up.
+        if (cruiseTargetSpeedMps == null && pathTargetSpeed == null && abs(speed) > DRAG_TRIM_DEAD_ZONE) {
             val error = speed - vel.dot(forwardVector)
             // Only correct once the ship is in the last stretch of its run-up. Early in the run the error is
             // most of the target and isn't a shortfall at all, just acceleration still happening; integrating
@@ -1473,13 +1512,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      * The follower's per-tick command: a yaw RATE (rad/s) and a vertical RATE (m/s), both clamped here rather
      * than in the follower so the limits stay with the hull that owns them.
      *
-     * Forward speed is deliberately absent -- the pilot's cruise setting owns it, so a route can be flown fast
-     * or slow without re-recording.
+     * [targetSpeed] defaults to null, which is the route case: forward speed stays the pilot's cruise setting, so
+     * one recorded route can be flown fast or slow without re-recording. Only station-keeping on another ship
+     * passes it, because only that task has a speed of its own to want (see [pathTargetSpeed]).
      */
-    fun pathCommand(turnOmega: Double, verticalMps: Double, speedCap: Double?) {
+    fun pathCommand(turnOmega: Double, verticalMps: Double, speedCap: Double?, targetSpeed: Double? = null) {
         val cap = pathTurnCap
         pathTurnOmega = turnOmega.coerceIn(-cap, cap)
         pathSpeedCap = speedCap
+        pathTargetSpeed = targetSpeed
 
         // Convert m/s to the -1..1 impulse units the elevation law works in, exactly as setCruiseValueMenu's
         // vertical axis does: the up and down rates differ, so each direction scales by its own maximum.
@@ -1500,6 +1541,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         pathTurnOmega = null
         pathVerticalRate = null
         pathSpeedCap = null
+        // Whatever throttle the follow had wound up stays where it is; only the demand goes away. With nobody
+        // seated, physTick's abandoned-hull branch now zeroes it and stabilize's (capped) anti-velocity brake
+        // walks the ship down, and with a pilot aboard the throttle smoothing decays it toward their input. Both
+        // are a gradual stop rather than a handbrake, which is what "come to a stop" has to mean for a vessel.
+        pathTargetSpeed = null
         if (stopShip && isCruising) {
             isCruising = false
             clearCruiseLatches()

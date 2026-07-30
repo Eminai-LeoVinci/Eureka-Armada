@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
+import org.valkyrienskies.eureka.follow.ShipFollows;
 import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
 import org.valkyrienskies.eureka.path.ShipPaths;
@@ -86,6 +87,10 @@ public class EurekaModFabric implements ModInitializer {
             // ship that drifted out of simulation and back), then advance any recording (sampling the keel,
             // arming and closing the loop) and steer any ship following a route.
             ShipPaths.INSTANCE.tick(level);
+            // Ship following (Sneak+F): hold each pursuing ship on station beside its leader. Separate from the
+            // route follower above because the two are mutually exclusive on any one hull -- they'd fight over
+            // the wheel -- but they share the same guidance plumbing on EurekaShipControl.
+            ShipFollows.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -94,6 +99,10 @@ public class EurekaModFabric implements ModInitializer {
         // like a fresh load, which is the whole basis of the saved-binding resume. See ShipPaths.reset.
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             ShipPaths.INSTANCE.reset();
+            // Pursuits are runtime-only, so this isn't just tidying -- it IS how a follow ends when you log out.
+            // Without it a ship in the next world that happened to take a follower's id would set off after a
+            // leader from the last one.
+            ShipFollows.INSTANCE.reset();
             PathNetworkingFabric.INSTANCE.resetServer();
         });
     }

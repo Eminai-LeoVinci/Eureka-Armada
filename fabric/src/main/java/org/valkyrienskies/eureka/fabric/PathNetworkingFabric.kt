@@ -23,6 +23,7 @@ import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.path.PathStore
 import org.valkyrienskies.eureka.path.ShipPath
 import org.valkyrienskies.eureka.armada.ArmadaBindings
+import org.valkyrienskies.eureka.follow.ShipFollows
 import org.valkyrienskies.eureka.path.ShipPaths
 import java.util.UUID
 
@@ -89,6 +90,14 @@ object PathNetworkingFabric {
     const val ACTION_PLAY: Byte = 2
     const val ACTION_STOP: Byte = 3
     const val ACTION_REQUEST_ROUTES: Byte = 4
+
+    /**
+     * Sneak+F: follow the ship the player is looking at.
+     *
+     * Carries no target -- the server does its own raycast from the player's eyes. Trusting a client-supplied
+     * ship id here would be letting the client pick which ship it gets to command.
+     */
+    const val ACTION_FOLLOW_SHIP: Byte = 5
 
     /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
     private const val NO_ROUTE = 0L
@@ -162,6 +171,7 @@ object PathNetworkingFabric {
                     ACTION_PLAY -> ShipPaths.play(level, player)
                     ACTION_STOP -> ShipPaths.stop(level, player)
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
+                    ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
                 }
             }
         }

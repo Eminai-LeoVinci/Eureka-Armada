@@ -68,5 +68,6 @@
   "key.vs_eureka.path_play": "Fly nearest route (hold Sneak)",
   "key.vs_eureka.path_stop": "Stop following (hold Sneak + hold key)",
   "key.vs_eureka.path_cancel": "Discard recording (hold Sneak + hold key)",
-  "key.vs_eureka.path_show": "Show saved routes (hold Sneak)"
+  "key.vs_eureka.path_show": "Show saved routes (hold Sneak)",
+  "key.vs_eureka.path_follow": "Follow the ship you're looking at (hold Sneak)"
 }

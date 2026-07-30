@@ -16,7 +16,7 @@ import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.path.ClientPathState
 
 /**
- * The five SHIFT hotkeys that drive path recording, all polled from the client tick.
+ * The six SHIFT hotkeys that drive path recording and ship following, all polled from the client tick.
  *
  * ## Why SHIFT, and why standing on deck
  * A helm dismounts any rider holding shift (see `ShipHelmBlockEntity` -- it has to, because shipyard chunks
@@ -30,8 +30,9 @@ import org.valkyrienskies.eureka.path.ClientPathState
  * ## The one real collision: S
  * `S` is vanilla's walk-backwards key, and sneak-walking backwards along a deck is exactly what people do near
  * a ledge. A plain press would stop the ship every time. So stop and cancel -- the two destructive actions --
- * require a short HOLD, which movement never produces by accident. Record, play and show are single presses;
- * none of their keys is bound to anything by default.
+ * require a short HOLD, which movement never produces by accident. Record, play, show and follow are single
+ * presses; where those collide with a vanilla binding it is one that reads CLICKS, which
+ * [suppressVanillaCollisions] can simply drain.
  */
 @Environment(EnvType.CLIENT)
 object PathKeybinds {
@@ -43,6 +44,7 @@ object PathKeybinds {
     private lateinit var stop: KeyMapping
     private lateinit var cancel: KeyMapping
     private lateinit var show: KeyMapping
+    private lateinit var follow: KeyMapping
 
     /** Client ticks a destructive key must be held. 8 ticks ~ 400 ms. */
     private const val HOLD_TICKS = 8
@@ -56,6 +58,9 @@ object PathKeybinds {
         stop = bind("stop", GLFW.GLFW_KEY_S)
         cancel = bind("cancel", GLFW.GLFW_KEY_C)
         show = bind("show", GLFW.GLFW_KEY_O)
+        // `F` is vanilla's swap-offhand. That collision is handled for free by suppressVanillaCollisions, which
+        // scans for whatever shares a key with one of `ours` rather than hard-coding any particular binding.
+        follow = bind("follow", GLFW.GLFW_KEY_F)
 
         // Vanilla suppression has to run BEFORE Minecraft.handleKeybinds, which END_CLIENT_TICK is far too late
         // for -- by then the colliding action has already happened.
@@ -83,7 +88,7 @@ object PathKeybinds {
 
         for (mapping in client.options.keyMappings) {
             if (mapping === record || mapping === play || mapping === stop ||
-                mapping === cancel || mapping === show
+                mapping === cancel || mapping === show || mapping === follow
             ) continue
             // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
             if (ours.none { mapping.same(it) }) continue
@@ -91,7 +96,7 @@ object PathKeybinds {
         }
     }
 
-    private val ours: List<KeyMapping> by lazy { listOf(record, play, stop, cancel, show) }
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, stop, cancel, show, follow) }
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -119,6 +124,11 @@ object PathKeybinds {
 
         if (record.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_START)
         if (play.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_PLAY)
+        // A single press, not a hold: it needs the crosshair on a target, and asking someone to hold a key steady
+        // on a ship that is moving relative to them would be the fiddliest part of the whole feature. It is also
+        // self-undoing -- pressing it again on the ship you are already chasing breaks off -- so a misfire costs
+        // one more press rather than needing a different key to put right.
+        if (follow.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
 
         if (show.consumeClick()) toggleShowAll(client)
 
@@ -202,5 +212,6 @@ object PathKeybinds {
         while (show.consumeClick()) Unit
         while (stop.consumeClick()) Unit
         while (cancel.consumeClick()) Unit
+        while (follow.consumeClick()) Unit
     }
 }

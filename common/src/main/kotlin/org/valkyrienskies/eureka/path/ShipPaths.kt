@@ -7,6 +7,7 @@ import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
+import org.valkyrienskies.eureka.follow.ShipFollows
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getShipMountedTo
@@ -353,6 +354,9 @@ object ShipPaths {
 
         if (recorders.containsKey(ship.id)) return fail(player, "This ship is already recording a route.")
         if (followers.containsKey(ship.id)) return fail(player, "Stop following a route before recording one.")
+        if (ShipFollows.isFollowing(ship.id)) {
+            return fail(player, "This ship is following another -- break that off first.")
+        }
 
         val keel = KeelAnchor.world(level, ship, Vector3d())
             ?: return fail(player, "This ship has no blocks to measure from.")
@@ -379,6 +383,11 @@ object ShipPaths {
 
         if (recorders.containsKey(ship.id)) return fail(player, "This ship is still recording a route.")
         if (followers.containsKey(ship.id)) return fail(player, "This ship is already following a route.")
+        // A route and a pursuit both own the wheel, so a hull can only be under one of them. Refused rather than
+        // silently taking over, because which one you meant is not something this can guess.
+        if (ShipFollows.isFollowing(ship.id)) {
+            return fail(player, "This ship is following another -- break that off first.")
+        }
 
         val control = ship.getAttachment(EurekaShipControl::class.java)
             ?: return fail(player, "This ship has no helm.")
