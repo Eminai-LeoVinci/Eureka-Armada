@@ -76,6 +76,14 @@ object EurekaConfig {
                 "than overwriting one another, so a burst of them is all readable. Default 6.0."
         )
         var pathMessageSeconds = 6.0
+
+        @JsonSchema(
+            description = "Seconds SHIFT+R or SHIFT+P must be HELD for the destructive half of the key -- " +
+                "discarding a recording, releasing a ship from its route. Tapping either does the ordinary " +
+                "thing instead (start recording; play, pause or resume). A ring around the crosshair fills as " +
+                "you hold, and the action fires when it closes. Default 2.0."
+        )
+        var pathHoldSeconds = 2.0
     }
 
     class Server {
@@ -434,11 +442,21 @@ object EurekaConfig {
         var pathMinLoopLength = 48.0
 
         @JsonSchema(
-            description = "Path recording: radius in blocks of the glowing sphere at the route's start point. " +
-                "The loop closes when the ship's keel sphere touches it. Bigger = easier to close, less exact " +
-                "about where. Default 2.0."
+            description = "Path recording: radius in blocks of the glowing sphere at the route's start point, " +
+                "for the SMALLEST ships. The loop closes when the ship's keel sphere touches it. Bigger = " +
+                "easier to close, less exact about where. Scaled up for larger hulls by pathMarkerScaleStep. " +
+                "Default 2.0."
         )
         var pathSnapRadius = 2.0
+
+        @JsonSchema(
+            description = "Path recording: how much bigger both snap spheres get per 5 blocks of the recording " +
+                "ship's footprint, as a multiple of their base size. At the default 0.5 a raft up to 5 blocks " +
+                "draws them at 1x, a 10-block hull at 1.5x, a 38-block one at 4.5x. This is not decoration: " +
+                "the spheres ARE the distance at which a loop closes, and a big ship cannot park its keel " +
+                "within two blocks of where it started. Set to 0 for the old fixed size. Default 0.5."
+        )
+        var pathMarkerScaleStep = 0.5
 
         @JsonSchema(
             description = "Path recording: how many blocks of the route's tail are replaced by a curve that " +

@@ -14,9 +14,11 @@ import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.path.ClientPathState
+import kotlin.math.max
 
 /**
- * The six SHIFT hotkeys that drive path recording and ship following, all polled from the client tick.
+ * The four SHIFT hotkeys that drive path recording, route playback and ship following, polled from the client
+ * tick.
  *
  * ## Why SHIFT, and why standing on deck
  * A helm dismounts any rider holding shift (see `ShipHelmBlockEntity` -- it has to, because shipyard chunks
@@ -24,15 +26,32 @@ import org.valkyrienskies.eureka.path.ClientPathState
  * standing on the deck, never while seated at the wheel.
  *
  * That shapes the whole workflow, and the workflow is built around it: start recording from the deck, THEN sit
- * down and fly the route, and let the loop close itself when you get back. It also means SHIFT+C cannot collide
- * with VS2's cruise key, since cruise only acts on a seated seat controller.
+ * down and fly the route, and let the loop close itself when you get back.
  *
- * ## The one real collision: S
- * `S` is vanilla's walk-backwards key, and sneak-walking backwards along a deck is exactly what people do near
- * a ledge. A plain press would stop the ship every time. So stop and cancel -- the two destructive actions --
- * require a short HOLD, which movement never produces by accident. Record, play, show and follow are single
- * presses; where those collide with a vanilla binding it is one that reads CLICKS, which
- * [suppressVanillaCollisions] can simply drain.
+ * ## Two of them are two actions each
+ * SHIFT+R and SHIFT+P both carry an ordinary action and a destructive one, told apart by how long the key is
+ * held rather than by which key it is:
+ *
+ * | key | tap | hold |
+ * |---|---|---|
+ * | SHIFT+R | start recording | discard the recording |
+ * | SHIFT+P | play / pause / resume | release the ship from its route |
+ *
+ * This is what freed up SHIFT+S and SHIFT+C, and getting rid of `S` in particular was worth doing on its own:
+ * it is vanilla's walk-backwards key, and sneak-walking backwards along a deck near a ledge is exactly what
+ * people do, so a stop key living there was one slip away from firing every time.
+ *
+ * The destructive half is never something you can arrive at by accident, because a hold is not a thing hands do
+ * by mistake, and [PathHud] draws a ring round the crosshair while it counts so it is never a surprise either.
+ *
+ * ## Tap fires on RELEASE, not on press
+ * It has to: at the moment the key goes down there is no way to know yet which of the two actions is meant.
+ * That is also why these two read [KeyMapping.isDown] rather than `consumeClick` -- a click is an edge with no
+ * duration, and duration is the whole distinction here.
+ *
+ * ## Collisions
+ * Where our keys collide with a vanilla binding it is one that reads CLICKS, which [suppressVanillaCollisions]
+ * simply drains. Nothing here reads a vanilla `isDown`, so movement is untouched.
  */
 @Environment(EnvType.CLIENT)
 object PathKeybinds {
@@ -41,27 +60,41 @@ object PathKeybinds {
 
     private lateinit var record: KeyMapping
     private lateinit var play: KeyMapping
-    private lateinit var stop: KeyMapping
-    private lateinit var cancel: KeyMapping
     private lateinit var show: KeyMapping
     private lateinit var follow: KeyMapping
 
-    /** Client ticks a destructive key must be held. 8 ticks ~ 400 ms. */
-    private const val HOLD_TICKS = 8
+    /**
+     * One key's worth of "is this a tap or a hold?".
+     *
+     * [fired] is what stops a hold repeating: once the threshold is crossed the action runs once and the count
+     * keeps climbing harmlessly, and it is also what tells the release edge that the tap has already been
+     * spoken for.
+     */
+    private class Gesture(val mapping: KeyMapping) {
+        var held = 0
+        var fired = false
+    }
 
-    private var stopHeld = 0
-    private var cancelHeld = 0
+    private lateinit var recordGesture: Gesture
+    private lateinit var playGesture: Gesture
+
+    /** Fraction of the hold at which the "keep holding" line appears under the ring. */
+    private const val PROMPT_AT = 0.35f
+
+    /** Fraction below which no ring is drawn at all, so an ordinary tap doesn't flash one up. */
+    private const val RING_AT = 0.1f
 
     fun register() {
         record = bind("record", GLFW.GLFW_KEY_R)
         play = bind("play", GLFW.GLFW_KEY_P)
-        stop = bind("stop", GLFW.GLFW_KEY_S)
-        cancel = bind("cancel", GLFW.GLFW_KEY_C)
         // `H` for hide, which is what this key is reached for nine times out of ten.
         show = bind("show", GLFW.GLFW_KEY_H)
         // `F` is vanilla's swap-offhand. That collision is handled for free by suppressVanillaCollisions, which
         // scans for whatever shares a key with one of `ours` rather than hard-coding any particular binding.
         follow = bind("follow", GLFW.GLFW_KEY_F)
+
+        recordGesture = Gesture(record)
+        playGesture = Gesture(play)
 
         // Vanilla suppression has to run BEFORE Minecraft.handleKeybinds, which END_CLIENT_TICK is far too late
         // for -- by then the colliding action has already happened.
@@ -80,24 +113,21 @@ object PathKeybinds {
      * rebind in either direction: rebind ours off `P` and vanilla's key works normally again with sneak held;
      * rebind ours onto some other occupied key and that one is covered too.
      *
-     * Only CLICKS are drained. Movement and other held keys read `isDown`, which is untouched -- so
-     * sneak-walking backwards still walks backwards even though `S` is our stop key.
+     * Only CLICKS are drained. Movement and other held keys read `isDown`, which is untouched.
      */
     private fun suppressVanillaCollisions(client: Minecraft) {
         if (client.player == null || client.screen != null) return
         if (!client.options.keyShift.isDown) return
 
         for (mapping in client.options.keyMappings) {
-            if (mapping === record || mapping === play || mapping === stop ||
-                mapping === cancel || mapping === show || mapping === follow
-            ) continue
+            if (mapping === record || mapping === play || mapping === show || mapping === follow) continue
             // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
             if (ours.none { mapping.same(it) }) continue
             while (mapping.consumeClick()) Unit
         }
     }
 
-    private val ours: List<KeyMapping> by lazy { listOf(record, play, stop, cancel, show, follow) }
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow) }
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -106,25 +136,47 @@ object PathKeybinds {
         KeyMapping("key.vs_eureka.path_$name", key, category)
     )
 
+    /** Client ticks a destructive action must be held for. */
+    private fun holdTicks(): Int =
+        (EurekaConfig.CLIENT.pathHoldSeconds.coerceIn(0.25, 10.0) * 20.0).toInt().coerceAtLeast(1)
+
     private fun tick(client: Minecraft) {
         if (client.player == null || client.screen != null) {
-            stopHeld = 0
-            cancelHeld = 0
+            reset()
             return
         }
 
         // Every path hotkey is a SHIFT combination, so nothing here can fire during ordinary play. Read through
         // the sneak BINDING rather than the raw shift key, so a player who has rebound sneak gets hotkeys that
         // still match the key they actually think of as shift.
-        if (!client.options.keyShift.isDown) {
-            drainClicks()
-            stopHeld = 0
-            cancelHeld = 0
+        val sneaking = client.options.keyShift.isDown
+
+        // The two gestures run whether or not sneak is still down, because letting go of shift first is a
+        // perfectly ordinary way to end a chord and the tap has to survive it. `sneaking` only gates whether
+        // the count can START or CONTINUE; a false reads as a release, which is exactly right.
+        val ring = max(
+            gesture(
+                recordGesture, sneaking, "Hold to discard the recording…",
+                onTap = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_START) },
+                onHold = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_CANCEL) }
+            ),
+            gesture(
+                playGesture, sneaking, "Hold to release the ship from its route…",
+                onTap = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_PLAY) },
+                onHold = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_STOP) }
+            )
+        )
+        PathHud.setHoldProgress(ring)
+
+        // These two are driven by isDown, so nothing ever reads their click queue. Drained anyway, or a press
+        // made before sneak went down would still be sitting there the next time something did read it.
+        drainClicks(record, play)
+
+        if (!sneaking) {
+            drainClicks(show, follow)
             return
         }
 
-        if (record.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_START)
-        if (play.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_PLAY)
         // A single press, not a hold: it needs the crosshair on a target, and asking someone to hold a key steady
         // on a ship that is moving relative to them would be the fiddliest part of the whole feature. It is also
         // self-undoing -- pressing it again on the ship you are already chasing breaks off -- so a misfire costs
@@ -132,73 +184,98 @@ object PathKeybinds {
         if (follow.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
 
         if (show.consumeClick()) toggleShowAll(client)
-
-        stopHeld = hold(client, stop, stopHeld, "Hold to stop the ship…") {
-            PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_STOP)
-        }
-        cancelHeld = hold(client, cancel, cancelHeld, "Hold to discard the recording…") {
-            PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_CANCEL)
-        }
     }
 
     /**
-     * Count a held key up to [HOLD_TICKS] and fire once at the top, showing a prompt while it counts.
+     * Advance one tap-or-hold key and return how full its ring should be, 0 to 1.
      *
-     * Returns the new hold count. Fires on the tick the threshold is crossed and then latches (the count keeps
-     * climbing but the action does not repeat) until the key is released.
+     * [armed] false means sneak has been let go of, which is treated as a release: a tap in flight still lands,
+     * and a hold that hadn't finished is abandoned. Letting go of shift a fraction before the key is a normal
+     * way to end a chord, so losing the tap there would feel like a dropped input. The cost is the other
+     * reading -- abandoning a hold by releasing shift first fires the tap -- which is the cheaper mistake.
+     *
+     * A screen opening goes through [reset] instead and fires nothing at all, which is the right answer for an
+     * input the player has clearly stopped giving.
      */
-    private inline fun hold(
-        client: Minecraft,
-        mapping: KeyMapping,
-        held: Int,
+    private inline fun gesture(
+        gesture: Gesture,
+        armed: Boolean,
         prompt: String,
-        action: () -> Unit
-    ): Int {
-        if (!mapping.isDown) return 0
-        val next = held + 1
-        when {
-            next == HOLD_TICKS -> action()
-            next < HOLD_TICKS -> PathHud.prompt(Component.literal(prompt))
+        onTap: () -> Unit,
+        onHold: () -> Unit
+    ): Float {
+        if (armed && gesture.mapping.isDown) {
+            gesture.held++
+            if (!gesture.fired && gesture.held >= holdTicks()) {
+                gesture.fired = true
+                onHold()
+            }
+            // Left full while the key is still down after firing, so letting go is what clears it -- a ring
+            // that vanished on the instant the action ran would read as the hold having been dropped.
+            if (gesture.fired) return 1.0f
+
+            val progress = gesture.held.toFloat() / holdTicks()
+            if (progress >= PROMPT_AT) PathHud.prompt(Component.literal(prompt))
+            return if (progress >= RING_AT) progress else 0.0f
         }
-        return next
+
+        // The release edge. A hold that already fired has spent this press; anything else is a tap.
+        if (gesture.held > 0 && !gesture.fired) onTap()
+        gesture.held = 0
+        gesture.fired = false
+        return 0.0f
+    }
+
+    private fun reset() {
+        recordGesture.held = 0
+        recordGesture.fired = false
+        playGesture.held = 0
+        playGesture.fired = false
+        PathHud.setHoldProgress(0.0f)
     }
 
     /**
      * SHIFT+H, which means one of two things depending on where you are standing.
      *
      * Aboard a ship that is flying a route, it toggles THAT route's line -- because the one place a route line
-     * is least wanted is out the window of the ship following it, and that was previously the one case with no
-     * way to turn it off (a route being flown drew unconditionally).
+     * is least wanted is out the window of the ship following it.
      *
-     * Anywhere else it is the global show-everything toggle, which is what you want when picking a route to fly
-     * rather than flying one.
+     * Anywhere else -- ashore, or on a ship with no route of its own -- it is all of them at once.
+     *
+     * The global half asks what is actually ON SCREEN rather than what some flag says, and that is the whole
+     * fix rather than a nicety. A route being flown draws for a reason of its own, so a key that merely flipped
+     * `showAll` could ADD lines when pressed to hide them, and could never clear a route anyone was flying --
+     * which left walking to each ship in turn as the only way to get a clear view.
      */
     private fun toggleShowAll(client: Minecraft) {
         val local = ClientPathState.localRouteId
         if (local != 0L) {
-            val hidden = ClientPathState.toggleHidden(local)
+            val shown = ClientPathState.toggleVisible(local)
             val name = ClientPathState.routes[local]?.name ?: "this route"
             // Just the route name: hiding a line obviously doesn't stop the ship flying it, and saying so every
             // time was noise.
-            PathHud.add(Component.literal(if (hidden) "Hid '$name'" else "Showing '$name'"), SHOW_ARGB)
+            PathHud.add(Component.literal(if (shown) "Showing '$name'" else "Hid '$name'"), SHOW_ARGB)
             return
         }
 
-        val enabled = !ClientPathState.showAll
-        ClientPathState.showAll = enabled
-        EurekaConfig.CLIENT.showAllPaths = enabled
-        EurekaConfigLoader.save()
-
-        if (enabled) {
+        val hiding = ClientPathState.anyVisible()
+        if (hiding) {
+            ClientPathState.hideEverything()
+        } else {
+            ClientPathState.showEverything()
             // Pull the current set in case a route was recorded while we weren't looking.
             PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_REQUEST_ROUTES)
-            // "Show me everything" has to mean everything, or a route hidden from a cockpit stays invisible
-            // with no obvious way back -- you would have to work out which ship to go and stand on.
-            ClientPathState.hiddenRoutes.clear()
         }
+
+        // Written back as it always was -- though note nothing reads showAllPaths at client init, so today this
+        // records the intent rather than surviving a restart. Which routes are HIDDEN deliberately never
+        // persists: hiding is a "not right now" gesture, not a property of the route.
+        EurekaConfig.CLIENT.showAllPaths = ClientPathState.showAll
+        EurekaConfigLoader.save()
+
         PathHud.add(
             Component.literal(
-                if (enabled) "Showing ${ClientPathState.routes.size} saved route(s)" else "Saved routes hidden"
+                if (hiding) "All routes hidden" else "Showing ${ClientPathState.routes.size} route(s)"
             ),
             SHOW_ARGB
         )
@@ -207,12 +284,7 @@ object PathKeybinds {
     private const val SHOW_ARGB = 0xFF9BE38A.toInt()
 
     /** Swallow presses that happened without shift so they can't fire later when shift goes down. */
-    private fun drainClicks() {
-        while (record.consumeClick()) Unit
-        while (play.consumeClick()) Unit
-        while (show.consumeClick()) Unit
-        while (stop.consumeClick()) Unit
-        while (cancel.consumeClick()) Unit
-        while (follow.consumeClick()) Unit
+    private fun drainClicks(vararg mappings: KeyMapping) {
+        for (mapping in mappings) while (mapping.consumeClick()) Unit
     }
 }

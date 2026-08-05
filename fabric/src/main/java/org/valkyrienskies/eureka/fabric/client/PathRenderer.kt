@@ -30,8 +30,10 @@ import kotlin.math.sqrt
  * - A route being RECORDED: its trail, always, for the player recording it.
  * - The two SNAP MARKERS: only once the recording arms (back in the start chunk, far enough round to be a
  *   loop). They pulse, and brighten as the gap closes, so "nearly touching" reads at a glance.
- * - A route being FLOWN: always, offset to where the ship is actually flying it.
- * - Every SAVED route: only while SHIFT+H is on.
+ * - A route being FLOWN: unless hidden, offset to where the ship is actually flying it.
+ * - Every SAVED route: only while the SHIFT+H toggle is on.
+ *
+ * Hiding beats both -- SHIFT+H clears everything on screen, whatever its reason for being there.
  *
  * ## Draw distance
  * Vertices are emitted in camera-relative double precision, so a route stays exact however far from the world
@@ -100,8 +102,8 @@ object PathRenderer {
 
         for (route in state.routes.values) {
             val offset = flown[route.id]
-            if (route.id in state.hiddenRoutes) continue
-            if (offset == null && !state.showAll) continue
+            // One predicate, shared with the hide key, so the two can't disagree about what is on screen.
+            if (!state.isVisible(route.id, offset != null)) continue
             drawRoute(consumer, pose, route.path, offset, cam.x, cam.y, cam.z, maxDistSq, colorFor(route.id, offset != null))
         }
 
@@ -164,11 +166,16 @@ object PathRenderer {
         consumer: VertexConsumer, pose: PoseStack.Pose, rec: ClientPathState.Recording,
         camX: Double, camY: Double, camZ: Double
     ) {
-        val snapRadius = EurekaConfig.SERVER.pathSnapRadius
-        val touchAt = snapRadius + PathRecorder.SHIP_MARKER_RADIUS
+        // Both spheres scale with the recording ship, so a big hull gets a target it can actually park on --
+        // and since the spheres ARE the snap distance, what you see is still exactly what closes the loop.
+        val scale = rec.markerScale
+        val snapRadius = EurekaConfig.SERVER.pathSnapRadius * scale
+        val touchAt = PathRecorder.touchDistance(scale)
 
-        // 1 when touching, 0 when a chunk away. Drives both brightness and pulse rate.
-        val closeness = (1.0 - ((rec.gap - touchAt) / CLOSENESS_RANGE)).coerceIn(0.0, 1.0)
+        // 1 when touching, 0 when a chunk and a half further out. Drives both brightness and pulse rate.
+        // Scaled with the markers: a hull that snaps from 13 blocks out needs its warning to start further
+        // away too, or the whole ramp would be over before the spheres were anywhere near each other.
+        val closeness = (1.0 - ((rec.gap - touchAt) / (CLOSENESS_RANGE * scale))).coerceIn(0.0, 1.0)
 
         val phase = (System.currentTimeMillis() % PULSE_PERIOD_MS).toDouble() / PULSE_PERIOD_MS
         val pulse = 0.5 + 0.5 * sin(phase * 2.0 * PI * (1.0 + closeness * 2.0))
@@ -178,7 +185,7 @@ object PathRenderer {
         val shipArgb = (alpha shl 24) or SNAP_SHIP_RGB
 
         sphere(consumer, pose, rec.start, snapRadius * (1.0 + 0.06 * pulse), camX, camY, camZ, startArgb)
-        sphere(consumer, pose, rec.keel, PathRecorder.SHIP_MARKER_RADIUS, camX, camY, camZ, shipArgb)
+        sphere(consumer, pose, rec.keel, PathRecorder.SHIP_MARKER_RADIUS * scale, camX, camY, camZ, shipArgb)
     }
 
     /** A wireframe sphere as three great circles -- cheap, and reads as a sphere from any angle. */

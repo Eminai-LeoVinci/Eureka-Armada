@@ -62,6 +62,16 @@ class PathBinding {
     var laps: Int = 0
 
     /**
+     * Whether the ship is bound to the route but sitting still on it -- SHIFT+P pressed once.
+     *
+     * Persisted, and it has to be. A pause is a deliberate "not now", so a ship left paused overnight must not
+     * be under way the moment the world comes back. Missing from an older save's JSON simply reads as false,
+     * which is the right answer for a binding written before pausing existed.
+     */
+    @JsonProperty("paused")
+    var paused: Boolean = false
+
+    /**
      * Who set this ship going, as a UUID string, so a resumed route can report itself to them.
      *
      * A string because that is the one representation Jackson round-trips through the legacy attachment
@@ -81,6 +91,7 @@ class PathBinding {
         this.arc = arc
         this.laps = laps
         this.owner = owner?.toString()
+        this.paused = false
     }
 
     fun clear() {
@@ -89,6 +100,7 @@ class PathBinding {
         arc = -1.0
         laps = 0
         owner = null
+        paused = false
     }
 
     companion object {

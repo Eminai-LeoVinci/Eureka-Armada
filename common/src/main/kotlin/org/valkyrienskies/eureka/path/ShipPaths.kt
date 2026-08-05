@@ -9,6 +9,7 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.follow.ShipFollows
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipFootprint
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getShipMountedTo
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -134,6 +135,11 @@ object ShipPaths {
     }
 
     private fun tickFollower(level: ServerLevel, ship: LoadedServerShip, follower: PathFollower) {
+        // Paused: still bound, still holding its place in the route, simply not being steered. Deliberately
+        // ahead of the helm check below -- a paused ship whose helm is being rebuilt has no course to lose, so
+        // there is nothing here worth tearing the binding down over.
+        if (follower.paused) return
+
         val control = ship.getAttachment(EurekaShipControl::class.java)
         if (control == null) {
             // The helm is gone, so there is nothing left to steer with -- and the binding has to go with it, or
@@ -165,7 +171,7 @@ object ShipPaths {
     /**
      * Hand the ship back to the pilot when they hold a turn or an elevation input, and report having done so.
      *
-     * The same hold gesture SHIFT+C uses, for the same reason: a brief input is how you nudge a following ship
+     * The same hold gesture the hotkeys use, for the same reason: a brief input is how you nudge a following ship
      * past an obstacle, and it should stay a nudge -- the route simply re-acquires afterwards, which is the
      * whole point of pure pursuit. Only a sustained input means "I have the wheel now".
      *
@@ -273,6 +279,18 @@ object ShipPaths {
         // freezing an offset measured from a fallback anchor.
         val keel = KeelAnchor.world(level, ship, Vector3d()) ?: return
 
+        // Paused when it was saved, so it comes back paused: rebuild the bookkeeping and leave the hull alone.
+        // No pathBegin, because that is what tells the physics something is about to steer -- and nothing is.
+        // Nothing is announced either; a ship that was deliberately held is not news when the world comes back.
+        if (binding.paused) {
+            followers[ship.id] = PathFollower(
+                ship.id, binding.ownerId, path, Vector3d(binding.offset),
+                startArc = binding.arc,
+                startLaps = binding.laps
+            ).also { it.paused = true }
+            return
+        }
+
         if (!control.pathBegin()) {
             binding.clear()
             tell(
@@ -348,12 +366,15 @@ object ShipPaths {
 
     // region player actions
 
-    /** SHIFT+R. Begin recording the ship the player is aboard. */
+    /** SHIFT+R, tapped. Begin recording the ship the player is aboard. */
     fun startRecording(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to record a route.")
 
         if (recorders.containsKey(ship.id)) return fail(player, "This ship is already recording a route.")
-        if (followers.containsKey(ship.id)) return fail(player, "Stop following a route before recording one.")
+        // A paused ship counts: it still owns the wheel and still holds a binding.
+        if (followers.containsKey(ship.id)) {
+            return fail(player, "This ship is on a route -- hold SHIFT+P to release it first.")
+        }
         if (ShipFollows.isFollowing(ship.id)) {
             return fail(player, "This ship is following another -- break that off first.")
         }
@@ -361,28 +382,40 @@ object ShipPaths {
         val keel = KeelAnchor.world(level, ship, Vector3d())
             ?: return fail(player, "This ship has no blocks to measure from.")
 
-        recorders[ship.id] = PathRecorder(ship.id, player.uuid, keel)
+        recorders[ship.id] = PathRecorder(
+            ship.id, player.uuid, keel,
+            markerScale = PathRecorder.markerScaleFor(ShipFootprint.of(ship))
+        )
         ok(
             player,
             "Recording. Fly the route and come back here to close the loop " +
-                "(SHIFT+C to discard)."
+                "(hold SHIFT+R to discard)."
         )
     }
 
-    /** SHIFT+C. Throw away the in-progress recording. */
+    /** SHIFT+R held for two seconds. Throw away the in-progress recording. */
     fun cancelRecording(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to cancel its recording.")
         val recorder = recorders.remove(ship.id) ?: return fail(player, "This ship isn't recording a route.")
         ok(player, "Recording discarded (${recorder.length.toInt()} blocks).")
     }
 
-    /** SHIFT+P. Start following the nearest route. */
-    fun play(level: ServerLevel, player: ServerPlayer) {
+    /**
+     * SHIFT+P, tapped. One key for all three of start, pause and resume.
+     *
+     * Which of the three is meant is decided HERE rather than on the client, because the client knows only
+     * which route a ship is bound to and not whether it is paused -- and a toggle that guessed wrong would put
+     * a ship under way when the player meant to hold it. Releasing the route outright is the 2-second hold on
+     * the same key, which arrives as [stop].
+     */
+    fun playOrPause(level: ServerLevel, player: ServerPlayer) {
         val cfg = EurekaConfig.SERVER
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to fly a route.")
 
         if (recorders.containsKey(ship.id)) return fail(player, "This ship is still recording a route.")
-        if (followers.containsKey(ship.id)) return fail(player, "This ship is already following a route.")
+
+        followers[ship.id]?.let { return togglePause(level, ship, player, it) }
+
         // A route and a pursuit both own the wheel, so a hull can only be under one of them. Refused rather than
         // silently taking over, because which one you meant is not something this can guess.
         if (ShipFollows.isFollowing(ship.id)) {
@@ -439,11 +472,51 @@ object ShipPaths {
         }
     }
 
-    /** SHIFT+S. Stop following, and bring the ship to rest. */
+    /**
+     * Hold the ship on its route, or set it going again. The middle state of [playOrPause].
+     *
+     * Pausing hands the hull back exactly as stopping does -- steering released, cruise dropped, the ship walked
+     * down to rest -- because a route never owned the throttle. Releasing the wheel alone would leave a cruising
+     * ship carrying straight on off the line, which is the one thing "paused" must not look like. What survives
+     * is the binding: the arc, the lap count and the offset, so resuming picks the line up where it was rather
+     * than re-acquiring the nearest point.
+     */
+    private fun togglePause(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        player: ServerPlayer,
+        follower: PathFollower
+    ) {
+        val control = ship.getAttachment(EurekaShipControl::class.java)
+            ?: return fail(player, "This ship has no helm.")
+
+        if (!follower.paused) {
+            follower.paused = true
+            PathBinding.get(ship)?.paused = true
+            control.pathRelease(stopShip = true)
+            ok(player, "Paused on '${follower.path.name}' -- SHIFT+P again to carry on.")
+            return
+        }
+
+        // Same refusal play() makes, and it has to be repeated: a ship can be told to chase another while it
+        // sits paused on a route, and letting it resume would put two controllers on one wheel.
+        if (ShipFollows.isFollowing(ship.id)) {
+            return fail(player, "This ship is following another -- break that off first.")
+        }
+        if (!control.pathBegin()) {
+            return fail(player, "This ship needs a helm before it can follow a route.")
+        }
+
+        follower.paused = false
+        PathBinding.get(ship)?.paused = false
+        ok(player, "Following '${follower.path.name}' again.")
+    }
+
+    /** SHIFT+P held for two seconds. Stop following, forget the binding, and bring the ship to rest. */
     fun stop(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to stop it.")
         val follower = release(ship, stopShip = true) ?: return fail(player, "This ship isn't following a route.")
-        ok(player, "Stopped following '${follower.path.name}'.")
+        ok(player, "Released from '${follower.path.name}'.")
     }
 
     /** Stop a ship following a route, without needing a player. Used by the command and by unbinding. */

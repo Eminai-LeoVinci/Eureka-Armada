@@ -85,6 +85,11 @@ object PathNetworkingFabric {
     }
 
     // The hotkey actions a client can ask for. Ordinals are the wire format; append only.
+    //
+    // Four of these are two keys' worth of gestures rather than four keys: SHIFT+R taps to START and is held to
+    // CANCEL, SHIFT+P taps to PLAY-or-pause and is held to STOP. The split between tap and hold is made on the
+    // client, since only it can time a key; the split between play, pause and resume is made on the server,
+    // since only it knows which of the three the ship is in.
     const val ACTION_RECORD_START: Byte = 0
     const val ACTION_RECORD_CANCEL: Byte = 1
     const val ACTION_PLAY: Byte = 2
@@ -168,7 +173,7 @@ object PathNetworkingFabric {
                 when (action) {
                     ACTION_RECORD_START -> ShipPaths.startRecording(level, player)
                     ACTION_RECORD_CANCEL -> ShipPaths.cancelRecording(level, player)
-                    ACTION_PLAY -> ShipPaths.play(level, player)
+                    ACTION_PLAY -> ShipPaths.playOrPause(level, player)
                     ACTION_STOP -> ShipPaths.stop(level, player)
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
                     ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
@@ -326,6 +331,9 @@ object PathNetworkingFabric {
             // to work out where a hull's keel is on its own.
             writeVec(buf, recorder.keel.x, recorder.keel.y, recorder.keel.z)
             buf.writeDouble(recorder.gap)
+            // Constant for the whole recording, and sent every update anyway -- one double against not having
+            // to invent a second packet for a value the client cannot derive.
+            buf.writeDouble(recorder.markerScale)
 
             // Followers ride along in the same packet; the list is short and changes rarely.
             writeFollowers(buf, followers)
@@ -461,6 +469,7 @@ object PathNetworkingFabric {
         val start: Vector3d,
         val keel: Vector3d,
         val gap: Double,
+        val markerScale: Double,
         val followers: List<ClientPathState.Following>,
         val localRouteId: Long
     ) {
@@ -472,6 +481,7 @@ object PathNetworkingFabric {
                 rec.start.set(start)
                 rec.keel.set(keel)
                 rec.gap = gap
+                rec.markerScale = markerScale
             } else {
                 ClientPathState.recordings.clear()
             }
@@ -493,6 +503,7 @@ object PathNetworkingFabric {
         val start = Vector3d()
         val keel = Vector3d()
         var gap = 0.0
+        var markerScale = 1.0
 
         if (hasRecording) {
             shipId = buf.readLong()
@@ -503,6 +514,7 @@ object PathNetworkingFabric {
             start.set(buf.readDouble(), buf.readDouble(), buf.readDouble())
             keel.set(buf.readDouble(), buf.readDouble(), buf.readDouble())
             gap = buf.readDouble()
+            markerScale = buf.readDouble()
         }
 
         val followerCount = buf.readVarInt()
@@ -514,7 +526,7 @@ object PathNetworkingFabric {
             followers.add(ClientPathState.Following(followShipId, pathId, offset))
         }
 
-        return LiveUpdate(shipId, from, points, armed, start, keel, gap, followers, buf.readLong())
+        return LiveUpdate(shipId, from, points, armed, start, keel, gap, markerScale, followers, buf.readLong())
     }
 
     private fun writeVec(buf: FriendlyByteBuf, x: Double, y: Double, z: Double) {

@@ -68,6 +68,16 @@ class PathFollower(
     var laps = startLaps
         private set
 
+    /**
+     * Bound to the route but not being steered along it -- SHIFT+P pressed once. Owned by [ShipPaths].
+     *
+     * Held here rather than by taking the follower out of the map, because everything that makes a pause a
+     * pause rather than a stop lives in this object: [arc], [laps] and the offset. A paused ship is still
+     * BUSY (it owns the wheel as far as recording and pursuit are concerned) and is still drawn on the client
+     * as flying its route, which is exactly what being bound but idle should look like.
+     */
+    var paused = false
+
     /** Live distance from the ship's keel to where it should be, for the status readout. */
     var trackingError = 0.0
         private set

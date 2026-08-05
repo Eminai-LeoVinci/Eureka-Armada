@@ -12,20 +12,27 @@ import net.minecraft.resources.Identifier
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaMod
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
- * A small stack of path messages above the hotbar, plus a single-slot prompt line.
+ * A small stack of path messages above the hotbar, a single-slot prompt line, and the hold ring at the
+ * crosshair.
  *
  * The action bar this replaces holds one message and is overwritten by the next, so a burst of three arriving
  * on the same tick showed only the third -- for a few frames. Here they queue instead: newest at the bottom,
  * each holding for several seconds and fading out on its own clock.
  *
- * ## Two channels, because they behave differently
+ * ## Three channels, because they behave differently
  * [add] is for events -- things that happened once and are worth reading. They STACK.
  *
  * [prompt] is for "keep holding this key", which is re-sent every tick for as long as the key is down. Stacking
  * that would bury everything else under forty identical lines in two seconds, so it gets one slot that the
  * newest write replaces and that clears itself shortly after the writes stop.
+ *
+ * [setHoldProgress] is the ring that fills round the crosshair while SHIFT+R or SHIFT+P is held down. It is at
+ * the crosshair rather than down with the text because it is not something to READ -- it answers "how much
+ * longer" at a glance, without moving your eyes off what the ship is about to hit.
  */
 @Environment(EnvType.CLIENT)
 object PathHud {
@@ -42,6 +49,10 @@ object PathHud {
     @Volatile
     private var promptUntilMs = 0L
 
+    /** How full the hold ring is, 0 to 1. Written each client tick by [PathKeybinds], read on the render thread. */
+    @Volatile
+    private var holdProgress = 0.0f
+
     /** Lines are dropped oldest-first past this, so a runaway sender can't fill the screen. */
     private const val MAX_ENTRIES = 6
 
@@ -55,6 +66,18 @@ object PathHud {
 
     /** Bottom of the stack, measured up from the bottom of the screen -- clear of the hotbar and action bar. */
     private const val BOTTOM_MARGIN = 84
+
+    /**
+     * Ring radius in GUI pixels. The crosshair is 15x15, so anything past 8 clears it; 9 leaves a hair of gap
+     * rather than appearing to be part of it.
+     */
+    private const val RING_RADIUS = 9.0
+
+    /** Enough dots that a 9-pixel radius reads as a line rather than as beads. */
+    private const val RING_SEGMENTS = 56
+
+    private const val RING_TRACK_ARGB = 0x3866CCFF
+    private const val RING_FILL_ARGB = 0xE066CCFF.toInt()
 
     fun register() {
         HudElementRegistry.addLast(
@@ -76,14 +99,22 @@ object PathHud {
         promptUntilMs = System.currentTimeMillis() + PROMPT_LINGER_MS
     }
 
+    /** Set how full the hold ring is, 0 to 1. Called every client tick; 0 means "don't draw it". */
+    fun setHoldProgress(progress: Float) {
+        holdProgress = progress.coerceIn(0.0f, 1.0f)
+    }
+
     fun clear() {
         entries.clear()
         promptText = null
+        holdProgress = 0.0f
     }
 
     private fun render(graphics: GuiGraphics, @Suppress("UNUSED_PARAMETER") delta: DeltaTracker) {
         val mc = Minecraft.getInstance()
         if (mc.options.hideGui || mc.player == null) return
+
+        drawHoldRing(graphics, holdProgress)
 
         val now = System.currentTimeMillis()
         entries.removeAll { now - it.bornMs >= it.lifeMs }
@@ -111,6 +142,34 @@ object PathHud {
             val alpha = if (remaining >= FADE_MS) 1.0f else (remaining.toFloat() / FADE_MS).coerceIn(0.0f, 1.0f)
             drawLine(graphics, font, entry.text, centreX, y, entry.argb, alpha)
             y -= LINE_HEIGHT
+        }
+    }
+
+    /**
+     * The hold ring: a dim circle of dots round the crosshair, brightening clockwise from twelve as the key is
+     * held, closed when the action fires.
+     *
+     * Drawn as single pixels rather than as an arc primitive because [GuiGraphics.fill] is the whole toolkit
+     * here -- no shader, no mesh, nothing to keep in sync with a resource pack, and at this radius a ring of
+     * 56 dots is indistinguishable from a stroked circle.
+     *
+     * The unfilled track is drawn too, not just the filled part. Without it there is no way to tell a hold
+     * that has barely started from one nearly done: a lone bright arc has no scale.
+     */
+    private fun drawHoldRing(graphics: GuiGraphics, progress: Float) {
+        if (progress <= 0.0f) return
+
+        val centreX = graphics.guiWidth() / 2
+        val centreY = graphics.guiHeight() / 2
+
+        for (i in 0 until RING_SEGMENTS) {
+            val fraction = i.toFloat() / RING_SEGMENTS
+            // From twelve o'clock, clockwise. Screen Y grows downward, so a plain sine sweeps that way already.
+            val angle = fraction * 2.0 * Math.PI - Math.PI / 2.0
+            val x = centreX + Math.round(cos(angle) * RING_RADIUS).toInt()
+            val y = centreY + Math.round(sin(angle) * RING_RADIUS).toInt()
+            val argb = if (fraction < progress) RING_FILL_ARGB else RING_TRACK_ARGB
+            graphics.fill(x, y, x + 1, y + 1, argb)
         }
     }
 
