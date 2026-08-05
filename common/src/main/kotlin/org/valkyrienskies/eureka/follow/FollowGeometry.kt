@@ -4,9 +4,13 @@ import org.joml.Quaterniond
 import org.joml.Vector3d
 import org.joml.Vector3dc
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipFootprint
 import org.valkyrienskies.mod.common.util.toJOMLD
 import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * Where a ship is, which way it is pointing, and how big it is along a given direction.
@@ -135,13 +139,51 @@ object FollowGeometry {
     }
 
     /**
+     * Blocks of clear water these two hulls should hold between them.
+     *
+     * Sized off the pair rather than off either ship, because the gap is one piece of water and both of them
+     * are in it: two rafts want a few blocks and two galleons want room to turn without touching, and a
+     * galleon beside a raft wants something in between. Averaging also makes the result the same whichever of
+     * the two is doing the following, which matters because the leader never gets a say.
+     *
+     * Rounded DOWN, per the rule this was specified with -- a footprint of 38 holds 11 blocks, and it takes 40
+     * to reach 12 rather than 38 rounding up to it.
+     */
+    fun gapBetween(leader: LoadedServerShip, follower: LoadedServerShip): Double {
+        val cfg = EurekaConfig.SERVER
+        val base = cfg.followGapBase
+        // A step of zero would mean "every ship is infinitely large", so the honest reading is that scaling is
+        // switched off and every pair holds the base gap.
+        if (cfg.followGapStep <= 0.0) return base
+
+        val pair = (ShipFootprint.of(leader) + ShipFootprint.of(follower)) * 0.5
+        // coerceIn rather than coerceAtMost: a max edited below the base would otherwise invert the pair.
+        return (base + floor(pair / cfg.followGapStep)).coerceIn(base, max(base, cfg.followGapMax))
+    }
+
+    /**
+     * The beam vector of a hull whose forward direction is [forward], written into [dest].
+     *
+     * Same handedness as [Frame.beam] -- `up x forward` -- so a sign taken against one is a sign against the
+     * other.
+     */
+    fun beamOf(forward: Vector3dc, dest: Vector3d): Vector3d = dest.set(forward.z(), 0.0, -forward.x())
+
+    /**
      * Centre-to-centre lateral distance that leaves [gap] blocks of clear water between the two hulls.
      *
-     * Measured hull to hull rather than centre to centre so a sloop and a galleon leave the same visible gap.
-     * A fixed centre distance would put the galleon's bulwark through the sloop's rail.
+     * Measured hull to hull rather than centre to centre so the gap means the same thing at any size. A fixed
+     * centre distance would put the galleon's bulwark through the sloop's rail.
+     *
+     * [followerHalfBeam] is the follower's half-width across ITS OWN beam, and passing it in rather than
+     * measuring it here is load-bearing. Measured along the LEADER's beam it would be a function of the
+     * follower's instantaneous heading, and for a long hull a violent one -- a 20x60 ship yawed thirty degrees
+     * reads 24 blocks wide instead of 10. The station would then slide outward exactly when the follower turned
+     * to reach it, which is a loop that feeds itself: the ship swings wide, reads wider still, and swings wider.
+     * The follower's own beam is fixed in its own frame, so the station stays put while it manoeuvres.
      */
-    fun standoff(leader: LoadedServerShip, follower: LoadedServerShip, frame: Frame, gap: Double): Double =
-        halfExtentAlong(leader, frame.beam) + halfExtentAlong(follower, frame.beam) + gap
+    fun standoff(leader: LoadedServerShip, frame: Frame, followerHalfBeam: Double, gap: Double): Double =
+        halfExtentAlong(leader, frame.beam) + followerHalfBeam + gap
 
     /**
      * Where the follower should be sitting, written into [dest].

@@ -12,6 +12,7 @@ import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.path.ShipPaths
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipFootprint
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -109,11 +110,13 @@ object ShipFollows {
             return
         }
 
-        // Normally just the configured distance. A pursuit ordered from further out than that -- the crosshair
-        // reaches further than a follower can hold station -- is instead measured against how close it has
-        // actually managed to get, so it breaks off when it stops making ground rather than on the tick after
-        // the order was given. The moment it closes inside the configured range this collapses back to it.
-        if (follower.range > max(cfg.followBreakRange, follower.closestRange)) {
+        // One rule, and it is the user's: a pursuit ends when the leader OUTPACES the follower, and at nothing
+        // else. Everything that makes that hold is in `secondsAdrift` -- the distance is measured from the
+        // station rather than the leader's centre so a wide berth doesn't count against a ship that is keeping
+        // perfect formation, and it has to hold continuously, because a leader putting the wheel over throws
+        // the station point sideways faster than any hull can chase it and that is manoeuvring, not escaping.
+        // The `> 0.0` is not redundant: it is what keeps a grace of zero meaning "the moment it goes adrift".
+        if (follower.secondsAdrift > 0.0 && follower.secondsAdrift >= cfg.followBreakGrace) {
             val name = ShipCrew.name(leader)
             release(ship, stopShip = true)
             ShipCrew.tell(
@@ -150,10 +153,13 @@ object ShipFollows {
     ) {
         val cfg = EurekaConfig.SERVER
         val centre = FollowGeometry.centreOf(ship, scratch) ?: return
-        val standoff = FollowGeometry.standoff(leader, ship, frame, cfg.followGap)
 
         val lateral = (centre.x - frame.centre.x) * frame.beam.x + (centre.z - frame.centre.z) * frame.beam.z
-        val threshold = standoff * cfg.followSideFlipMargin
+        // Last tick's standoff rather than a fresh one: this runs before the follower has been stepped, and the
+        // ship's own heading -- which the standoff is now measured against -- is only worked out in there. A
+        // tick of staleness in a hysteresis band is worth nothing. Zero on the very first tick, which is safe:
+        // the side was just taken from this same dot product, so the test below cannot flip it.
+        val threshold = follower.standoff * cfg.followSideFlipMargin
 
         if (lateral * follower.side >= -threshold) return
 
@@ -275,8 +281,11 @@ object ShipFollows {
             return fail(player, "This ship's helm hasn't come up yet -- try again in a moment.")
         }
 
-        val target = lookedAtShip(level, player, cfg.followTargetRange)
-            ?: return fail(player, "Look at a ship to follow it (within ${cfg.followTargetRange.toInt()}m).")
+        // Sized off the ship giving the order, not the one being pointed at -- reach is a fact about the vessel
+        // setting off, and the target isn't known until the ray has already been cast.
+        val reach = targetRange(own)
+        val target = lookedAtShip(level, player, reach)
+            ?: return fail(player, "Look at a ship to follow it (within ${reach.toInt()}m).")
 
         if (ArmadaGroup.sameVessel(level, own, target)) {
             return fail(player, "That's your own vessel.")
@@ -296,7 +305,7 @@ object ShipFollows {
         }
 
         if (ShipPaths.isBusy(own.id)) {
-            return fail(player, "This ship is busy with a route -- stop that first.")
+            return fail(player, "This ship is busy with a route -- hold SHIFT+P to release it first.")
         }
 
         // A chases B chases A is a standoff neither ship can resolve: each keeps station on something that is
@@ -330,8 +339,7 @@ object ShipFollows {
             leaderId = target.id,
             ownerId = player.uuid,
             side = side,
-            slot = claimSlot(target.id, side, own.id),
-            acquiredAt = frame.centre.distance(centre)
+            slot = claimSlot(target.id, side, own.id)
         )
 
         val leaderName = ShipCrew.name(target)
@@ -371,6 +379,21 @@ object ShipFollows {
     // endregion
 
     // region helpers
+
+    /**
+     * How far this ship can reach to pick up something to follow, in blocks.
+     *
+     * Scaled because a fixed reach reads as two different features depending on what you are standing on: on a
+     * raft 160 blocks is most of the horizon, and on a galleon that can barely see past its own rigging it is
+     * the next ship over. Every size band adds `followTargetRangeStep`, so an 80-block reach on the smallest
+     * hull becomes 200 at a footprint of 20 and tops out at `followTargetRangeMax`.
+     */
+    private fun targetRange(ship: LoadedServerShip): Double {
+        val cfg = EurekaConfig.SERVER
+        val reach = cfg.followTargetRange + cfg.followTargetRangeStep * ShipFootprint.bands(ShipFootprint.of(ship))
+        // coerceIn rather than coerceAtMost: a max edited below the base would otherwise invert the pair.
+        return reach.coerceIn(cfg.followTargetRange, max(cfg.followTargetRange, cfg.followTargetRangeMax))
+    }
 
     /**
      * The ship the player is looking at, or null.

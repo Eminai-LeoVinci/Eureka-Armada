@@ -553,38 +553,100 @@ object EurekaConfig {
         // holding position beside a moving vessel is a speed problem before it is a steering one.
 
         @JsonSchema(
-            description = "Ship following: how far Sneak+F will reach to pick up a target ship, in blocks. The " +
-                "ray is blocked by terrain and by hulls in the way, so you must actually be able to see what " +
-                "you are pointing at. May exceed followBreakRange: a pursuit begun beyond that distance is " +
-                "given until it stops closing before it is called off. Default 160.0."
+            description = "Ship following: how far Sneak+F reaches to pick up a target, in blocks, for the " +
+                "SMALLEST ships. Bigger hulls see further -- every 5 blocks of your own ship's footprint adds " +
+                "followTargetRangeStep, up to followTargetRangeMax. The ray is blocked by terrain and by hulls " +
+                "in the way, so you must actually be able to see what you are pointing at. May exceed " +
+                "followBreakRange: a pursuit begun beyond that distance runs for as long as it is still making " +
+                "ground (see followBreakSlack). Default 80.0."
         )
-        var followTargetRange = 160.0
+        var followTargetRange = 80.0
 
         @JsonSchema(
-            description = "Ship following: hull-to-hull standoff held alongside the leader, in blocks. Measured " +
-                "between the two hulls' beams rather than between their centres, so big ships and small ones " +
-                "leave the same gap. Default 11.0."
+            description = "Ship following: blocks of reach each 5 blocks of footprint adds to followTargetRange. " +
+                "Measured on YOUR ship, not the target -- the reach is how far a vessel can pick something out " +
+                "and set off after it, which is a fact about the vessel giving the order. At the defaults a " +
+                "5-block raft reaches 80, a 20-block hull reaches 200 and a 40-block one reaches 360. " +
+                "Default 40.0."
         )
-        var followGap = 11.0
+        var followTargetRangeStep = 40.0
 
         @JsonSchema(
-            description = "Ship following: centre-to-centre distance at which a follower gives up and coasts to " +
-                "a stop, in blocks. This is what happens when a leader is simply faster -- the follower is never " +
-                "given speed it doesn't have, so it falls behind until this trips. A pursuit that started " +
-                "further out than this keeps going while it is still closing, and only breaks off once it " +
-                "starts losing ground again. Default 90.0."
+            description = "Ship following: the furthest Sneak+F will ever reach, in blocks. Hit at a footprint " +
+                "of 60 with the default base and step; past that the biggest hulls all see the same distance. " +
+                "Default 520.0."
+        )
+        var followTargetRangeMax = 520.0
+
+        @JsonSchema(
+            description = "Ship following: smallest gap of clear water held alongside the leader, in blocks. " +
+                "The gap is measured hull to hull, not centre to centre -- both hulls' own widths are added on " +
+                "top of it -- and it is what two of the smallest possible ships would hold. Default 4.0."
+        )
+        var followGapBase = 4.0
+
+        @JsonSchema(
+            description = "Ship following: blocks of hull footprint that buy one more block of gap. A ship's " +
+                "footprint is the mean of its two horizontal spans, and the two ships' footprints are averaged, " +
+                "so a 38-block ship following a 22-block one is sized as 30. The result is rounded DOWN, so " +
+                "at the default 5.0 a footprint of 38 holds 11 blocks and only 40 reaches 12. Default 5.0."
+        )
+        var followGapStep = 5.0
+
+        @JsonSchema(
+            description = "Ship following: the widest the gap may ever open, in blocks. Reached at a footprint " +
+                "of 60 with the default base and step; past that the biggest hulls hold station no further out " +
+                "than each other. Default 16.0."
+        )
+        var followGapMax = 16.0
+
+        @JsonSchema(
+            description = "Ship following: how far from its STATION a follower may be dragged, in blocks, before " +
+                "it gives up and coasts to a stop. Measured from the station rather than from the leader, so a " +
+                "big hull holding a wide berth is not already half way to its limit while perfectly in formation. " +
+                "This is what happens when a leader is simply faster -- the follower is never given speed it " +
+                "doesn't have, so it falls behind until this trips. Default 90.0."
         )
         var followBreakRange = 90.0
 
         @JsonSchema(
-            description = "Ship following: distance from station, in blocks, over which steering blends from " +
-                "chasing the station point to matching the leader's heading. Higher = lines up with the leader " +
-                "from further out; lower = chases the point harder and squares up late. Default 40.0."
+            description = "Ship following: seconds the follower must be adrift CONTINUOUSLY before the pursuit " +
+                "is called off. Anything shorter than this is a leader manoeuvring, not a leader escaping -- a " +
+                "hard turn swings the station point away faster than any hull can follow, and without this the " +
+                "pursuit would die on the first corner. Reset to zero the moment the ship is back inside its " +
+                "limit. Default 4.0."
         )
-        var followBlendRange = 40.0
+        var followBreakGrace = 4.0
+
+        @JsonSchema(
+            description = "Ship following: blocks of ground a distant pursuit may LOSE before it counts as " +
+                "adrift. Only matters while further from station than followBreakRange, which is where a " +
+                "long-range order starts: there the test is against the closest that pursuit has managed rather " +
+                "than the flat limit, and this is the slack in it. Without slack any tick that ended a hair " +
+                "further out than the best so far would break the pursuit off. Default 20.0."
+        )
+        var followBreakSlack = 20.0
+
+        @JsonSchema(
+            description = "Ship following: how far ahead the follower aims, in blocks, when steering off a " +
+                "sideways error. It sets how hard a ship crabs toward its station: the aim is offset by the " +
+                "sideways error at this distance, so an error equal to this one is a 45-degree lean and the " +
+                "angle eases off as it closes. Higher = a lazier, straighter join; lower = a sharper cut in. " +
+                "Being ahead of or behind station never steers at all -- that is the throttle's job. Default 30.0."
+        )
+        var followLookahead = 30.0
 
         @JsonSchema(description = "Ship following: commanded yaw rate per radian of heading error. Default 1.2.")
         var followTurnGain = 1.2
+
+        @JsonSchema(
+            description = "Ship following: how much of the yaw the ship ALREADY has is taken back out of the " +
+                "turn demand. Steering on heading error alone is a spring with no damper -- the hull is still " +
+                "swinging hardest at the moment the error reaches zero, so it sails past and comes back. Raise " +
+                "it if a follower wallows from side to side; lower it if it is slow to answer the wheel. Note " +
+                "that it also softens the steady turn rate, by 1/(1 + this). Default 0.6."
+        )
+        var followTurnDamping = 0.6
 
         @JsonSchema(
             description = "Ship following: m/s of closing speed asked for per block of along-track error. This " +
