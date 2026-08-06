@@ -194,17 +194,38 @@ object FollowGeometry {
      *
      * Height is the leader's, not the follower's: coming alongside means alongside, and a ship holding station
      * ten blocks below the leader is not in the fight.
+     *
+     * [keelLift] then raises or lowers that height so the two hulls sit on a common BOTTOM rather than a common
+     * middle -- see [keelLiftFor]. Zero restores plain centre-to-centre stationing.
      */
     fun stationPoint(
         leader: Frame,
         side: Int,
         standoff: Double,
         astern: Double,
+        keelLift: Double,
         dest: Vector3d
     ): Vector3d = dest.set(leader.centre)
         .fma(side * standoff, leader.beam)
         .fma(-astern, leader.forward)
-        .also { it.y = leader.centre.y }
+        .also { it.y = leader.centre.y + keelLift }
+
+    /**
+     * How much higher than the leader's centre a follower's centre must sit for the two KEELS to be level.
+     *
+     * Matching centres is the obvious reading of "come alongside" and it is wrong wherever the two hulls are
+     * different depths. A tall ship stationed centre-to-centre on a launch hangs half its draught below the
+     * launch's bottom -- under water, if that is where the water is -- and a shallow one alongside a galleon
+     * floats with nothing under it. Bottoms are what both of them share: it is the waterline at sea and it is
+     * the deck of the formation in the air, and it is the one that looks right in both.
+     *
+     * The difference of the two half-heights, so the follower's centre is raised by exactly as much as its own
+     * hull is deeper than the leader's. Measured as a support radius about world UP, so it is the depth of the
+     * hull as it is actually lying -- a ship heeled over is wider under its centre than one sitting level, and
+     * this follows it rather than reading a number off the un-rotated box.
+     */
+    fun keelLiftFor(leader: LoadedServerShip, follower: LoadedServerShip): Double =
+        halfExtentAlong(follower, UP) - halfExtentAlong(leader, UP)
 
     /** Which side of the leader a point is on: +1, -1, or 0 when it is dead on the centreline. */
     fun sideOf(leader: Frame, point: Vector3dc, deadband: Double): Int {
@@ -233,6 +254,9 @@ object FollowGeometry {
 
     /** Below this (m/s) a hull's velocity says nothing about which way it is pointing. */
     private const val MOVING_SPEED = 0.5
+
+    /** World up, for the hull-depth measurement [keelLiftFor] is built on. */
+    private val UP: Vector3dc = Vector3d(0.0, 1.0, 0.0)
 
     private const val EPSILON = 1.0e-9
 }

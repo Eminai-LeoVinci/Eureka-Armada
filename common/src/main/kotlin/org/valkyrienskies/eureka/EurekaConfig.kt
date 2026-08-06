@@ -687,6 +687,14 @@ object EurekaConfig {
         var followReverseSpeed = 2.0
 
         @JsonSchema(
+            description = "Ship following: hold station with the two hulls' BOTTOMS level rather than their " +
+                "centres, so a deep ship coming alongside a shallow one doesn't sit half its draught under " +
+                "water -- and a formation in the air reads as ships on one deck. Off = the old centre-to-" +
+                "centre height. Default true."
+        )
+        var followMatchKeel = true
+
+        @JsonSchema(
             description = "Ship following: commanded climb/dive speed in m/s per block of altitude error, for " +
                 "matching the leader's level. Default 0.5."
         )

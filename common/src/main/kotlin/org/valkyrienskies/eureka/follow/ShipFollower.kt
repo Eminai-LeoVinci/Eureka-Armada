@@ -123,7 +123,12 @@ class ShipFollower(
         // and the same size-scaled gap the beam gets -- a line of galleons wants the room a line of rafts doesn't.
         val astern = slot * (FollowGeometry.halfExtentAlong(ship, ownHeading) * 2.0 + gap)
 
-        FollowGeometry.stationPoint(leaderFrame, side, standoff, astern, station)
+        // Level KEELS rather than level centres, unless the config says otherwise -- what stops a deep hull
+        // stationing itself half-submerged beside a launch, and what makes a formation in the air read as
+        // ships on one deck instead of ships at one middle. See FollowGeometry.keelLiftFor.
+        val keelLift = if (cfg.followMatchKeel) FollowGeometry.keelLiftFor(leader, ship) else 0.0
+
+        FollowGeometry.stationPoint(leaderFrame, side, standoff, astern, keelLift, station)
 
         stationError = station.distance(centre)
 
