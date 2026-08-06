@@ -295,6 +295,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore
     private val armadaMembers = ArrayList<EurekaShipControl>(3)
 
+    // The armada's engine count and combined mass as of the last gather, for [estimateTopSpeed] -- written on
+    // the physics thread, read on the game thread when the helm asks how fast this vessel can go. -1 means no
+    // gather has run yet (a welded child, which returns long before it, or the ticks before the first one),
+    // and the estimate then falls back to this hull's own numbers, which is what it always used.
+    @JsonIgnore
+    @Volatile
+    private var pooledEngines = -1
+
+    @JsonIgnore
+    @Volatile
+    private var pooledMass = 0.0
+
     // Water altitude-hold state. Transient (re-latches from the ship's current Y on load): while a
     // hybrid ship (floaters + balloons) has its keel in water, the vertical axis is pinned to
     // holdTargetY instead of letting balloon lift float it back above the surface. holdEngaged adds
@@ -445,6 +457,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             pooledLiquidOverlap = max(pooledLiquidOverlap, childPhys.liquidOverlap)
         }
         body.build()
+
+        // What the vessel actually is, published for the game thread -- see [estimateTopSpeed]. The engines
+        // and the mass have to be read off the SAME body the thrust is applied to, and until this was
+        // gathered they weren't: a parent advertised its own engines against its own mass while the physics
+        // divided the armada's pooled power across the armada's combined weight. A tug carrying a heavy
+        // consort could therefore offer a top speed of twenty and hold three, with the helm insisting the
+        // number had been accepted -- because it had, and the ship simply could not make it.
+        var totalEngines = engines
+        for (member in armadaMembers) totalEngines += member.engines
+        pooledEngines = totalEngines
+        pooledMass = body.mass
 
         // Anchors hold the VESSEL, so one dropped anywhere in the armada holds all of it -- see [armadaAnchored].
         val armadaAnchored = pooledAnchorsActive > 0
@@ -1402,13 +1425,24 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         ensureMenuCourse(seatDir)
         when (axis) {
             0 -> {
-                val fwdMax = estimateTopSpeed()
-                val revMax = cfg.maxReverseSpeedFromEngines
+                // Bounded by what the CONFIG allows any ship, NOT by this hull's estimated ceiling.
+                //
+                // Clamping the typed number to estimateTopSpeed() turned a model into a hard limit, and the
+                // model is wrong often enough to matter -- it reads a captured engine count and, until
+                // recently, the wrong hull's mass entirely. The pilot typed 20, the box accepted it, the ship
+                // sat at 3, and nothing anywhere said why. The typed target needs no such protection: it is
+                // held closed-loop below, and the throttle it trims saturates at 1.0, so asking for more than
+                // the hull has simply means full power. Which is exactly what asking for it should mean.
+                val fwdMax = EurekaConfig.SERVER.baseSpeed + EurekaConfig.SERVER.maxSpeedFromEngines
+                val revMax = EurekaConfig.SERVER.baseSpeed + cfg.maxReverseSpeedFromEngines
                 val clamped = value.coerceIn(-revMax, fwdMax)
                 // Exact target held closed-loop by getPlayerForwardVel; oldSpeed is only the initial throttle
-                // seed (open-loop estimate) that the trim then corrects onto the real speed.
+                // seed (open-loop estimate) that the trim then corrects onto the real speed. Seeded off the
+                // ESTIMATE, since a throttle fraction is by definition a fraction of what this hull can do --
+                // an optimistic estimate just starts the run at full power, which the trim then eases back.
                 cruiseTargetSpeedMps = clamped
-                oldSpeed = (if (clamped >= 0.0) (if (fwdMax > 0.0) clamped / fwdMax else 0.0)
+                val estimate = max(estimateTopSpeed(), 1.0)
+                oldSpeed = (if (clamped >= 0.0) clamped / estimate
                             else (if (revMax > 0.0) clamped / revMax else 0.0)).coerceIn(-1.0, 1.0)
                 cruiseHorizontalActive = true
                 fwdIntentSign = signOfD(oldSpeed, 0.05)
@@ -1575,10 +1609,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      * leaves a realized speed a little under the target and live engine heat/fuel moves the engine term.
      */
     fun estimateTopSpeed(): Double {
-        val mass = ship?.inertiaData?.mass ?: return EurekaConfig.SERVER.baseSpeed
+        // The ARMADA's engines against the ARMADA's mass, exactly as getPlayerForwardVel drives it. Read off
+        // this hull alone -- which is all this could see before the gather published them -- the estimate is a
+        // statement about a ship that is not the one being flown, and since it is also the CLAMP on the helm's
+        // typed cruise speed, a pilot could type a number, watch it be accepted, and never come near it.
+        val engineCount = if (pooledEngines >= 0) pooledEngines else engines
+        val mass = (if (pooledMass > 0.0) pooledMass else ship?.inertiaData?.mass)
+            ?: return EurekaConfig.SERVER.baseSpeed
         val scaledMass = mass * EurekaConfig.SERVER.speedMassScale
         var speed = EurekaConfig.SERVER.linearCasualSpeed / 3.0 * EurekaConfig.SERVER.baseSpeed // oldSpeed -> 1
-        val fullPower = engines * cfg.enginePowerLinear.toDouble()
+        val fullPower = engineCount * cfg.enginePowerLinear.toDouble()
         if (fullPower > 0.0 && scaledMass > 0.0) {
             var extra = fullPower
             val boost = max(
