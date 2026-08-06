@@ -20,6 +20,7 @@ import org.valkyrienskies.eureka.fabric.client.PathHud
 import org.valkyrienskies.eureka.path.ClientPathState
 import org.valkyrienskies.eureka.path.PathFollower
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.path.PathMode
 import org.valkyrienskies.eureka.path.PathStore
 import org.valkyrienskies.eureka.path.ShipPath
 import org.valkyrienskies.eureka.armada.ArmadaBindings
@@ -104,6 +105,15 @@ object PathNetworkingFabric {
      */
     const val ACTION_FOLLOW_SHIP: Byte = 5
 
+    /**
+     * CTRL+SHIFT+P: fly the route's recorded speed and stops, not just its line.
+     *
+     * A separate action rather than a flag on [ACTION_PLAY] because the two are genuinely different requests
+     * and the server treats them so -- on a ship already bound, each one means "be in MY mode", which is what
+     * makes the pair a mode switch as well as a start.
+     */
+    const val ACTION_PLAY_REPLAY: Byte = 6
+
     /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
     private const val NO_ROUTE = 0L
 
@@ -173,7 +183,8 @@ object PathNetworkingFabric {
                 when (action) {
                     ACTION_RECORD_START -> ShipPaths.startRecording(level, player)
                     ACTION_RECORD_CANCEL -> ShipPaths.cancelRecording(level, player)
-                    ACTION_PLAY -> ShipPaths.playOrPause(level, player)
+                    ACTION_PLAY -> ShipPaths.playOrPause(level, player, PathMode.GEOMETRY)
+                    ACTION_PLAY_REPLAY -> ShipPaths.playOrPause(level, player, PathMode.REPLAY)
                     ACTION_STOP -> ShipPaths.stop(level, player)
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
                     ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
@@ -438,6 +449,12 @@ object PathNetworkingFabric {
             buf.writeUtf(path.name)
             buf.writeVarInt(path.control.size)
             for (v in path.control) buf.writeDouble(v)
+            // Only the PAUSES travel, not the timeline: the client draws a marker where a replayed ship will
+            // stop, and has no use at all for when it gets there. A handful of doubles per route against
+            // sending the whole track for a picture that would not use it.
+            val dwells = path.motion?.dwells ?: DoubleArray(0)
+            buf.writeVarInt(dwells.size / 2)
+            for (i in 0 until dwells.size / 2) buf.writeDouble(dwells[i * 2])
         }
         return toArray(buf)
     }
@@ -452,9 +469,10 @@ object PathNetworkingFabric {
             val name = buf.readUtf()
             val size = buf.readVarInt()
             val control = DoubleArray(size) { buf.readDouble() }
+            val dwells = DoubleArray(buf.readVarInt()) { buf.readDouble() }
             // A route we can't rebuild is dropped rather than allowed to take the render thread down later.
             runCatching { ShipPath(id, name, "", control) }
-                .onSuccess { out[id] = ClientPathState.Route(id, name, it) }
+                .onSuccess { out[id] = ClientPathState.Route(id, name, it, dwells) }
         }
         return out
     }

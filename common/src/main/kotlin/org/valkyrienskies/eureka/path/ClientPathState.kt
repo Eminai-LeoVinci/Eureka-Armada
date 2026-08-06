@@ -14,8 +14,19 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object ClientPathState {
 
-    /** A saved route the server has told us about, already expanded into a followable/drawable curve. */
-    class Route(val id: Long, val name: String, val path: ShipPath)
+    /**
+     * A saved route the server has told us about, already expanded into a followable/drawable curve.
+     *
+     * [dwellArcs] holds where a replayed ship will stop, in arc length. Sent as bare arcs rather than as the
+     * whole [MotionTrack] because drawing a marker is all the client does with any of it -- when the ship
+     * reaches each one is not something a line on the screen can show.
+     */
+    class Route(
+        val id: Long,
+        val name: String,
+        val path: ShipPath,
+        val dwellArcs: DoubleArray = DoubleArray(0)
+    )
 
     /** A recording in progress: the trail so far, plus the snap markers once the loop can close. */
     class Recording(val shipId: Long) {

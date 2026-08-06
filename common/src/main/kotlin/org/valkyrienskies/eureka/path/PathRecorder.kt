@@ -5,6 +5,7 @@ import org.joml.Vector3dc
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.ship.ShipFootprint
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -13,6 +14,18 @@ import kotlin.math.sqrt
  *
  * Lives only while recording. What it produces -- the raw sample list -- is handed to [PathSmoothing] the
  * moment the loop closes, and this object is thrown away.
+ *
+ * ## Three tracks, one pass
+ * The line, WHEN the ship reached each point of it, and the places the pilot deliberately stopped. The last
+ * two are what [PathMode.REPLAY] flies; the first is all [PathMode.GEOMETRY] has ever needed. They are
+ * recorded together and always, so the choice of how to fly a route is made at playback rather than being
+ * locked in when it was recorded.
+ *
+ * The timing is kept as elapsed seconds rather than as a speed, for the reasons [MotionTrack] sets out --
+ * and the clock it keeps counts only the time the ship was UNDER WAY. A stop is its own kind of record: a
+ * stationary ship covers no arc, so there is no arc length at which to store "and then it waited thirty
+ * seconds", and leaving that time in the clock would stretch the stop across the route instead of holding
+ * the ship at one point of it.
  *
  * ## Loop closure is automatic, and has to be
  * A ship is recorded by flying it, which means the pilot is sitting at the helm. Holding shift there dismounts
@@ -38,6 +51,30 @@ class PathRecorder(
 
     /** Raw samples, flat x,y,z. Only appended to. */
     private val points = ArrayList<Double>(3 * 512)
+
+    /** Moving seconds elapsed at each emitted sample. Exactly one entry per point. */
+    private val times = ArrayList<Double>(512)
+
+    /** Deliberate stops, flat x,y,z,seconds. Position rather than index -- see [MotionTrack.build]. */
+    private val dwells = ArrayList<Double>(16)
+
+    /** Ticks since the recording began, moving or not. */
+    private var ticks = 0
+
+    /**
+     * Seconds already taken OUT of the moving clock by standstills.
+     *
+     * The full length of each one, not the clamped duration that gets stored: a pilot who wandered off for
+     * ten minutes leaves behind a five-minute stop (`pathDwellMaxSeconds`) and no trace at all of the other
+     * five, rather than five minutes of the ship apparently inching forwards.
+     */
+    private var stillSeconds = 0.0
+
+    /** Consecutive ticks the ship has been below [EurekaConfig.Server.pathDwellSpeed]. */
+    private var stillTicks = 0
+
+    /** True once the current standstill has lasted long enough to count as deliberate. */
+    private var dwellOpen = false
 
     /** Last EMITTED sample -- distance and turn are measured from here, not from last tick's position. */
     private var lastX = start.x()
@@ -72,7 +109,7 @@ class PathRecorder(
     val pointCount: Int get() = points.size / 3
 
     init {
-        emit(start.x(), start.y(), start.z())
+        emit(start.x(), start.y(), start.z(), 0.0)
     }
 
     enum class Step {
@@ -87,16 +124,26 @@ class PathRecorder(
     }
 
     /**
-     * Advance the recording with this tick's keel position.
+     * Advance the recording with this tick's keel position and forward speed.
      *
      * Samples are emitted by DISTANCE, not by time, so the route's detail does not depend on how fast the ship
      * was going -- a slow harbour manoeuvre and a fast open-water leg record at the same resolution. Corners
      * get an extra sample regardless of distance, since a corner is exactly the feature a distance-only rule
-     * would cut across.
+     * would cut across. Recording speed changes none of that, deliberately: [PathSmoothing] filters with its
+     * window measured in ARC LENGTH precisely because a distance rule makes sample density independent of
+     * throttle, and emitting by time instead would make the smoothing strength depend on how fast the pilot
+     * happened to be going.
+     *
+     * [speed] is the ship's FULL speed through the world, not its speed along its own heading. That
+     * distinction is the whole of one bug: heading speed is flattened to the horizontal, so a ship rising
+     * vertically off a pad reads as motionless and its lift-off was recorded as a thirty-second stop.
      */
-    fun tick(keel: Vector3dc): Step {
+    fun tick(keel: Vector3dc, speed: Double): Step {
         val cfg = EurekaConfig.SERVER
         this.keel.set(keel)
+        ticks++
+
+        tickDwell(cfg, keel, speed)
 
         val dx = keel.x() - lastX
         val dy = keel.y() - lastY
@@ -104,7 +151,7 @@ class PathRecorder(
         val moved = sqrt(dx * dx + dy * dy + dz * dz)
 
         if (moved >= cfg.pathSampleSpacing || (moved >= CORNER_MIN_STEP && isCorner(dx, dy, dz, moved))) {
-            emit(keel.x(), keel.y(), keel.z())
+            emit(keel.x(), keel.y(), keel.z(), movingSeconds())
             if (pointCount >= cfg.pathMaxPoints) return Step.OVERFLOW
         }
 
@@ -131,15 +178,72 @@ class PathRecorder(
         if (armed && gap <= touchDistance(markerScale)) {
             // Land a final sample where it actually snapped; the seam blend discards the tail anyway, but this
             // keeps the raw track honest for anything that inspects it.
-            if (moved > 0.05) emit(keel.x(), keel.y(), keel.z())
+            if (moved > 0.05) emit(keel.x(), keel.y(), keel.z(), movingSeconds())
+            // A loop closed while the ship was sitting still -- flying home and parking, which is a perfectly
+            // ordinary way to finish -- would otherwise lose that last pause, since nothing moves afterwards
+            // to close it.
+            closeDwell(cfg)
             return Step.SNAPPED
         }
 
         return Step.RECORDING
     }
 
+    /**
+     * The recording's clock: seconds elapsed with the ship actually under way.
+     *
+     * A standstill is subtracted from the moment it BEGAN, not from the moment it lasted long enough to
+     * believe in -- so the clock steps back the instant a stop is recognised, and the samples emitted during
+     * the seconds it has just disowned are dropped by [MotionTrack.build]'s monotonicity pass. In practice
+     * there are none: a ship that is not moving does not travel far enough to emit anything.
+     */
+    private fun movingSeconds(): Double =
+        ticks * TICK_SECONDS - stillSeconds - if (dwellOpen) stillTicks * TICK_SECONDS else 0.0
+
+    /**
+     * Open, extend or close a standstill.
+     *
+     * Opening emits a sample at the stop so the timeline has a breakpoint exactly there, rather than
+     * interpolating straight across it between the last approach and the first departure. The pause's
+     * DURATION counts from the moment the ship stopped, not from the moment the stop became long enough to
+     * believe in.
+     */
+    private fun tickDwell(cfg: EurekaConfig.Server, keel: Vector3dc, speed: Double) {
+        if (abs(speed) < cfg.pathDwellSpeed) {
+            stillTicks++
+            if (!dwellOpen && stillTicks * TICK_SECONDS >= cfg.pathDwellMinSeconds) {
+                dwellOpen = true
+                emit(keel.x(), keel.y(), keel.z(), movingSeconds())
+            }
+            return
+        }
+        closeDwell(cfg)
+    }
+
+    /** Bank an open standstill and start counting again. Safe to call when there isn't one. */
+    private fun closeDwell(cfg: EurekaConfig.Server) {
+        if (dwellOpen) {
+            val waited = stillTicks * TICK_SECONDS
+            dwells.add(keel.x); dwells.add(keel.y); dwells.add(keel.z)
+            dwells.add(waited.coerceAtMost(cfg.pathDwellMaxSeconds))
+            // The FULL wait leaves the clock even where the stored stop is clamped -- see [stillSeconds].
+            stillSeconds += waited
+        }
+        dwellOpen = false
+        stillTicks = 0
+    }
+
     /** The raw track, flat x,y,z, for [PathSmoothing.finish]. */
     fun toArray(): DoubleArray = DoubleArray(points.size) { points[it] }
+
+    /** Moving seconds at each raw sample, for [MotionTrack.build]. One per point of [toArray]. */
+    fun timeArray(): DoubleArray = DoubleArray(times.size) { times[it] }
+
+    /** Recorded standstills, flat x,y,z,seconds, likewise. */
+    fun dwellArray(): DoubleArray = DoubleArray(dwells.size) { dwells[it] }
+
+    /** How many deliberate stops were recorded, for the "route saved" message. */
+    val dwellCount: Int get() = dwells.size / 4
 
     /**
      * Samples from index [from] onward, flat x,y,z.
@@ -154,7 +258,7 @@ class PathRecorder(
         return DoubleArray((n - start) * 3) { points[start * 3 + it] }
     }
 
-    private fun emit(x: Double, y: Double, z: Double) {
+    private fun emit(x: Double, y: Double, z: Double, seconds: Double) {
         if (points.isNotEmpty()) {
             val dx = x - lastX; val dy = y - lastY; val dz = z - lastZ
             val d = sqrt(dx * dx + dy * dy + dz * dz)
@@ -162,6 +266,7 @@ class PathRecorder(
             if (d > 1.0e-9) { dirX = dx / d; dirY = dy / d; dirZ = dz / d }
         }
         points.add(x); points.add(y); points.add(z)
+        times.add(seconds)
         lastX = x; lastY = y; lastZ = z
     }
 
@@ -225,5 +330,8 @@ class PathRecorder(
 
         /** A loop has to be several times the size of the thing that closes it to be worth calling a route. */
         private const val MIN_LOOP_TOUCH_MULTIPLE = 6.0
+
+        /** Server tick, in seconds. Recording runs on the game thread at a fixed 20 TPS. */
+        private const val TICK_SECONDS = 0.05
     }
 }

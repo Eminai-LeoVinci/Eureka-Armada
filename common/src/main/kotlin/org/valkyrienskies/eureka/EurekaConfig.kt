@@ -417,8 +417,11 @@ object EurekaConfig {
 
         // region Path recording
         // Ship paths: a pilot records a loop by flying it (SHIFT+R on deck), the recording closes when the ship
-        // returns to its start, and any ship can then fly it (SHIFT+P). Geometry only -- speed stays cruise
-        // control's job, and heading comes from the recorded line's own tangent. See the `path` package.
+        // returns to its start, and any ship can then fly it. Heading always comes from the recorded line's own
+        // tangent; SPEED depends on which of the two playback modes is used. SHIFT+P flies the geometry alone and
+        // leaves the throttle to the pilot's cruise setting (the original behaviour); CTRL+SHIFT+P replays the
+        // whole recording, including how fast the ship was going at each point and how long it sat still. See
+        // the `path` package.
 
         @JsonSchema(
             description = "Path recording: how far the ship must travel before another point is recorded, in " +
@@ -457,6 +460,39 @@ object EurekaConfig {
                 "within two blocks of where it started. Set to 0 for the old fixed size. Default 0.5."
         )
         var pathMarkerScaleStep = 0.5
+
+        @JsonSchema(
+            description = "Path recording: also record WHEN the ship reached each point, and how long it sat " +
+                "still, so the route can be replayed exactly as flown (CTRL+SHIFT+P). Costs a little save file " +
+                "per route. Turning this off does not affect SHIFT+P, which never used timing. Default true."
+        )
+        var pathRecordTiming = true
+
+        @JsonSchema(
+            description = "Path recording: how much the recorded timing may be simplified, in seconds. A leg " +
+                "flown at a steady pace collapses to two numbers; an acceleration keeps its shape. Lower = more " +
+                "faithful and a bigger save file. Default 0.15."
+        )
+        var pathTimeEpsilon = 0.15
+
+        @JsonSchema(
+            description = "Path recording: speed in m/s below which the ship counts as STOPPED rather than " +
+                "merely slow. Measured through the world, so a ship rising straight up is moving. Default 0.4."
+        )
+        var pathDwellSpeed = 0.4
+
+        @JsonSchema(
+            description = "Path recording: how many seconds a ship must sit still before the stop is recorded " +
+                "as a deliberate pause -- loading cargo, waiting for a lock -- that playback will reproduce. " +
+                "Below this it is just a hesitation and is ignored. Default 1.5."
+        )
+        var pathDwellMinSeconds = 1.5
+
+        @JsonSchema(
+            description = "Path recording: longest pause that can be recorded, in seconds. Stops an idle pilot " +
+                "baking a twenty-minute wait into a route they then have to fly. Default 300.0."
+        )
+        var pathDwellMaxSeconds = 300.0
 
         @JsonSchema(
             description = "Path recording: how many blocks of the route's tail are replaced by a curve that " +
@@ -519,9 +555,36 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Path playback: climb/dive strength -- commanded vertical speed per block of altitude " +
-                "error. Higher = holds the recorded elevation more tightly. Default 0.5."
+                "error. Note this now only corrects ERROR: the bulk of a climb or dive comes from the route's " +
+                "own slope (see pathVerticalLookahead), so this no longer has to be large. Default 0.5."
         )
         var pathVerticalGain = 0.5
+
+        @JsonSchema(
+            description = "Path playback: how far ahead the ship reads the route's ELEVATION, in blocks -- kept " +
+                "separate from the steering lookahead, which is ten times longer. Steering has to aim ahead " +
+                "because a hull cannot turn instantly; altitude is a direct up/down command and does not. " +
+                "Sharing the steering value is what made a route that dives to the ground and climbs back get " +
+                "flown as an average of itself, never reaching the bottom. Raise it if the ship pitches into " +
+                "dips too abruptly. Default 4.0."
+        )
+        var pathVerticalLookahead = 4.0
+
+        @JsonSchema(
+            description = "Path playback: vertical speed in m/s below which the ship is commanded to hold level " +
+                "exactly. Small but load-bearing: the water altitude hold only latches its depth while the " +
+                "commanded vertical is precisely zero, so a permanently jittering near-zero command would knock " +
+                "it out of hold every tick and the ship would slowly sink. Default 0.15."
+        )
+        var pathVerticalDeadband = 0.15
+
+        @JsonSchema(
+            description = "Path playback: slow down for a climb or dive steeper than the hull can physically " +
+                "manage, so it follows the slope instead of sailing over it. The vertical twin of " +
+                "pathCornerSlowdown, and the same kind of limit: a ship that can only descend at 5 m/s cannot " +
+                "hold a 45-degree dive at 20 m/s forward, whatever it is told. Default true."
+        )
+        var pathVerticalSlowdown = true
 
         @JsonSchema(
             description = "Path playback: fraction per second of the start-of-run offset to bleed away, so a " +
@@ -549,6 +612,84 @@ object EurekaConfig {
                 "down rather than stopping it dead. Default 2.0."
         )
         var pathCornerMinSpeed = 2.0
+
+        @JsonSchema(
+            description = "Replay playback (CTRL+SHIFT+P): how fast the recording's own clock runs, so one " +
+                "recording can be flown briskly or gently without re-recording. The SHAPE is kept either way -- " +
+                "a careful take-off stays proportionally careful, and recorded stops still last as recorded. " +
+                "1.0 flies it exactly as recorded. Default 1.0."
+        )
+        var pathReplaySpeedScale = 1.0
+
+        @JsonSchema(
+            description = "Replay playback: seconds the ship takes to ease from wherever it was onto the route " +
+                "line. A replay flies the drawn route EXACTLY, with no offset, so this is the one moment it is " +
+                "anywhere else. Default 3.0."
+        )
+        var pathReplayJoinSeconds = 3.0
+
+        @JsonSchema(
+            description = "Replay playback: how hard being off the line is turned into speed back toward it, in " +
+                "1/s. The recorded velocity does most of the work; this only closes what the last tick missed. " +
+                "Higher = tighter tracking and a harsher response to being knocked about. Default 2.0."
+        )
+        var pathServoPosGain = 2.0
+
+        @JsonSchema(
+            description = "Replay playback: how hard a velocity error is turned into force, in 1/s. This is the " +
+                "one that makes a replay reproduce a recording rather than approximate it, and it is why a " +
+                "replayed take-off no longer accelerates like the helm's cruise box. Default 12.0."
+        )
+        var pathServoVelGain = 12.0
+
+        @JsonSchema(
+            description = "Replay playback: ceiling in m/s on the speed a replay will command, however far off " +
+                "its line the ship has been pushed. Default 60.0."
+        )
+        var pathServoMaxSpeed = 60.0
+
+        @JsonSchema(
+            description = "Replay playback: ceiling in m/s^2 on the acceleration a replay will command, so a " +
+                "collision cannot turn a tracking error into a catapult. Default 40.0."
+        )
+        var pathServoMaxAccel = 40.0
+
+        @JsonSchema(
+            description = "Replay playback: how hard a heading or heel error is turned into a turn rate, in " +
+                "1/s. Default 3.0."
+        )
+        var pathServoRotGain = 3.0
+
+        @JsonSchema(
+            description = "Replay playback: how hard a turn-rate error is turned into torque, in 1/s. " +
+                "Default 12.0."
+        )
+        var pathServoOmegaGain = 12.0
+
+        @JsonSchema(
+            description = "Replay playback: ceiling in rad/s on the turn rate a replay will command. " +
+                "Default 1.5."
+        )
+        var pathServoMaxOmega = 1.5
+
+        @JsonSchema(
+            description = "Replay playback: ceiling in rad/s^2 on the angular acceleration a replay will " +
+                "command. Default 8.0."
+        )
+        var pathServoMaxAlpha = 8.0
+
+        @JsonSchema(
+            description = "Replay playback: how far off its line a ship may be, in blocks, before it counts as " +
+                "BLOCKED -- terrain or a build that was not there when the route was recorded. Default 8.0."
+        )
+        var pathReplayMaxError = 8.0
+
+        @JsonSchema(
+            description = "Replay playback: how many seconds a ship must stay that far off before it gives up, " +
+                "releases itself and says the route is blocked, rather than grinding against the obstruction " +
+                "with nobody told. Default 4.0."
+        )
+        var pathReplayBlockedSeconds = 4.0
 
         @JsonSchema(
             description = "Path playback: seconds a manual turn or ascend/descend input must be HELD to stop " +

@@ -45,10 +45,16 @@ class PathStore : SavedData() {
         return paths.values.firstOrNull { it.name.equals(query, ignoreCase = true) }
     }
 
-    /** Build and store a route from finished control points. */
-    fun create(dimension: String, control: DoubleArray, name: String? = null): ShipPath {
+    /** Build and store a route from finished control points, and optionally its recorded timeline. */
+    fun create(
+        dimension: String,
+        control: DoubleArray,
+        timeSamples: DoubleArray = ShipPath.EMPTY,
+        dwellSamples: DoubleArray = ShipPath.EMPTY,
+        name: String? = null
+    ): ShipPath {
         val id = nextId++
-        val path = ShipPath(id, name ?: "Route $id", dimension, control)
+        val path = ShipPath(id, name ?: "Route $id", dimension, control, timeSamples, dwellSamples)
         paths[id] = path
         setDirty()
         return path
@@ -96,6 +102,12 @@ class PathStore : SavedData() {
             entry.putString(NAME_KEY, path.name)
             entry.putString(DIM_KEY, path.dimension)
             entry.putLongArray(POINTS_KEY, encodeDoubles(path.control))
+            // Written only when there is a timeline, so a geometry-only route costs exactly what it always
+            // did and a save from before replay round-trips byte for byte.
+            path.motion?.let {
+                entry.putLongArray(TIME_KEY, encodeDoubles(it.times))
+                if (it.dwells.isNotEmpty()) entry.putLongArray(DWELL_KEY, encodeDoubles(it.dwells))
+            }
             list.add(entry)
         }
         tag.put(PATHS_KEY, list)
@@ -111,6 +123,8 @@ class PathStore : SavedData() {
         private const val NAME_KEY = "name"
         private const val DIM_KEY = "dim"
         private const val POINTS_KEY = "pts"
+        private const val TIME_KEY = "tim"
+        private const val DWELL_KEY = "dwl"
 
         private val logger by logger()
 
@@ -136,11 +150,18 @@ class PathStore : SavedData() {
                 val dim = entry.getString(DIM_KEY).orElse("")
                 val raw = entry.getLongArray(POINTS_KEY).orElse(LongArray(0))
                 if (raw.isEmpty()) continue
+                // Absent on anything recorded before timing was captured, which reads as an empty track and
+                // therefore as a geometry-only route. That is the whole of the migration -- including for the
+                // short-lived routes that carry the old `spd` speed profile, which is deliberately not read:
+                // integrating a flattened ground speed back into a three-dimensional timeline would rebuild
+                // the very error the timeline exists to remove.
+                val times = entry.getLongArray(TIME_KEY).orElse(LongArray(0))
+                val dwell = entry.getLongArray(DWELL_KEY).orElse(LongArray(0))
 
                 // A malformed or truncated route must not take the world down with it -- drop the one route
                 // and keep the rest. ShipPath's constructor rejects anything too short to be a loop.
                 val path = try {
-                    ShipPath(id, name, dim, decodeDoubles(raw))
+                    ShipPath(id, name, dim, decodeDoubles(raw), decodeDoubles(times), decodeDoubles(dwell))
                 } catch (ex: Exception) {
                     logger.error("Dropping unreadable path '{}' (id {}): {}", name, id, ex.message)
                     continue

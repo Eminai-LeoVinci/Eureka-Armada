@@ -72,6 +72,47 @@ class PathBinding {
     var paused: Boolean = false
 
     /**
+     * Which of [PathMode]'s two playbacks this ship is running, as an ordinal.
+     *
+     * This one is not a nicety. A replayed ship has handed the hull to the route, so a reload that forgot the
+     * mode would bring it back in geometry mode with nothing driving it at all -- a ship sitting motionless on
+     * its line, which reads as the resume having failed. Absent from an older save's JSON reads as 0, which is
+     * [PathMode.GEOMETRY]: correct for every binding written before replay existed.
+     */
+    @JsonProperty("mode")
+    var mode: Int = PathMode.GEOMETRY.ordinal
+
+    /**
+     * Where a replay had got to, in MOVING seconds -- the whole of its progress.
+     *
+     * The replay clock, not a measurement of the ship (see [PathFollower.clock]). Saving it rather than
+     * re-deriving it from [arc] is what lets a route resume mid-way through a leg it has flown before at a
+     * different pace, and what makes [dwellNext] mean anything.
+     */
+    @JsonProperty("clock")
+    var clock: Double = -1.0
+
+    /** Which recorded pause the clock is running toward. */
+    @JsonProperty("dwellNext")
+    var nextDwell: Int = -1
+
+    /** The recorded pause being served, or -1 for none. */
+    @JsonProperty("dwell")
+    var dwellIndex: Int = -1
+
+    /**
+     * Seconds left of that pause.
+     *
+     * Saved so a ship held at a dock over a reload finishes waiting rather than starting the wait again -- or,
+     * worse, deciding it has already been there and pulling straight out.
+     */
+    @JsonProperty("dwellLeft")
+    var dwellRemaining: Double = 0.0
+
+    /** [mode] as the enum, tolerating anything unrecognised. */
+    val pathMode: PathMode get() = PathMode.fromOrdinal(mode)
+
+    /**
      * Who set this ship going, as a UUID string, so a resumed route can report itself to them.
      *
      * A string because that is the one representation Jackson round-trips through the legacy attachment
@@ -85,13 +126,18 @@ class PathBinding {
     /** The owner as a UUID, or null if it was never recorded or came back unreadable. */
     val ownerId: UUID? get() = owner?.let { runCatching { UUID.fromString(it) }.getOrNull() }
 
-    fun bind(routeId: Long, offset: Vector3dc, owner: UUID?, arc: Double, laps: Int) {
+    fun bind(routeId: Long, offset: Vector3dc, owner: UUID?, arc: Double, laps: Int, mode: PathMode) {
         this.routeId = routeId
         this.offset.set(offset)
         this.arc = arc
         this.laps = laps
         this.owner = owner?.toString()
         this.paused = false
+        this.mode = mode.ordinal
+        this.clock = -1.0
+        this.nextDwell = -1
+        this.dwellIndex = -1
+        this.dwellRemaining = 0.0
     }
 
     fun clear() {
@@ -101,6 +147,11 @@ class PathBinding {
         laps = 0
         owner = null
         paused = false
+        mode = PathMode.GEOMETRY.ordinal
+        clock = -1.0
+        nextDwell = -1
+        dwellIndex = -1
+        dwellRemaining = 0.0
     }
 
     companion object {

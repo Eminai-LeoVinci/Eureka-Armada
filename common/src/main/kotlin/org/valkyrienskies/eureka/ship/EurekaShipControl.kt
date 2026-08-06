@@ -199,6 +199,71 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         private set
 
     /**
+     * Where the hull is being placed this tick, when a route is being REPLAYED rather than steered.
+     *
+     * Null for everything else, and null is the ordinary state: a plain route (SHIFT+P) and station-keeping on
+     * another ship both go through the commands above, which ask the hull's own control law to fly somewhere.
+     * A replay does not ask. It states where the ship is, because that is what a recording IS -- and the
+     * moment it went through the control law instead, it inherited that law's acceleration (a typed cruise
+     * speed reaches its target in six seconds where a pilot's hand takes forty), its lag on a dive, and its
+     * fight with the anti-velocity brake at a stop.
+     *
+     * Read on the physics thread, written on the game thread, and replaced wholesale rather than mutated so
+     * the reader can never see half of one tick's target and half of the next's.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathServo: PathServo? = null
+
+    /**
+     * How far the hull is from where [pathServo] wants it, in blocks. Zero when nothing is servoing.
+     *
+     * The one number the game side needs back: a route can be blocked by terrain built since it was recorded,
+     * and a servo pushing at something immovable has to be noticed by someone rather than grinding forever.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathServoError = 0.0
+        private set
+
+    /**
+     * True while the servo is asking for speed and the hull is making almost none of it.
+     *
+     * The other half of "is this route blocked", and the half that carries the meaning. Distance alone cannot
+     * answer it: a servo chasing a moving station lags in proportion to how fast that station is going, so a
+     * fixed distance reads a brisk leg and a brick wall alike. This reads the hull instead -- told to move,
+     * not moving -- which is what being blocked actually is.
+     */
+    @JsonIgnore
+    @Volatile
+    var pathServoStalled = false
+        private set
+
+    /**
+     * One tick's worth of "put the ship here".
+     *
+     * Immutable, and carries the keel anchor in SHIP space rather than a world position for it: the physics
+     * thread has the hull's transform and can do that multiplication itself, where asking the game side to
+     * pre-compute it would bake in a pose one tick stale.
+     */
+    class PathServo(
+        /** Where the keel should be, in world space. */
+        val keelTarget: Vector3dc,
+        /** How fast it should be getting there, world space -- the feed-forward that does most of the work. */
+        val velocity: Vector3dc,
+        /** Which way the bow should point, horizontal and normalised. */
+        val forward: Vector3dc,
+        /** The keel anchor in ship space, so the physics thread can find where the keel actually is. */
+        val keelLocal: Vector3dc
+    )
+
+    /** Fastest this hull climbs, m/s -- the ceiling a route's ascent has to fit inside. */
+    val pathClimbRateMax: Double @JsonIgnore get() = cfg.baseImpulseElevationRate
+
+    /** Fastest this hull descends, m/s. Separate from the climb rate, which is usually not the same number. */
+    val pathDescendRateMax: Double @JsonIgnore get() = cfg.baseImpulseDescendRate
+
+    /**
      * Seat facing last reported by this ship's helm ([org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity]).
      *
      * Path playback has no seated pilot, so it needs a forward to thrust along just as a helm-menu cruise does.
@@ -283,6 +348,25 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
     @JsonIgnore
     private val scratchAxisAngle = AxisAngle4d()
+
+    // Working vectors for the route servo (applyPathServo). Physics-thread only, like every other scratch here.
+    @JsonIgnore
+    private val servoKeel = Vector3d()
+
+    @JsonIgnore
+    private val servoVector = Vector3d()
+
+    @JsonIgnore
+    private val servoDrive = Vector3d()
+
+    @JsonIgnore
+    private val servoOmega = Vector3d()
+
+    @JsonIgnore
+    private val servoHeading = Vector3d()
+
+    @JsonIgnore
+    private val servoUp = Vector3d()
 
     // The armada this ship leads, seen as one rigid body -- just this ship when nothing is bound to it. Rebuilt
     // from the live members at the top of every physTick and reused, so a steady state allocates nothing. Only
@@ -550,6 +634,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             clearCruiseLatches()
 
             physShip.isStatic = true
+            return
+        }
+
+        // A replayed route takes the hull over outright, so nothing below this line runs for it -- no
+        // stabilize, no altitude hold, no thrust, no cruise. Deliberately AFTER the anchor branch: dropping an
+        // anchor is a physical statement about the ship and outranks anything a recording has to say.
+        pathServo?.let { servo ->
+            applyPathServo(body, physShip, servo)
             return
         }
 
@@ -1546,11 +1638,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      * The follower's per-tick command: a yaw RATE (rad/s) and a vertical RATE (m/s), both clamped here rather
      * than in the follower so the limits stay with the hull that owns them.
      *
-     * [targetSpeed] defaults to null, which is the route case: forward speed stays the pilot's cruise setting, so
-     * one recorded route can be flown fast or slow without re-recording. Only station-keeping on another ship
-     * passes it, because only that task has a speed of its own to want (see [pathTargetSpeed]).
+     * [targetSpeed] defaults to null, which is the plain route case: forward speed stays the pilot's cruise
+     * setting, so one recorded route can be flown fast or slow without re-recording. Station-keeping on another
+     * ship passes it because the whole task IS a speed (see [pathTargetSpeed]). A REPLAYED route does not come
+     * through here at all -- it goes to [pathServo], which places the hull rather than asking it to fly.
      */
-    fun pathCommand(turnOmega: Double, verticalMps: Double, speedCap: Double?, targetSpeed: Double? = null) {
+    fun pathCommand(
+        turnOmega: Double,
+        verticalMps: Double,
+        speedCap: Double?,
+        targetSpeed: Double? = null
+    ) {
         val cap = pathTurnCap
         pathTurnOmega = turnOmega.coerceIn(-cap, cap)
         pathSpeedCap = speedCap
@@ -1567,11 +1665,131 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     }
 
     /**
+     * Put the hull where a replayed recording says it should be, and point it the way the route runs.
+     *
+     * ## Why this is a servo and not a set of controls
+     * Everything else in this class asks the ship to fly somewhere: a throttle, a yaw rate, a climb rate, all
+     * of them mediated by engine power, drag, buoyancy and the closed loops that trim them. That is right for
+     * a pilot and wrong for a recording, because a recording is not a request. Routed through the control law
+     * a replay inherits the law's dynamics rather than the pilot's -- most visibly its acceleration, which
+     * reaches a target speed in six seconds where the hand that recorded it took forty.
+     *
+     * So this bypasses the lot. It reads where the hull is, works out the velocity that would put it on the
+     * line, and applies the force that produces that velocity. The ship is still a rigid body in the physics
+     * engine -- it will shove another vessel aside and grind against terrain that was not there when the route
+     * was recorded -- but nothing between the recording and the hull gets an opinion.
+     *
+     * ## Gains rather than a timestep
+     * The textbook form of this is `F = m * (v_target - v) / dt`, which needs the physics timestep. [physTick]
+     * is handed no timestep, so the gains below are rates in 1/s instead: a velocity error decays with a time
+     * constant of `1 / pathServoVelGain`. That is stable for any `gain * dt < 2`, and at 60 Hz physics the
+     * default 12 has two orders of magnitude in hand.
+     *
+     * Gravity is the one steady disturbance that a proportional loop alone would leave as standing sag, so it
+     * is fed forward exactly. Buoyancy and fluid drag are simply switched off for the duration -- both are
+     * re-set from scratch at the top of every [physTick], so releasing the route restores them by doing
+     * nothing.
+     */
+    private fun applyPathServo(body: ArmadaBody, physShip: PhysShip, servo: PathServo) {
+        if (body.mass <= 0.0) return
+        val cfg = EurekaConfig.SERVER
+
+        // An anchor drops out of this branch above, so a hull arriving here is meant to move -- including one
+        // that was static when it was last anchored, since the line that clears that flag is the last of
+        // physTick and this returns long before it.
+        physShip.isStatic = false
+        physShip.buoyantFactor = 0.0
+        physShip.doFluidDrag = false
+        for (i in 1 until body.size) {
+            val member = body.memberAt(i)
+            member.buoyantFactor = 0.0
+            member.doFluidDrag = false
+        }
+
+        // region position and velocity
+        val keel = servoKeel.set(servo.keelLocal)
+        body.lead.transform.shipToWorld.transformPosition(keel)
+
+        val error = servoVector.set(servo.keelTarget).sub(keel)
+        pathServoError = error.length()
+
+        // Told to move, and not moving -- see [pathServoStalled]. Both speeds are taken as plain magnitudes:
+        // a hull grinding along a wall at right angles to where it is meant to be going is stuck by any
+        // reading that matters, and a recorded pause asks for nothing, so it cannot read as stalled.
+        val asked = servo.velocity.length()
+        pathServoStalled = asked > STALL_MIN_SPEED && body.velocity.length() < asked * STALL_FRACTION
+
+        // The recorded velocity does nearly all the work; the error term only closes whatever the last tick
+        // failed to deliver. Capped as a whole, so a ship that has just been shoved a long way off its line
+        // comes back briskly rather than at a speed of its own invention.
+        val drive = servoDrive.set(servo.velocity).fma(cfg.pathServoPosGain, error)
+        clampLength(drive, cfg.pathServoMaxSpeed)
+
+        drive.sub(body.velocity).mul(cfg.pathServoVelGain)
+        drive.y -= GRAVITY
+        clampLength(drive, cfg.pathServoMaxAccel)
+        body.applyForce(drive.mul(body.mass))
+        // endregion
+
+        // region heading and trim
+        val omega = servoOmega.set(0.0, 0.0, 0.0)
+
+        servoForward(physShip, servoHeading)?.let { heading ->
+            // Signed yaw from where the bow points to where the route runs, about +Y -- the same atan2 of the
+            // cross and dot the follower uses, already wrapped to +/-pi.
+            val dx = servo.forward.x()
+            val dz = servo.forward.z()
+            val cross = heading.z * dx - heading.x * dz
+            val dot = heading.x * dx + heading.z * dz
+            omega.y = atan2(cross, dot) * cfg.pathServoRotGain
+        }
+
+        // Righting. The hull's own up crossed with the world's, `(-uz, 0, ux)`, is the axis that carries one
+        // onto the other, with a magnitude that is the sine of how far out of level the ship is -- so a level
+        // hull contributes nothing and a heeling one is turned upright about exactly the right axis. It comes
+        // out horizontal, so it never fights the yaw term above.
+        val up = servoUp.set(0.0, 1.0, 0.0)
+        body.lead.transform.shipToWorldRotation.transform(up)
+        omega.x -= up.z * cfg.pathServoRotGain
+        omega.z += up.x * cfg.pathServoRotGain
+
+        clampLength(omega, cfg.pathServoMaxOmega)
+        omega.sub(body.angularVelocity).mul(cfg.pathServoOmegaGain)
+        clampLength(omega, cfg.pathServoMaxAlpha)
+        body.applyAngularAcceleration(omega)
+        // endregion
+    }
+
+    /**
+     * The world direction the bow points, taken from the PHYSICS transform rather than the game one.
+     *
+     * [pathForward] answers the same question for the game thread. The two cannot share an implementation
+     * because they read different transforms, and mixing them would have the servo measuring its heading
+     * error against a pose one tick stale from the one it is about to correct.
+     */
+    private fun servoForward(physShip: PhysShip, dest: Vector3d): Vector3d? {
+        val dir = controlData?.seatInDirection ?: return null
+        dest.set(dir.unitVec3i.toJOMLD())
+        physShip.transform.shipToWorldRotation.transform(dest)
+        dest.y = 0.0
+        return if (dest.lengthSquared() < 1.0e-9) null else dest.normalize()
+    }
+
+    /** Shrink [v] to [max] if it is longer, leaving its direction alone. */
+    private fun clampLength(v: Vector3d, max: Double) {
+        val len = v.length()
+        if (len > max && len > 1.0e-9) v.mul(max / len)
+    }
+
+    /**
      * Release path guidance. [stopShip] also drops cruise, so the ship coasts to rest instead of carrying on
      * in a straight line -- what "stop" means for a vessel the size of a ship near terrain.
      */
     fun pathRelease(stopShip: Boolean) {
         pathFollowing = false
+        pathServo = null
+        pathServoError = 0.0
+        pathServoStalled = false
         pathTurnOmega = null
         pathVerticalRate = null
         pathSpeedCap = null
@@ -1668,6 +1886,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // (see cruiseTargetSpeedMps). Small so the outer loop stays slower than the inner force P-controller and
         // doesn't oscillate; the ship converges over ~1-2 s. Tunable feel dial.
         private const val CRUISE_SPEED_TRIM = 0.15
+
+        // Below this commanded speed (m/s) a replay is not really asking the hull to go anywhere, so nothing
+        // it does or fails to do says whether it is blocked. Covers every recorded pause.
+        private const val STALL_MIN_SPEED = 0.5
+
+        // Fraction of the commanded speed a hull must be making to count as under way rather than stuck. Low
+        // on purpose: half speed is a ship having a hard time, and a quarter is a ship going nowhere.
+        private const val STALL_FRACTION = 0.25
 
         // Per-phys-tick blend of a held Space/V into the latched vertical climb/descend rate (tap = small nudge,
         // hold = ramp toward full). Higher = snappier vertical trim.

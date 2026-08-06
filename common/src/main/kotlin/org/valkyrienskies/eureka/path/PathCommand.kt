@@ -69,8 +69,11 @@ object PathCommand {
         for (path in store.all) {
             val flying = ShipPaths.followersIn(level).count { it.path.id == path.id }
             val suffix = if (flying > 0) " -- $flying ship(s) flying it" else ""
+            // Which routes can be replayed at all is the one thing a list has to say now, since asking for it
+            // on a route that has no timeline is otherwise a refusal you can only discover by trying.
+            val replayable = if (path.motion != null) " [replayable]" else ""
             src.sendSuccess({
-                Component.literal("  [${path.id}] ${path.name}: ${path.length.toInt()}m$suffix")
+                Component.literal("  [${path.id}] ${path.name}: ${path.length.toInt()}m$replayable$suffix")
             }, false)
         }
         return store.all.size
@@ -85,7 +88,34 @@ object PathCommand {
                     "${path.control.size / 3} stored points, ${path.pointCount} followed points."
             ).withStyle(ChatFormatting.AQUA)
         }, false)
+
+        val motion = path.motion
+        if (motion == null) {
+            src.sendSuccess({
+                Component.literal("  No timing recorded -- SHIFT+P only. Record it again to replay it.")
+            }, false)
+            return 1
+        }
+
+        val stops = if (motion.dwellCount == 0) "no stops"
+        else "${motion.dwellCount} stop(s) totalling ${dwellTotal(motion)}s"
+        src.sendSuccess({
+            Component.literal(
+                "  Replayable: ${format(motion.lapSeconds)} a lap (${format(motion.movingSeconds)} flying), " +
+                    "${"%.1f".format(motion.averageSpeed)} m/s average and " +
+                    "${"%.1f".format(motion.topSpeed)} m/s at its fastest, $stops."
+            )
+        }, false)
         return 1
+    }
+
+    private fun dwellTotal(motion: MotionTrack): Int =
+        (0 until motion.dwellCount).sumOf { motion.dwellSeconds(it) }.toInt()
+
+    /** "1m 20s", or "45s" under a minute. */
+    private fun format(seconds: Double): String {
+        val total = seconds.toInt().coerceAtLeast(0)
+        return if (total < 60) "${total}s" else "${total / 60}m ${total % 60}s"
     }
 
     private fun rename(ctx: CommandContext<CommandSourceStack>): Int {

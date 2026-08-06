@@ -105,6 +105,7 @@ object PathRenderer {
             // One predicate, shared with the hide key, so the two can't disagree about what is on screen.
             if (!state.isVisible(route.id, offset != null)) continue
             drawRoute(consumer, pose, route.path, offset, cam.x, cam.y, cam.z, maxDistSq, colorFor(route.id, offset != null))
+            drawDwells(consumer, pose, route, offset, cam.x, cam.y, cam.z, maxDistSq)
         }
 
         for (recording in state.recordings.values) {
@@ -135,6 +136,35 @@ object PathRenderer {
             b.set(path.x(j) + ox, path.y(j) + oy, path.z(j) + oz)
             segmentIfNear(consumer, pose, a, b, camX, camY, camZ, maxDistSq, argb)
             i += stride
+        }
+    }
+
+    /**
+     * A small sphere wherever a replayed ship will stop and wait.
+     *
+     * Drawn on the route rather than only while a ship is actually stopped there, because the question these
+     * answer is asked long before that: "did my pause record?" Without them the only way to find out is to fly
+     * the whole loop and see whether the ship stops -- and a pause too short to register would look exactly
+     * like a pause that recorded fine but has not come round yet.
+     *
+     * Deliberately not scaled by anything. A stop is a point on the line, not a hull-sized target to hit, so
+     * unlike the snap markers there is nothing here for a size to mean.
+     */
+    private fun drawDwells(
+        consumer: VertexConsumer, pose: PoseStack.Pose, route: ClientPathState.Route, offset: Vector3d?,
+        camX: Double, camY: Double, camZ: Double, maxDistSq: Double
+    ) {
+        if (route.dwellArcs.isEmpty()) return
+        val ox = offset?.x ?: 0.0
+        val oy = offset?.y ?: 0.0
+        val oz = offset?.z ?: 0.0
+
+        for (arc in route.dwellArcs) {
+            route.path.sampleAt(arc, a)
+            a.add(ox, oy, oz)
+            val dx = a.x - camX; val dy = a.y - camY; val dz = a.z - camZ
+            if (dx * dx + dy * dy + dz * dz > maxDistSq) continue
+            sphere(consumer, pose, a, DWELL_RADIUS, camX, camY, camZ, DWELL_ARGB)
         }
     }
 
@@ -291,6 +321,11 @@ object PathRenderer {
 
     /** Blocks of gap over which the markers fade in as they approach touching. */
     private const val CLOSENESS_RANGE = 24.0
+
+    /** Amber, and distinct from both snap spheres: a stop is a property of the route, not of a recording. */
+    private const val DWELL_ARGB = 0xCCFF9933.toInt()
+
+    private const val DWELL_RADIUS = 1.25
 
     private const val PULSE_PERIOD_MS = 1400L
     private const val CIRCLE_SEGMENTS = 24

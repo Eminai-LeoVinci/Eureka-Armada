@@ -14,9 +14,11 @@ import kotlin.math.sqrt
 /**
  * One recorded route: a CLOSED loop of positions in world space that a ship can fly.
  *
- * Geometry only -- no speed, no timing. Speed stays the pilot's (cruise control), and heading comes from the
- * loop's own tangent, the way a rollercoaster's direction comes from its track rather than from a steering
- * input. See [PathFollower].
+ * The geometry is the whole of this class. Heading comes from the loop's own tangent, the way a
+ * rollercoaster's direction comes from its track rather than from a steering input. TIMING does NOT live
+ * here -- it is an optional [MotionTrack] hanging off [motion], recorded alongside the line and read only by
+ * the replay half of [PathFollower]. Keeping them apart is what lets one route be flown either way: fly the
+ * line and drive it yourself, or replay it exactly as recorded.
  *
  * ## Two representations
  * STORED ([control]): the RDP-decimated control points from [PathSmoothing.finish], as a flat x,y,z DoubleArray.
@@ -45,7 +47,16 @@ class ShipPath(
     /** Dimension this route was recorded in; routes are only offered in their own dimension. */
     val dimension: String,
     /** RDP-decimated control points, flat x,y,z. This is what persists. */
-    val control: DoubleArray
+    val control: DoubleArray,
+    /**
+     * Decimated `(arc, seconds)` breakpoints, or empty for a route with no recorded timing.
+     *
+     * Defaulted so every existing call site is untouched, and so a route saved before timing was recorded --
+     * or one recorded with `pathRecordTiming` off -- loads as geometry-only rather than needing a migration.
+     */
+    timeSamples: DoubleArray = EMPTY,
+    /** Decimated `(arc, seconds)` pairs for the recorded pauses. Empty when there are none. */
+    dwellSamples: DoubleArray = EMPTY
 ) {
 
     /** Uniform-arc-length polyline, flat x,y,z. Rebuilt from [control]; never persisted. */
@@ -60,6 +71,15 @@ class ShipPath(
     /** Total loop length in blocks. */
     val length: Double
 
+    /**
+     * When this route was at each point of itself, and where it was made to wait -- or null if that was
+     * never recorded.
+     *
+     * Null is the ordinary state for anything saved before timing was recorded, and the one thing
+     * CTRL+SHIFT+P checks before it will engage.
+     */
+    val motion: MotionTrack?
+
     init {
         require(control.size >= 3 * MIN_CONTROL_POINTS) {
             "A path needs at least $MIN_CONTROL_POINTS control points, got ${control.size / 3}"
@@ -69,6 +89,8 @@ class ShipPath(
         // Uniform by construction: buildDense chose a point count that divides the loop evenly.
         spacing = totalPolylineLength(dense, closed = true) / pointCount
         length = spacing * pointCount
+        motion = if (timeSamples.size < 4) null
+        else MotionTrack(timeSamples, dwellSamples, length).takeUnless { it.isEmpty }
     }
 
     fun x(i: Int) = dense[wrapIndex(i) * 3]
@@ -167,6 +189,33 @@ class ShipPath(
     }
 
     /**
+     * The steepest slope anywhere in the [span] blocks of route ahead of [s], as the vertical component of a
+     * unit tangent -- so 0 is level, +1 straight up and -1 straight down.
+     *
+     * The vertical twin of [minTurnRadius], and it exists for the same reason: a hull has a maximum climb and
+     * descent rate, so a slope steeper than it can hold at its current speed is not a steering error but a
+     * request for something the ship cannot do. Signed rather than absolute, because ships climb and descend
+     * at different rates and the caller has to know which limit applies.
+     *
+     * Takes the largest MAGNITUDE in the window rather than an average, exactly as [minTurnRadius] takes the
+     * tightest radius: a short sharp dive inside an otherwise level leg is precisely the case worth slowing
+     * for, and an average would dissolve it.
+     */
+    fun steepestGrade(s: Double, span: Double): Double {
+        var worst = 0.0
+        val probe = Vector3d()
+        var travelled = 0.0
+
+        while (travelled <= span) {
+            val grade = tangentAt(s + travelled, probe).y
+            if (abs(grade) > abs(worst)) worst = grade
+            travelled += CURVATURE_STEP
+        }
+
+        return worst
+    }
+
+    /**
      * Arc length of the point on the loop closest to [pos].
      *
      * [hint] is the previous tick's answer; the search only covers [SEARCH_WINDOW] blocks either side of it,
@@ -240,6 +289,9 @@ class ShipPath(
 
         /** Below this a "loop" is a degenerate blob that no smoothing or follower can make sense of. */
         const val MIN_CONTROL_POINTS = 4
+
+        /** Shared "no speed was recorded", so the default argument allocates nothing per route. */
+        val EMPTY = DoubleArray(0)
 
         /**
          * Expand [control] into a uniform-arc-length closed polyline.

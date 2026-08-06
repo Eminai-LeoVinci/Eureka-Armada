@@ -3,6 +3,7 @@ package org.valkyrienskies.eureka.fabric.client
 import net.fabricmc.api.EnvType
 import net.fabricmc.api.Environment
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
+import com.mojang.blaze3d.platform.InputConstants
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.Minecraft
@@ -35,7 +36,14 @@ import kotlin.math.max
  * | key | tap | hold |
  * |---|---|---|
  * | SHIFT+R | start recording | discard the recording |
- * | SHIFT+P | play / pause / resume | release the ship from its route |
+ * | SHIFT+P | fly the line / pause / resume | release the ship from its route |
+ * | CTRL+SHIFT+P | replay the recording / pause / resume | release the ship from its route |
+ *
+ * ## CTRL is a modifier, not a fifth binding
+ * Deliberately. A new [KeyMapping] only reaches a profile whose `options.txt` has never seen it, so shipping
+ * one means every existing install has to be told to go and bind it by hand. A modifier on a key that is
+ * already bound arrives working. It also keeps the pair honest: the two are the same gesture on the same key
+ * asking for two modes of the same thing, and the hold means "let go" for both.
  *
  * This is what freed up SHIFT+S and SHIFT+C, and getting rid of `S` in particular was worth doing on its own:
  * it is vanilla's walk-backwards key, and sneak-walking backwards along a deck near a ledge is exactly what
@@ -73,6 +81,16 @@ object PathKeybinds {
     private class Gesture(val mapping: KeyMapping) {
         var held = 0
         var fired = false
+
+        /**
+         * Whether CTRL was down when this press STARTED.
+         *
+         * Latched at the leading edge rather than read when the tap fires, for the same reason the gesture
+         * survives sneak being released early: letting go of a modifier a fraction before the key it modifies
+         * is an ordinary way to end a chord, and reading CTRL at release would silently turn a replay into a
+         * plain play. The leading edge is also the only moment at which the player's intent is unambiguous.
+         */
+        var ctrl = false
     }
 
     private lateinit var recordGesture: Gesture
@@ -156,13 +174,22 @@ object PathKeybinds {
         // the count can START or CONTINUE; a false reads as a release, which is exactly right.
         val ring = max(
             gesture(
-                recordGesture, sneaking, "Hold to discard the recording…",
+                recordGesture, sneaking, client, "Hold to discard the recording…",
                 onTap = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_START) },
                 onHold = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_RECORD_CANCEL) }
             ),
             gesture(
-                playGesture, sneaking, "Hold to release the ship from its route…",
-                onTap = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_PLAY) },
+                playGesture, sneaking, client, "Hold to release the ship from its route…",
+                // CTRL asks for the recording's own speed and stops; without it the route is a line to steer
+                // along and the throttle stays the pilot's, exactly as it always was.
+                onTap = {
+                    PathNetworkingFabric.sendAction(
+                        if (playGesture.ctrl) PathNetworkingFabric.ACTION_PLAY_REPLAY
+                        else PathNetworkingFabric.ACTION_PLAY
+                    )
+                },
+                // The hold means "let go of the route" either way -- there is no version of that which the
+                // modifier could sensibly change.
                 onHold = { PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_STOP) }
             )
         )
@@ -200,11 +227,14 @@ object PathKeybinds {
     private inline fun gesture(
         gesture: Gesture,
         armed: Boolean,
+        client: Minecraft,
         prompt: String,
         onTap: () -> Unit,
         onHold: () -> Unit
     ): Float {
         if (armed && gesture.mapping.isDown) {
+            // The leading edge, and the only tick the modifier is read on -- see Gesture.ctrl.
+            if (gesture.held == 0) gesture.ctrl = isControlDown(client)
             gesture.held++
             if (!gesture.fired && gesture.held >= holdTicks()) {
                 gesture.fired = true
@@ -226,11 +256,24 @@ object PathKeybinds {
         return 0.0f
     }
 
+    /**
+     * Whether either CTRL key is down.
+     *
+     * Read from the window rather than through a [KeyMapping], because vanilla has no binding for it, and not
+     * through `Screen.hasControlDown` because 1.21.11 removed that alongside `hasShiftDown` (see
+     * `PATH_RECORDING_NOTES.md`). `InputConstants.isKeyDown` is what those helpers called anyway.
+     */
+    private fun isControlDown(client: Minecraft): Boolean =
+        InputConstants.isKeyDown(client.window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
+            InputConstants.isKeyDown(client.window, GLFW.GLFW_KEY_RIGHT_CONTROL)
+
     private fun reset() {
         recordGesture.held = 0
         recordGesture.fired = false
+        recordGesture.ctrl = false
         playGesture.held = 0
         playGesture.fired = false
+        playGesture.ctrl = false
         PathHud.setHoldProgress(0.0f)
     }
 

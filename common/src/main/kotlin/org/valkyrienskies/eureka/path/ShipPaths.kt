@@ -18,6 +18,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * Owns every in-progress recording and every ship currently flying a route, and drives them from the server
@@ -38,6 +40,9 @@ object ShipPaths {
     private val followers = ConcurrentHashMap<Long, PathFollower>()
 
     private val scratchKeel = Vector3d()
+
+    /** Consecutive server ticks each replaying ship has been too far off its line to be merely lagging. */
+    private val blockedTicks = ConcurrentHashMap<Long, Int>()
 
     // region tick
 
@@ -89,7 +94,7 @@ object ShipPaths {
 
     private fun tickRecorder(level: ServerLevel, ship: LoadedServerShip, recorder: PathRecorder) {
         val keel = KeelAnchor.world(level, ship, scratchKeel) ?: return
-        when (recorder.tick(keel)) {
+        when (recorder.tick(keel, ship.velocity.length())) {
             PathRecorder.Step.RECORDING -> Unit
 
             PathRecorder.Step.SNAPPED -> {
@@ -126,12 +131,48 @@ object ShipPaths {
             return
         }
 
-        val path = PathStore.get(level).create(level.dimensionId, control)
+        // The timeline is measured against the FINISHED geometry, which does not exist until the control
+        // points have been through ShipPath's spline -- and a raw sample index means nothing after smoothing,
+        // decimation and the seam blend have all moved things about (see MotionTrack.build). So the route is
+        // built twice: once bare, purely as the ruler to measure arc lengths against, and once for real. That
+        // costs one extra spline expansion on an event that happens once per recording, and it is much the
+        // lesser evil next to giving an otherwise immutable class a setter to be filled in afterwards.
+        var timeSamples = ShipPath.EMPTY
+        var dwellSamples = ShipPath.EMPTY
+        if (cfg.pathRecordTiming) {
+            val bare = runCatching { ShipPath(0L, "", level.dimensionId, control) }.getOrNull()
+            val track = bare?.let {
+                MotionTrack.build(
+                    it, recorder.toArray(), recorder.timeArray(), recorder.dwellArray(), cfg.pathTimeEpsilon
+                )
+            }
+            if (track != null) {
+                timeSamples = track.times
+                dwellSamples = track.dwells
+            }
+        }
+
+        val path = PathStore.get(level).create(level.dimensionId, control, timeSamples, dwellSamples)
+        // Reporting the timeline is not decoration: it is the only confirmation the pilot gets that the
+        // recording captured more than a line, short of flying the whole loop back to find out.
+        val recorded = path.motion?.let { track ->
+            val stops =
+                if (track.dwellCount == 0) ""
+                else ", ${track.dwellCount} stop(s) totalling ${formatDuration(track.lapSeconds - track.movingSeconds)}"
+            " -- ${formatDuration(track.movingSeconds)} flying$stops"
+        } ?: " -- no timing recorded, so SHIFT+P only"
         tell(
             level, recorder.playerId,
-            "Route '${path.name}' saved -- ${path.length.toInt()} blocks, ${path.control.size / 3} points.",
+            "Route '${path.name}' saved: ${path.length.toInt()} blocks, " +
+                "${path.control.size / 3} points$recorded.",
             error = false
         )
+    }
+
+    /** "1m 20s", or "45s" under a minute. */
+    private fun formatDuration(seconds: Double): String {
+        val total = seconds.roundToInt().coerceAtLeast(0)
+        return if (total < 60) "${total}s" else "${total / 60}m ${total % 60}s"
     }
 
     private fun tickFollower(level: ServerLevel, ship: LoadedServerShip, follower: PathFollower) {
@@ -150,22 +191,110 @@ object ShipPaths {
 
         if (checkManualTakeover(level, ship, control, follower)) return
 
+        val keelLocal = KeelAnchor.local(level, ship) ?: return
         val keel = KeelAnchor.world(level, ship, scratchKeel) ?: return
 
-        if (!follower.tick(keel, control, ship.velocity.length())) {
+        if (!follower.tick(keel, keelLocal, control, ship.velocity.length())) {
             release(ship, stopShip = true)
             tell(level, follower.playerId, "Stopped following -- the ship lost its course.", error = true)
             return
         }
 
+        if (checkBlocked(level, ship, control, follower)) return
+
         // Mirror the follower's progress onto the saved binding, the same way physTick mirrors the live cruise
-        // course onto its flat persisted fields. Three field stores a tick, and it is what lets a reload pick the
-        // route up where the ship actually was rather than re-acquiring from scratch.
+        // course onto its flat persisted fields. A handful of field stores a tick, and it is what lets a reload
+        // pick the route up where the ship actually was rather than re-acquiring from scratch -- including,
+        // for a replayed route, part-way through a wait at a dock.
         PathBinding.get(ship)?.let { binding ->
             binding.arc = follower.arc
             binding.laps = follower.laps
+            binding.clock = follower.clock
+            binding.nextDwell = follower.nextDwell
+            binding.dwellIndex = follower.dwellIndex
+            binding.dwellRemaining = follower.dwellRemaining
             follower.copyOffset(binding.offset)
         }
+
+        // Worth saying out loud both ways round: a ship that stops dead in the middle of a route looks broken
+        // unless something explains it, and one that sets off again after minutes of stillness is equally
+        // startling if nothing announced it.
+        if (follower.dwellJustStarted) {
+            tell(
+                level, follower.playerId,
+                "Holding on '${follower.path.name}' for ${follower.dwellSecondsLeft()}s.",
+                PathMessages.Kind.WARN
+            )
+        } else if (follower.dwellJustEnded) {
+            tell(level, follower.playerId, "Under way again on '${follower.path.name}'.", PathMessages.Kind.GOOD)
+        }
+    }
+
+    /**
+     * Give up on a replay that cannot reach its line, and say so.
+     *
+     * A replay servos the hull onto the route rather than steering it there, so an obstruction that was not
+     * present when the route was recorded -- terrain, a build, another vessel -- is a ship shoving at something
+     * immovable with nobody told. The test is deliberately BOTH far off and for a while: a replay is routinely
+     * several blocks out for a moment while it eases onto the line or rides out a collision, and neither is a
+     * reason to abandon a route.
+     *
+     * ## Distance alone is not evidence
+     * The first version of this test used distance alone, and it threw ships off perfectly good routes. It had
+     * to: a servo chasing a station that is itself moving carries a standing lag, and that lag grows with
+     * speed -- eight blocks is a third of a second at a brisk cruise, so a route with a fast leg trips a
+     * distance threshold simply by being flown quickly. Being behind is not being blocked.
+     *
+     * What actually distinguishes them is whether the hull is GOING anywhere. A ship lagging on a fast leg is
+     * making nearly the speed it was asked for and closing; a blocked one is being asked for speed and making
+     * none of it. So the distance is kept only as a precondition and [EurekaShipControl.pathServoStalled] is
+     * the evidence -- with a much larger distance standing on its own, for the case where a hull is being
+     * carried somewhere else entirely (a current, a bigger vessel) and is moving briskly in the wrong
+     * direction.
+     *
+     * Only replay can be blocked in this sense. A geometry-mode ship is being steered by the pilot's own
+     * throttle and stopping against a wall is theirs to notice.
+     *
+     * Returns true if the ship was released.
+     */
+    private fun checkBlocked(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        control: EurekaShipControl,
+        follower: PathFollower
+    ): Boolean {
+        if (!follower.mode.isReplay) {
+            blockedTicks.remove(ship.id)
+            return false
+        }
+
+        val cfg = EurekaConfig.SERVER
+        val error = control.pathServoError
+        val stuck = error > cfg.pathReplayMaxError &&
+            (control.pathServoStalled || error > cfg.pathReplayMaxError * BLOCKED_FAR_MULTIPLE)
+        if (!stuck) {
+            blockedTicks.remove(ship.id)
+            return false
+        }
+
+        val ticks = (blockedTicks[ship.id] ?: 0) + 1
+        if (ticks * TICK_SECONDS < cfg.pathReplayBlockedSeconds) {
+            blockedTicks[ship.id] = ticks
+            return false
+        }
+
+        blockedTicks.remove(ship.id)
+        // Left where it stopped rather than walked home: the ship is up against something, and the useful
+        // thing is for it to still be there when its owner comes to look.
+        release(ship, stopShip = true)
+        tell(
+            level, follower.playerId,
+            // The distance is in the message on purpose: "blocked" is a judgement made from two numbers, and
+            // when it is wrong the only useful thing anyone can tell you afterwards is how far out it was.
+            "'${follower.path.name}' is blocked ${error.roundToInt()}m off its line -- stopped there.",
+            error = true
+        )
+        return true
     }
 
     /**
@@ -175,8 +304,9 @@ object ShipPaths {
      * past an obstacle, and it should stay a nudge -- the route simply re-acquires afterwards, which is the
      * whole point of pure pursuit. Only a sustained input means "I have the wheel now".
      *
-     * Forward/back is deliberately NOT included. Speed was never the route's to own, so driving or stopping
-     * while bound to a line is ordinary use, not a takeover.
+     * Forward/back counts only in [PathMode.REPLAY]. On a plain route speed was never the route's to own, so
+     * driving or stopping while bound to a line is ordinary use rather than a takeover -- but a replay DOES
+     * own the throttle, and there the same input is a pilot taking it back.
      *
      * Returns true if the ship was released, in which case the caller must not steer it this tick.
      */
@@ -189,11 +319,12 @@ object ShipPaths {
         val hold = EurekaConfig.SERVER.pathManualCancelHold
         if (hold <= 0.0) return false
 
-        // Both are signed seconds accumulated on the game thread and zeroed the moment the input stops, so a
-        // stale reading can't build up while nobody is at the helm.
+        // All signed seconds accumulated on the game thread and zeroed the moment the input stops, so a stale
+        // reading can't build up while nobody is at the helm.
         val turning = abs(control.turnHold)
         val climbing = abs(control.vertHold)
-        val held = max(turning, climbing)
+        val driving = if (follower.mode.isReplay) abs(control.fwdHold) else 0.0
+        val held = max(max(turning, climbing), driving)
         if (held <= 0.0) return false
 
         if (held >= hold) {
@@ -209,7 +340,11 @@ object ShipPaths {
         }
 
         if (held >= hold * PROMPT_AT) {
-            val what = if (turning >= climbing) "turning" else "climbing"
+            val what = when (held) {
+                driving -> "driving"
+                turning -> "turning"
+                else -> "climbing"
+            }
             tell(
                 level, follower.playerId,
                 "Keep $what to stop following '${follower.path.name}'…",
@@ -286,7 +421,12 @@ object ShipPaths {
             followers[ship.id] = PathFollower(
                 ship.id, binding.ownerId, path, Vector3d(binding.offset),
                 startArc = binding.arc,
-                startLaps = binding.laps
+                startLaps = binding.laps,
+                startMode = resumeMode(binding, path),
+                startClock = binding.clock,
+                startDwell = binding.dwellIndex,
+                startDwellRemaining = binding.dwellRemaining,
+                startNextDwell = binding.nextDwell
             ).also { it.paused = true }
             return
         }
@@ -311,21 +451,44 @@ object ShipPaths {
         val stillThere = saved >= 0.0 &&
             path.sampleAt(saved, Vector3d()).add(offset).distance(keel) <= EurekaConfig.SERVER.pathEngageRange
 
+        val mode = resumeMode(binding, path)
+
         followers[ship.id] = PathFollower(
             ship.id, binding.ownerId, path, offset,
             startArc = if (stillThere) saved else -1.0,
-            startLaps = binding.laps
+            startLaps = binding.laps,
+            startMode = mode,
+            // The replay clock likewise only survives alongside the position that gave it meaning -- handed
+            // -1 it is re-derived from wherever the ship actually turned up, which is what re-acquiring means.
+            startClock = if (stillThere) binding.clock else -1.0,
+            // A pause only survives alongside the position that gave it meaning. Re-acquiring means the hull
+            // moved while it was out of simulation, and finishing a dock wait somewhere else is worse than
+            // simply not finishing it.
+            startDwell = if (stillThere) binding.dwellIndex else -1,
+            startDwellRemaining = if (stillThere) binding.dwellRemaining else 0.0,
+            startNextDwell = if (stillThere) binding.nextDwell else -1
         )
 
         // Worth saying out loud. The ship is about to start steering itself with nobody aboard who asked it to,
-        // and silence there reads as a bug rather than as a feature working.
+        // and silence there reads as a bug rather than as a feature working. The mode is named because the two
+        // look very different from the deck: one waits for a throttle, the other sets off on its own.
         tell(
             level, binding.ownerId,
-            if (stillThere) "Resumed '${path.name}' where the ship left off."
-            else "Resumed '${path.name}' -- the ship had drifted, so it is re-acquiring the line.",
+            if (stillThere) "Resumed '${path.name}' (${mode.label}) where the ship left off."
+            else "Resumed '${path.name}' (${mode.label}) -- the ship had drifted, so it is re-acquiring the line.",
             PathMessages.Kind.GOOD
         )
     }
+
+    /**
+     * The mode a re-armed binding comes back in.
+     *
+     * Falls back to [PathMode.GEOMETRY] when the saved mode was replay but the route has no timeline. That
+     * should not be reachable -- a route cannot lose its track -- but the alternative if it ever were is a
+     * follower asking a null for its clock every tick, and steering the line is a perfectly good answer.
+     */
+    private fun resumeMode(binding: PathBinding, path: ShipPath): PathMode =
+        if (binding.pathMode.isReplay && path.motion == null) PathMode.GEOMETRY else binding.pathMode
 
     /**
      * Take a ship off its route: drop the follower, release the hull's path guidance and forget the saved
@@ -339,6 +502,7 @@ object ShipPaths {
         // Guarded, unlike the binding clear below: `stopShip` drops the ship's cruise too, and a ship that was
         // never following must not lose its throttle just because something asked whether it was.
         if (follower != null) ship.getAttachment(EurekaShipControl::class.java)?.pathRelease(stopShip)
+        blockedTicks.remove(ship.id)
         PathBinding.clear(ship)
         return follower
     }
@@ -359,6 +523,7 @@ object ShipPaths {
     fun reset() {
         recorders.clear()
         followers.clear()
+        blockedTicks.clear()
         KeelAnchor.clear()
     }
 
@@ -401,20 +566,27 @@ object ShipPaths {
     }
 
     /**
-     * SHIFT+P, tapped. One key for all three of start, pause and resume.
+     * SHIFT+P or CTRL+SHIFT+P, tapped. One key for start, pause, resume and switching between the two modes.
      *
-     * Which of the three is meant is decided HERE rather than on the client, because the client knows only
-     * which route a ship is bound to and not whether it is paused -- and a toggle that guessed wrong would put
-     * a ship under way when the player meant to hold it. Releasing the route outright is the 2-second hold on
-     * the same key, which arrives as [stop].
+     * Which of those is meant is decided HERE rather than on the client, because the client knows only which
+     * route a ship is bound to -- not whether it is paused, and not which mode it is in. A toggle that guessed
+     * wrong would put a ship under way when the player meant to hold it. Releasing the route outright is the
+     * 2-second hold on the same key, which arrives as [stop].
+     *
+     * [requested] is what the modifier picked. On a ship that is already bound it means "be in this mode",
+     * which is a different question from pause/resume -- so a press that names the mode the ship is NOT in
+     * switches it, and a press that names the mode it IS in is the pause toggle.
      */
-    fun playOrPause(level: ServerLevel, player: ServerPlayer) {
+    fun playOrPause(level: ServerLevel, player: ServerPlayer, requested: PathMode) {
         val cfg = EurekaConfig.SERVER
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to fly a route.")
 
         if (recorders.containsKey(ship.id)) return fail(player, "This ship is still recording a route.")
 
-        followers[ship.id]?.let { return togglePause(level, ship, player, it) }
+        followers[ship.id]?.let { follower ->
+            return if (follower.mode == requested) togglePause(level, ship, player, follower)
+            else switchMode(ship, player, follower, requested)
+        }
 
         // A route and a pursuit both own the wheel, so a hull can only be under one of them. Refused rather than
         // silently taking over, because which one you meant is not something this can guess.
@@ -440,36 +612,95 @@ object ShipPaths {
             )
         }
 
+        // Refused before pathBegin, like every other way this can fail: the flag that tells the physics
+        // something is about to steer must never be set with no follower behind it.
+        if (requested.isReplay && path.motion == null) {
+            return fail(
+                player,
+                "'${path.name}' was recorded without timing -- record it again to replay it, " +
+                    "or SHIFT+P to fly the line."
+            )
+        }
+
         if (!control.pathBegin()) {
             return fail(player, "This ship needs a helm before it can follow a route.")
         }
 
-        // The gap between the ship and the line right now becomes a fixed displacement applied to the whole
-        // route -- see PathFollower. Measured from the keel, the same point the route was recorded from.
-        val onPath = path.sampleAt(path.nearestArcLength(keel, -1.0), Vector3d())
+        // The gap between the ship and the line right now. In GEOMETRY mode it becomes a fixed displacement
+        // applied to the whole route; in REPLAY it is eased away to nothing over the first few seconds, since
+        // a replay's whole point is to fly the line the recording actually flew. Measured from the keel, the
+        // same point the route was recorded from.
+        val startArc = path.nearestArcLength(keel, -1.0)
+        val onPath = path.sampleAt(startArc, Vector3d())
         val offset = Vector3d(keel).sub(onPath)
 
-        followers[ship.id] = PathFollower(ship.id, player.uuid, path, offset)
+        followers[ship.id] =
+            PathFollower(ship.id, player.uuid, path, offset, startArc = startArc, startMode = requested)
         // Saved on the ship, so a reload (or the ship drifting out of simulation and back) re-arms all of this
-        // rather than dropping the route. Arc and laps start unset; the follower mirrors them in from here on.
-        PathBinding.getOrCreate(ship).bind(path.id, offset, player.uuid, arc = -1.0, laps = 0)
+        // rather than dropping the route. Laps start at zero; the follower mirrors everything in from here on.
+        PathBinding.getOrCreate(ship)
+            .bind(path.id, offset, player.uuid, arc = startArc, laps = 0, mode = requested)
 
-        if (distance < ON_LINE_TOLERANCE) {
-            ok(player, "Following '${path.name}'.")
-        } else {
-            ok(player, "Following '${path.name}', holding a ${distance.toInt()}m offset from the line.")
+        val approach = when {
+            distance < ON_LINE_TOLERANCE -> ""
+            requested.isReplay -> ", easing ${distance.toInt()}m onto the line"
+            else -> ", holding a ${distance.toInt()}m offset from the line"
         }
+        ok(player, "Following '${path.name}' (${requested.label})$approach.")
 
-        // Binding a stopped ship is perfectly valid -- the route owns steering, never the throttle, so it can
-        // sit bound to the line indefinitely and be driven by hand. Say so rather than implying something is
-        // missing: the old wording read as an error on a ship that was working exactly as intended.
-        if (!control.cruiseHorizontalArmed && ship.velocity.length() < UNDER_WAY_SPEED) {
+        // Binding a stopped ship is perfectly valid in GEOMETRY mode -- the route owns steering, never the
+        // throttle, so it can sit bound to the line indefinitely and be driven by hand. Say so rather than
+        // implying something is missing: the old wording read as an error on a ship working exactly as
+        // intended. A replay needs no such hint, since it is about to drive itself.
+        if (!requested.isReplay &&
+            !control.cruiseHorizontalArmed &&
+            ship.velocity.length() < UNDER_WAY_SPEED
+        ) {
             tell(
                 level, player.uuid,
-                "Bound and stopped -- steer with the throttle or set a cruise speed to get under way.",
+                "Bound and stopped -- steer with the throttle, set a cruise speed, or CTRL+SHIFT+P to " +
+                    "replay the recording.",
                 PathMessages.Kind.WARN
             )
         }
+    }
+
+    /**
+     * Change which way a bound ship flies its route, without letting go of it.
+     *
+     * Deliberately does NOT touch the paused state. A player pressing this has said something about the mode
+     * and nothing about whether the ship should be moving, and reading it as "and set off" would mean a key
+     * that can put a deliberately held vessel under way -- next to a dock, which is where ships get held.
+     *
+     * Arc, laps and route all survive, so switching mid-flight is seamless: the ship carries on from exactly
+     * where it is, with a different thing driving it.
+     */
+    private fun switchMode(
+        ship: LoadedServerShip,
+        player: ServerPlayer,
+        follower: PathFollower,
+        requested: PathMode
+    ) {
+        if (requested.isReplay && follower.path.motion == null) {
+            return fail(
+                player,
+                "'${follower.path.name}' was recorded without timing -- record it again to replay it."
+            )
+        }
+
+        val wasHolding = follower.dwelling
+        // Puts the clock where the ship has got to, re-arms the ease onto the line, and abandons any pause in
+        // progress -- a pause is counted down only by replay, so one left standing in geometry mode would
+        // never end. See PathFollower.switchTo.
+        follower.switchTo(requested)
+        PathBinding.get(ship)?.mode = requested.ordinal
+
+        val note = when {
+            follower.paused -> " -- still paused, SHIFT+P to carry on"
+            wasHolding && !requested.isReplay -> " -- the ship is yours to drive from here"
+            else -> ""
+        }
+        ok(player, "'${follower.path.name}' switched to ${requested.label}$note.")
     }
 
     /**
@@ -494,7 +725,7 @@ object ShipPaths {
             follower.paused = true
             PathBinding.get(ship)?.paused = true
             control.pathRelease(stopShip = true)
-            ok(player, "Paused on '${follower.path.name}' -- SHIFT+P again to carry on.")
+            ok(player, "Paused on '${follower.path.name}' -- press again to carry on.")
             return
         }
 
@@ -594,6 +825,18 @@ object ShipPaths {
 
     /** Below this (m/s) a ship counts as stopped for the "you'll need some throttle" hint. */
     private const val UNDER_WAY_SPEED = 0.5
+
+    /** Server tick length, for turning the blocked-route tick count into seconds. */
+    private const val TICK_SECONDS = 0.05
+
+    /**
+     * How many times `pathReplayMaxError` counts as blocked on distance ALONE, with no stall to corroborate it.
+     *
+     * The escape hatch for a hull that is moving perfectly well and simply not where the route is -- carried
+     * off by something bigger, or shoved through a portal's worth of terrain. Well clear of any lag a servo
+     * chasing a moving station can accumulate on its own.
+     */
+    private const val BLOCKED_FAR_MULTIPLE = 5.0
 
     /**
      * Decimation tolerance in blocks. Storage-only: [ShipPath] rebuilds a spline through the kept points, so
