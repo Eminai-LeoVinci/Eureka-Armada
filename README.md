@@ -16,12 +16,13 @@ Build and design your own ship out of ordinary (or modded!) Minecraft blocks, pl
 
 ## About this port
 
-This is a **Fabric-only** port of Eureka to **Minecraft 1.20.1, 1.21.1, and 1.21.11** — the ship-building layer for the matching Valkyrien Skies 2 port. It carries the full Eureka toolkit and adds a redesigned helm menu and the new **Eureka Assembler** on top.
+This is a **Fabric-only** port of Eureka to **Minecraft 1.20.1, 1.21.1, and 1.21.11** — the ship-building layer for the matching Valkyrien Skies 2 port. It carries the full Eureka toolkit and adds a redesigned helm menu and the new **Eureka Auto-Shipwright** on top.
 
 ## Highlights
 
-- **The Eureka Assembler** — auto-fills a ship with exactly the floaters or balloons it needs as you assemble; fully customizable, with manual +% padding and a live ship-weight readout.
-- **Redesigned helm** — per-ship Advanced / Vanilla controls, a full cruise overhaul, Water Lock altitude-hold, an on-screen Speed / Altitude / Heading HUD, and in-helm ship renaming.
+- **Ship categories** — a ship handles as a **Boat**, an **Airship** or (later) a **Submarine**, decided by what it is built out of rather than by a setting. Each category has its own fully editable block of settings, and a hybrid hull with both floaters and balloons switches between them at the waterline.
+- **The Eureka Auto-Shipwright** — fits a ship with exactly the floaters or balloons it needs as you assemble; fully customizable, with manual +% padding, a balloons-only Replace All, and live ship-weight and fit readouts.
+- **Redesigned helm** — a ship-category tab strip, a full cruise overhaul, Water Lock altitude-hold, an on-screen Speed / Altitude / Heading HUD, and in-helm ship renaming.
 - **Cosmetics** — a Heart-of-the-Sea-blue helm wheel, and a Pale Oak helm on 1.21.11.
 
 See the [**Releases**](https://github.com/Eminai-LeoVinci/Eureka-Ships/releases) page for the complete feature list.

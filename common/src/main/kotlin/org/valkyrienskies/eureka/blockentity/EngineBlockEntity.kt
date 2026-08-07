@@ -83,16 +83,16 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
         if (this.level!!.isClientSide) return
 
         // Resolve THIS engine's managing ship + its EurekaShipControl once per tick (the ship getter walks the
-        // loaded-ship index, so cache it). Two engine fields are MODE-affected -- engineHeatGain and
-        // enginePowerLinear -- and must honor the per-ship vanilla/advanced preset rather than the global
-        // ADVANCED defaults; everything else (heat loss, fuel, redstone) stays global on EurekaConfig.SERVER.
-        // A loose engine (not on a ship / control attachment absent) falls back to EurekaConfig.SERVER, which
-        // is the ADVANCED preset, so unmanaged engines behave exactly as before.
+        // loaded-ship index, so cache it). Three engine fields are per SHIP CATEGORY -- engineHeatGain,
+        // enginePowerLinear and its cold-engine floor -- and must honor the ship's own preset; everything else
+        // (heat loss, fuel, redstone) stays global on EurekaConfig.SERVER. A loose engine (not on a ship, or
+        // with no control attachment) falls back to the base block, which is also what a boat reads for the
+        // shared values.
         val eurekaShipControl = ship?.getAttachment(EurekaShipControl::class.java)
         val engineCfg = eurekaShipControl?.engineCfg ?: EurekaConfig.SERVER
 
-        // Heat ceiling, derived per-tick from this ship's engineHeatGain preset (mode-affected) so the cap
-        // tracks the same vanilla/advanced gain used below; was a stale construction-time field.
+        // Heat ceiling, derived per-tick from this ship's engineHeatGain preset so the cap tracks the same
+        // per-category gain used below; was a stale construction-time field.
         val maxEffectiveFuel = 100f - engineCfg.engineHeatGain
 
         val isPowered = hasRedstoneSignal()
@@ -144,11 +144,11 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
                     effectiveHeat = heat / 100f
                 }
 
-                // enginePowerLinear is mode-affected (vanilla 500000f vs advanced 100000f): use this ship's
-                // preset so a vanilla ship makes 833d445-strength force AND its boost threshold scales against
-                // the same 500000f (boost at ~3 engines), restoring the real pre-overhaul engine feel.
+                // Engine linear power is per SHIP CATEGORY (an airship's 500000f against a boat's 100000f), so
+                // read both ends of the lerp off this ship's own preset: the hot power AND the boost threshold
+                // it is scaled against have to agree, or an airship's boost would engage at a boat's engine count.
                 eurekaShipControl.powerLinear += lerp(
-                    EurekaConfig.SERVER.enginePowerLinearMin,
+                    engineCfg.enginePowerLinearMin,
                     engineCfg.enginePowerLinear,
                     effectiveHeat,
                 )

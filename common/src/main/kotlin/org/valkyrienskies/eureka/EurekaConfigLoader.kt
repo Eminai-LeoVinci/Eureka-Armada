@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka
 
 import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.SerializationFeature
 import com.mojang.logging.LogUtils
@@ -44,15 +45,20 @@ object EurekaConfigLoader {
             }
 
             val tree = mapper.readTree(CONFIG_FILE.toFile())
-            // "server" updates the ADVANCED preset (EurekaConfig.SERVER === ADVANCED).
+            // "server" is the base block: assembly-time knobs, buoyancy/lift, and everything shared.
             tree.get("server")?.takeIf { !it.isMissingNode && !it.isNull }?.let {
                 mapper.readerForUpdating(EurekaConfig.SERVER).readValue<Any>(it)
             }
-            // "serverVanilla" updates the VANILLA preset. Legacy migration: if absent (pre-feature file),
-            // leave VANILLA at its baked 833d445 defaults -- writeConfig() below re-emits the key populated.
-            tree.get("serverVanilla")?.takeIf { !it.isMissingNode && !it.isNull }?.let {
-                mapper.readerForUpdating(EurekaConfig.VANILLA).readValue<Any>(it)
-            }
+            // The three ship categories, SEEDED then OVERLAID. Seeding matters exactly once, on the first
+            // load after this feature lands: a file written by an older build has no category blocks at all,
+            // and if they simply kept their baked defaults every hand-edit in "server" would be silently
+            // dropped for anything a ship actually reads. So each category starts as a copy of the "server"
+            // block as just loaded, takes its own handling deltas on top, and only then reads its own key
+            // from the file. writeConfig() emits all three in full, so from the second load onward the
+            // file's own block governs completely and the seed is inert. Idempotent either way.
+            seedCategory(EurekaConfig.BOAT, tree.get("serverBoat"), EurekaConfig::boatDefaults)
+            seedCategory(EurekaConfig.AIRSHIP, tree.get("serverAirship"), EurekaConfig::airshipDefaults)
+            seedCategory(EurekaConfig.SUBMARINE, tree.get("serverSubmarine"), EurekaConfig::submarineDefaults)
             tree.get("client")?.takeIf { !it.isMissingNode && !it.isNull }?.let {
                 mapper.readerForUpdating(EurekaConfig.CLIENT).readValue<Any>(it)
             }
@@ -80,12 +86,29 @@ object EurekaConfigLoader {
         }
     }
 
+    /**
+     * Bring one ship-category preset up to date: copy the freshly-loaded [EurekaConfig.SERVER] over it,
+     * apply that category's handling [deltas], then overlay whatever the config file holds for it.
+     *
+     * The copy goes through the mapper rather than a hand-written field-by-field clone so it can never fall
+     * behind the ~150-field Server class -- adding a config key needs no change here.
+     */
+    private fun seedCategory(preset: EurekaConfig.Server, node: JsonNode?, deltas: (EurekaConfig.Server) -> Unit) {
+        mapper.readerForUpdating(preset).readValue<Any>(mapper.valueToTree<JsonNode>(EurekaConfig.SERVER))
+        deltas(preset)
+        node?.takeIf { !it.isMissingNode && !it.isNull }?.let {
+            mapper.readerForUpdating(preset).readValue<Any>(it)
+        }
+    }
+
     private fun writeConfig() {
         CONFIG_FILE.parent?.let { Files.createDirectories(it) }
         val wrapper = linkedMapOf(
             "client" to EurekaConfig.CLIENT,
-            "server" to EurekaConfig.ADVANCED,
-            "serverVanilla" to EurekaConfig.VANILLA
+            "server" to EurekaConfig.SERVER,
+            "serverBoat" to EurekaConfig.BOAT,
+            "serverAirship" to EurekaConfig.AIRSHIP,
+            "serverSubmarine" to EurekaConfig.SUBMARINE
         )
         mapper.writeValue(CONFIG_FILE.toFile(), wrapper)
     }

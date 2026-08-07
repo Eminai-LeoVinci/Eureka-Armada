@@ -44,7 +44,9 @@ import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
+import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.util.BuoyancyMath
 import org.valkyrienskies.eureka.util.EurekaAssembler
 import org.valkyrienskies.eureka.util.ShipAssembler
 import org.valkyrienskies.mod.api.SeatedControllingPlayer
@@ -75,6 +77,30 @@ val ASSEMBLE_TERRAIN: TagKey<Block> =
     TagKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "assemble_terrain"))
 
 private const val ORPHAN_SCAN_INTERVAL_TICKS = 20
+
+// "There is no fit percentage to show" -- no ship, or a recommendation of zero. Far outside any real reading
+// and comfortably inside the 16 bits a DataSlot carries, so it survives the sync as itself.
+const val FIT_PERCENT_NONE = -1000
+
+// --- Environment probes for the helm's per-category info boxes (see sampleEnvironment). ---
+// All of these are readouts only: nothing in the physics steers by them, so they are budgeted for a screen
+// rather than a control loop.
+
+// Ticks between refreshes. 20 = once a second, which is faster than a helm's numbers need to move.
+private const val ENVIRONMENT_SAMPLE_TICKS = 20L
+
+// How far a vertical probe walks before giving up and reporting "not known". Deep enough to cross an ocean
+// trench or clear a mountain, short enough that a ship over the void costs nothing.
+private const val VERTICAL_PROBE_LIMIT = 128
+
+// The shore probe: eight compass rays, sampled every SHORE_STEP blocks out to SHORE_LIMIT. Coarse on
+// purpose -- 4 blocks is finer than the number is ever read to.
+private const val SHORE_STEP = 4
+private const val SHORE_LIMIT = 128
+private val SHORE_RAYS = arrayOf(
+    1 to 0, -1 to 0, 0 to 1, 0 to -1,
+    1 to 1, 1 to -1, -1 to 1, -1 to -1
+)
 
 class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     BlockEntity(EurekaBlockEntities.SHIP_HELM.get(), pos, state), MenuProvider {
@@ -190,31 +216,48 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     // Same source as /vs get-ship-weight (ship.inertiaData.mass), synced to the client via two DataSlots.
     val shipMass: Int get() = (ship?.inertiaData?.mass ?: 0.0).roundToInt()
 
-    // Water altitude-hold is a GLOBAL server setting (EurekaConfig.SERVER), not per-ship. The helm's
-    // "Water Altitude Lock" checkbox flips it for everyone; the DataSlot reflects the current value back.
-    val waterAltitudeHold: Boolean get() = EurekaConfig.SERVER.enableWaterAltitudeHold
+    // Water Lock lives on the BOATS & SHIPS settings block, and the helm only offers it on that tab. It is
+    // still a server-wide setting rather than a per-ship one -- ticking it turns the waterline hold on for
+    // every boat -- but being per-CATEGORY is what makes it behave the way it reads: an airship never gets
+    // it, and a hybrid gets it exactly while it is being a boat, which is to say while it is on the water.
+    val waterAltitudeHold: Boolean get() = EurekaConfig.BOAT.enableWaterAltitudeHold
     fun toggleWaterAltitudeHold() {
-        EurekaConfig.SERVER.enableWaterAltitudeHold = !EurekaConfig.SERVER.enableWaterAltitudeHold
+        EurekaConfig.BOAT.enableWaterAltitudeHold = !EurekaConfig.BOAT.enableWaterAltitudeHold
         EurekaConfigLoader.save()
     }
 
-    // Vanilla controls is PER-SHIP (mirrors the keep-active pattern, but against `control` not ship.settings).
-    // The helm's "Vanilla" checkbox flips this ONE ship's mode and cancels its cruise, since `control` resolves
-    // via getLoadedShipManagingPos(blockPos). Server-side only.
-    val vanillaControls: Boolean get() = control?.vanillaControls ?: false
-    fun toggleVanillaControls() {
-        control?.let {
-            it.vanillaControls = !it.vanillaControls
-            it.cancelCruiseForModeSwitch()
-        }
-    }
-    // Radio-style select from the "Advanced Controls" / "Vanilla Controls" checkboxes (vs the plain toggle).
-    fun setVanillaControls(value: Boolean) {
-        control?.let {
-            if (it.vanillaControls == value) return
-            it.vanillaControls = value
-            it.cancelCruiseForModeSwitch()
-        }
+    // What category this vessel is steering by, for the helm's tab strip. Derived on the physics thread from
+    // the ship's own floaters and balloons -- never chosen -- so this is a readout, not a setting. BOAT when
+    // there is no ship yet, which is what the tab strip falls back to before assembly.
+    val controlProfile: ControlProfile get() = control?.activeProfile ?: ControlProfile.BOAT
+    // Whether this vessel has both floaters and balloons, i.e. its category can change under way.
+    val isHybridVessel: Boolean get() = control?.isHybrid ?: false
+    // Whether the whole vessel is under water. Detection only for now -- see EurekaShipControl.vesselSubmerged.
+    val isSubmerged: Boolean get() = control?.vesselSubmerged ?: false
+
+    // Environment readouts for the per-category info boxes, in blocks; -1 = not known, drawn as "--".
+    val seabedDistance: Int get() = control?.seabedDistance ?: -1
+    val surfaceDistance: Int get() = control?.surfaceDistance ?: -1
+    val groundDistance: Int get() = control?.groundDistance ?: -1
+    val shoreDistance: Int get() = control?.shoreDistance ?: -1
+
+    // How far this ASSEMBLED ship's floaters and balloons already sit over what BuoyancyMath recommends for
+    // its mass, as a percentage. This is the "now +N%" the Auto-Shipwright rows show, and the whole point of
+    // showing it: a hull that flies well at +30% tells you what to type into the box next time you build one
+    // like it. -1000 is the sentinel for "nothing to compare" (no ship, or no recommendation), which the
+    // helm draws as "--"; it sits far outside any real reading and inside a DataSlot's 16 bits.
+    val floaterFitPercent: Int get() = fitPercent(
+        (control?.floaters ?: 0) / 15,
+        BuoyancyMath::recommendedFloaters
+    )
+    val balloonFitPercent: Int get() = fitPercent(
+        control?.balloons ?: 0,
+        BuoyancyMath::recommendedBalloons
+    )
+
+    private fun fitPercent(placed: Int, recommend: (Double) -> Int): Int {
+        val mass = ship?.inertiaData?.mass ?: return FIT_PERCENT_NONE
+        return BuoyancyMath.fitPercent(placed, recommend(mass))?.coerceIn(-999, 9999) ?: FIT_PERCENT_NONE
     }
 
     // Engine fuel-tank readout for the helm's "Engine Power: X%" box. engineCount == 0 -> no reading (the helm
@@ -314,12 +357,19 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         return pos.y + shape.max(Axis.Y)
     }
 
-    // Is the ship's keel touching real-world water? Samples a coarse grid of the hull's world footprint
-    // at the keel Y for water. Game-thread only (touches the world). This is what lets the water altitude
-    // hold work on ANY body of water -- VS2's liquidOverlap only sees the flat dimension sea-level plane.
-    private fun sampleKeelInWater(level: ServerLevel, ship: LoadedServerShip): Boolean {
+    // Water contact and full submersion, sampled across a coarse grid of the hull's world FOOTPRINT at one Y.
+    // [any] = true asks "is any of it in water" (the keel test); false asks "is all of it in water" (the
+    // submersion test). Game-thread only -- it touches the world.
+    //
+    // This is what lets the waterline hold, and a hybrid's category, work on ANY body of water: VS2's
+    // liquidOverlap only sees the dimension's flat sea-level plane, so it reads 0 for rivers, lakes and
+    // man-made water away from that height.
+    //
+    // It samples the WORLD at the ship's world position. A ship's own blocks live in the shipyard, not there,
+    // so water assembled INTO the hull is invisible here by construction -- an airship carrying a pool can
+    // never read as touching water.
+    private fun sampleWaterAt(level: ServerLevel, ship: LoadedServerShip, y: Int, any: Boolean): Boolean {
         val aabb = ship.worldAABB
-        val keelY = floor(aabb.minY()).toInt()
         val minX = floor(aabb.minX()).toInt()
         val maxX = floor(aabb.maxX()).toInt()
         val minZ = floor(aabb.minZ()).toInt()
@@ -332,15 +382,104 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         while (x <= maxX) {
             var z = minZ
             while (z <= maxZ) {
-                pos.set(x, keelY, z)
-                if (level.hasChunkAt(pos) && level.getFluidState(pos).`is`(FluidTags.WATER)) {
-                    return true
-                }
+                pos.set(x, y, z)
+                val water = level.hasChunkAt(pos) && level.getFluidState(pos).`is`(FluidTags.WATER)
+                if (any && water) return true
+                if (!any && !water) return false
                 z += stepZ
             }
             x += stepX
         }
-        return false
+        return !any
+    }
+
+    // How far down from [fromY] the water goes before something that is not water stops it: the depth of
+    // water under the keel. -1 when the keel is not in water at all, or the floor is further than the cap.
+    private fun sampleDepthBelow(level: ServerLevel, x: Int, z: Int, fromY: Int): Int {
+        val pos = BlockPos.MutableBlockPos()
+        var d = 0
+        while (d < VERTICAL_PROBE_LIMIT) {
+            val y = fromY - d
+            if (y < level.minY) return -1
+            pos.set(x, y, z)
+            if (!level.hasChunkAt(pos)) return -1
+            if (!level.getFluidState(pos).`is`(FluidTags.WATER)) return if (d == 0) -1 else d
+            d++
+        }
+        return -1
+    }
+
+    // How far up from [fromY] to open air: the distance a submerged hull would have to rise to surface.
+    // -1 when there is no water above at all, or the surface is further than the cap.
+    private fun sampleSurfaceAbove(level: ServerLevel, x: Int, z: Int, fromY: Int): Int {
+        val pos = BlockPos.MutableBlockPos()
+        var d = 0
+        while (d < VERTICAL_PROBE_LIMIT) {
+            val y = fromY + d
+            if (y > level.maxY) return -1
+            pos.set(x, y, z)
+            if (!level.hasChunkAt(pos)) return -1
+            if (!level.getFluidState(pos).`is`(FluidTags.WATER)) return if (d == 0) -1 else d
+            d++
+        }
+        return -1
+    }
+
+    // How far down from [fromY] to the first solid block -- ground under a flying ship, or the seabed under
+    // one afloat, since it walks straight through water. -1 when nothing solid is within the cap.
+    private fun sampleGroundBelow(level: ServerLevel, x: Int, z: Int, fromY: Int): Int {
+        val pos = BlockPos.MutableBlockPos()
+        var d = 1
+        while (d <= VERTICAL_PROBE_LIMIT) {
+            val y = fromY - d
+            if (y < level.minY) return -1
+            pos.set(x, y, z)
+            if (!level.hasChunkAt(pos)) return -1
+            val state = level.getBlockState(pos)
+            if (!state.isAir && state.fluidState.isEmpty) return d
+            d++
+        }
+        return -1
+    }
+
+    // Distance to the nearest column that is not water, at the keel's own height: how far off the beach the
+    // ship is. Eight compass rays rather than a ring scan, stepped coarsely, because this is a readout and
+    // not something the physics steers by -- 8 x 32 lookups on a 20-tick stagger. -1 when open water runs
+    // past the cap in every direction, which is also what an inland ship reads (its first sample is land).
+    private fun sampleShoreDistance(level: ServerLevel, x: Int, z: Int, y: Int): Int {
+        val pos = BlockPos.MutableBlockPos()
+        var best = -1
+        for ((dx, dz) in SHORE_RAYS) {
+            var d = SHORE_STEP
+            while (d <= SHORE_LIMIT) {
+                if (best in 1 until d) break // another ray already found something closer
+                pos.set(x + dx * d, y, z + dz * d)
+                if (!level.hasChunkAt(pos)) break
+                if (!level.getFluidState(pos).`is`(FluidTags.WATER)) {
+                    best = d
+                    break
+                }
+                d += SHORE_STEP
+            }
+        }
+        return best
+    }
+
+    // Refresh the environment readouts the helm's per-category info boxes draw. One column -- the centre of
+    // the hull's world footprint -- is enough for a readout, and keeps this to a few hundred block lookups
+    // on a 20-tick stagger.
+    private fun sampleEnvironment(level: ServerLevel, ship: LoadedServerShip, control: EurekaShipControl) {
+        val aabb = ship.worldAABB
+        val cx = floor((aabb.minX() + aabb.maxX()) * 0.5).toInt()
+        val cz = floor((aabb.minZ() + aabb.maxZ()) * 0.5).toInt()
+        val keelY = floor(aabb.minY()).toInt()
+        val topY = ceil(aabb.maxY()).toInt() - 1
+
+        control.seabedDistance = sampleDepthBelow(level, cx, cz, keelY)
+        control.surfaceDistance = sampleSurfaceAbove(level, cx, cz, topY)
+        control.groundDistance = sampleGroundBelow(level, cx, cz, keelY)
+        control.shoreDistance =
+            if (control.keelInWater) sampleShoreDistance(level, cx, cz, keelY) else -1
     }
 
     fun startRiding(player: Player, force: Boolean, blockPos: BlockPos, state: BlockState, level: ServerLevel): Boolean {
@@ -379,14 +518,25 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // altitude hold engage on man-made / elevated water bodies, not just the ocean at sea level.
         val sLevel = level
         if (curControl != null && curShip != null && sLevel is ServerLevel) {
-            // ~36 fluid reads per helm per tick, so only pay for them when something consumes the
-            // answer, and then only every 4th tick. Staggered by block position so a fleet of helms
-            // doesn't sample on the same tick. The hold's own hysteresis (engage on contact, release
-            // only on a full clear -- see EurekaShipControl) absorbs a verdict up to 0.2s stale.
-            if (!EurekaConfig.SERVER.enableWaterAltitudeHold) {
-                curControl.keelInWater = false
-            } else if (sLevel.gameTime and 3L == (blockPos.hashCode() and 3).toLong()) {
-                curControl.keelInWater = sampleKeelInWater(sLevel, curShip)
+            // ~36 fluid reads per helm per sample, so only every 4th tick, staggered by block position so a
+            // fleet of helms doesn't all sample on the same one. The hysteresis downstream (wet on contact,
+            // dry only on a full clear -- see EurekaShipControl) absorbs a verdict up to 0.2s stale.
+            //
+            // UNCONDITIONAL, unlike before, when it was forced false whenever the water altitude hold was
+            // switched off. Water contact is now also what puts a hybrid on the Boats & Ships category, and
+            // that cannot hang off a feature toggle -- turning Water Lock off would otherwise have made every
+            // hybrid fly as an airship on the sea. The hold checks its own config key at its own use site.
+            if (sLevel.gameTime and 3L == (blockPos.hashCode() and 3).toLong()) {
+                val keelY = floor(curShip.worldAABB.minY()).toInt()
+                curControl.keelInWater = sampleWaterAt(sLevel, curShip, keelY, any = true)
+                // Only worth asking once the keel is wet -- a ship out of the water is not under it.
+                curControl.fullySubmerged = curControl.keelInWater &&
+                    sampleWaterAt(sLevel, curShip, ceil(curShip.worldAABB.maxY()).toInt() - 1, any = false)
+            }
+            // The helm's info-box readouts: a few hundred lookups, so a much slower stagger than the water
+            // contact above. Nothing steers by these -- they are numbers on a screen.
+            if (sLevel.gameTime % ENVIRONMENT_SAMPLE_TICKS == (blockPos.hashCode().toLong() and 0xFL) % ENVIRONMENT_SAMPLE_TICKS) {
+                sampleEnvironment(sLevel, curShip, curControl)
             }
             // Measure per-axis input-hold time on the fixed-rate game thread (physics TPS is variable) so the
             // physics turn law can gate the acceleration phase and all three sets can do hold-to-cancel.
@@ -543,7 +693,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             return
         }
 
-        // Eureka Assembler: if this player has floater/balloon auto-fill on, replace hull blocks with the
+        // Eureka Auto-Shipwright: if this player has floater/balloon auto-fill on, replace hull blocks with the
         // floaters/balloons the ship needs (gated on inventory) BEFORE the ship is built. A shortfall aborts
         // the whole assembly -- no ship, no world changes -- with a chat message the player can re-read.
         val prefs = AssemblerPreferences.get(player.uuid)
@@ -552,7 +702,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 val outcome = EurekaAssembler.apply(
                     level, player, blockPositions, prefs.floater, prefs.balloon,
                     existingFloaters = floaterCount / 15, existingBalloons = balloonCount,
-                    floaterBonusPercent = prefs.floaterBonusPercent, balloonBonusPercent = prefs.balloonBonusPercent
+                    floaterBonusPercent = prefs.floaterBonusPercent, balloonBonusPercent = prefs.balloonBonusPercent,
+                    balloonReplaceAll = prefs.balloonReplaceAll
                 )
             ) {
                 is EurekaAssembler.Cancelled -> {

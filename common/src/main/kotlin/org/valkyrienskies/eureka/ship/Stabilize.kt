@@ -19,26 +19,31 @@ private val WORLD_UP: Vector3dc = Vector3d(0.0, 1.0, 0.0)
  * of mass (no lever arm, so no yaw), and the righting torque is sized for the formation's inertia rather than
  * the parent hull's. See [ArmadaBody] for how each is split across the members.
  *
+ * [cfg] is the caller's SHIP-CATEGORY settings block ([EurekaShipControl.engineCfg]), not the global one:
+ * how hard a hull rights itself and how quickly it comes to rest is a large part of what makes an airship
+ * feel loose and a boat feel planted, so all six knobs read here are per-category.
+ *
  * Returns the magnitude of the linear anti-velocity (braking) force applied, or 0 if [linear] is false.
  */
 fun stabilize(
     body: ArmadaBody,
+    cfg: EurekaConfig.Server,
     linear: Boolean,
     yaw: Boolean
 ): Double {
-    applyStabilizationTorque(body, yaw)
+    applyStabilizationTorque(body, cfg, yaw)
 
     if (linear) {
         val idealVelocity = Vector3d(body.velocity).negate()
         idealVelocity.y = 0.0
 
         // ideally this should work the same way as input is scaled
-        val s = EurekaConfig.SERVER.linearStabilizeMaxAntiVelocity * (1 - 1 / smoothingATanMax(EurekaConfig.SERVER.linearMaxMass, body.mass * EurekaConfig.SERVER.linearMassScaling + 1.0)) / 10.0
+        val s = cfg.linearStabilizeMaxAntiVelocity * (1 - 1 / smoothingATanMax(cfg.linearMaxMass, body.mass * cfg.linearMassScaling + 1.0)) / 10.0
 
         if (idealVelocity.lengthSquared() > s * s)
             idealVelocity.normalize(s)
 
-        idealVelocity.mul(body.mass * (10 - EurekaConfig.SERVER.antiVelocityMassRelevance))
+        idealVelocity.mul(body.mass * (10 - cfg.antiVelocityMassRelevance))
         body.applyForce(idealVelocity)
         return idealVelocity.length()
     }
@@ -46,7 +51,7 @@ fun stabilize(
 }
 
 /** The upright-righting + spin-damping half of [stabilize]. */
-private fun applyStabilizationTorque(body: ArmadaBody, yaw: Boolean) {
+private fun applyStabilizationTorque(body: ArmadaBody, cfg: EurekaConfig.Server, yaw: Boolean) {
     // Attitude comes from the lead: the welds make the armada one body, so the parent's up IS the armada's up.
     val shipUp = Vector3d(0.0, 1.0, 0.0)
     body.lead.transform.shipToWorldRotation.transform(shipUp)
@@ -77,7 +82,7 @@ private fun applyStabilizationTorque(body: ArmadaBody, yaw: Boolean) {
 
     // Scaling the commanded acceleration is equivalent to scaling the torque it becomes, since the body turns
     // one into the other linearly.
-    idealAngularAcceleration.mul(EurekaConfig.SERVER.stabilizationTorqueConstant / max(1.0, speed * speed * EurekaConfig.SERVER.scaledInstability / body.mass + speed * EurekaConfig.SERVER.unscaledInstability))
+    idealAngularAcceleration.mul(cfg.stabilizationTorqueConstant / max(1.0, speed * speed * cfg.scaledInstability / body.mass + speed * cfg.unscaledInstability))
     body.applyAngularAcceleration(idealAngularAcceleration)
 }
 

@@ -6,41 +6,99 @@ object EurekaConfig {
     @JvmField
     val CLIENT = Client()
 
-    // Two control presets. ADVANCED holds the current (overhauled) defaults -- the engine-independent turn
-    // law, the 3-set engage-to-latch cruise, and the retuned engine/elevation values. VANILLA restores the
-    // pre-overhaul 833d445 feel: it COPIES ADVANCED and overrides only the mode-affected fields whose default
-    // changed. A per-ship `vanillaControls` flag on EurekaShipControl selects which preset that ship reads its
-    // mode-affected physics off of (see EurekaShipControl.cfg and EurekaShipControl.engineCfg, the latter read
-    // by EngineBlockEntity for per-ship engine force/heat).
+    // The BASE settings block, written to the config file as "server". It holds every knob that is NOT
+    // per-category, and there are three kinds of those:
     //
-    // maxShipBlocks, blockBlacklist and terrainPocketMaxBlocks stay GLOBAL: all are consumed at ASSEMBLY
-    // time (ShipHelmBlockEntity), where no ship -- and therefore no per-ship mode -- exists yet, so they
-    // CANNOT be per-ship. Editing the "serverVanilla" copies of them does nothing. They are
-    // deliberately NOT overridden here; the only knobs that matter live on EurekaConfig.SERVER (=== ADVANCED).
+    //  - ASSEMBLY-TIME knobs (maxShipBlocks, blockBlacklist, terrainPocketMaxBlocks, diagonals, the
+    //    Auto-Shipwright whitelists). These are consumed by ShipHelmBlockEntity while the ship is being
+    //    built, when no ship -- and therefore no category -- exists yet, so they CANNOT be per-category.
+    //  - BUOYANCY AND LIFT (floaterBuoyantFactorPerKg, maxFloaterBuoyantFactor, massPerBalloon,
+    //    balloonLiftMultiplier, maxBalloonsPerEngine, assemblerBalloonAscendRate). These are deliberately
+    //    global even though they could technically be split. A hybrid ship changes category in mid-air the
+    //    moment its keel touches water; if lift changed with it, the ship would sink or leap at the
+    //    waterline. These same numbers are also what sizes a hull at assembly time. Categories change how a
+    //    ship HANDLES, never whether it floats.
+    //  - Everything shared: path/follow gains, cruise hold times, engine internals, debug toggles.
+    //
+    // Editing a per-category knob here does nothing once the file has been written once -- the categories
+    // carry their own copies. See EurekaConfigLoader for how they are seeded.
     @JvmField
-    val ADVANCED = Server()
+    val SERVER = Server()
+
+    // The three SHIP CATEGORIES, written as "serverBoat" / "serverAirship" / "serverSubmarine". Each is a
+    // full copy of the same field set, so any of them can be tuned independently in the config file, and a
+    // ship reads its handling off exactly one of them -- picked from what the ship is built out of:
+    //
+    //    floaters, no balloons  -> BOAT        balloons, no floaters -> AIRSHIP
+    //    both (a "hybrid")      -> BOAT while it is touching water, AIRSHIP once it is clear of it
+    //
+    // See ControlProfile and EurekaShipControl.cfg (and .engineCfg, which EngineBlockEntity reads for
+    // per-category engine force and heat).
+    @JvmField
+    val BOAT = Server().also { boatDefaults(it) }
 
     @JvmField
-    val VANILLA = Server().apply {
-        enginePowerLinear = 500000f
-        engineHeatGain = 0.03f
-        engineBoost = 0.2
-        engineBoostOffset = 2.5
-        maxReverseSpeedFromEngines = 24.0 // real m/s; was 8.0 back when the physics tripled it
-        baseImpulseElevationRate = 2.0
-        baseImpulseDescendRate = 4.0
-        // The ADVANCED turn defaults were retuned to 0.75 / 6.0; pin the original 833d445 values here so
-        // Vanilla mode keeps the faithful pre-overhaul (engine-dependent) turn feel.
-        turnSpeed = 3.0
-        turnAcceleration = 10.0
+    val AIRSHIP = Server().also { airshipDefaults(it) }
+
+    @JvmField
+    val SUBMARINE = Server().also { submarineDefaults(it) }
+
+    // Boats & Ships are the REFERENCE tuning -- every value below is the pre-category default, restated so
+    // the three presets can be read side by side. The fastest and most manoeuvrable of the three.
+    @JvmStatic
+    fun boatDefaults(s: Server) {
+        s.maxSpeedFromEngines = 70.0
+        s.maxReverseSpeedFromEngines = 36.0
+        s.turnSpeed = 0.5
+        s.turnAcceleration = 8.0
+        s.waterThrustAssist = 8.0
+        s.enableWaterAltitudeHold = true
+        s.doFluidDrag = false
     }
 
-    // SERVER is an ALIAS for the ADVANCED preset. The ~40 non-mode-affected reads (and EngineBlockEntity /
-    // ShipHelmBlockEntity, which read engine-heat / ship-size / blacklist globally) all use SERVER and keep
-    // reading the live ADVANCED preset -- which is what the config file's "server" key edits. Global toggles
-    // (water-altitude-hold, debugCruiseCancel) also live on SERVER === ADVANCED.
-    @JvmField
-    val SERVER = ADVANCED
+    // Airships ship with BOAT HANDLING, deliberately. The category split is the feature; the flight feel is
+    // tuned from serverAirship in vs_eureka.json, which is what those blocks are for.
+    //
+    // The first cut seeded this preset from the retired Vanilla engine numbers and produced an airship that
+    // crawled -- ~3 m/s piloted (i.e. baseSpeed and nothing more), ~8 under cruise. The culprit was
+    // engineHeatGain 0.03f, and it is the same trap that turnSpeed 3.0 was: Vanilla's numbers were tuned
+    // against a law this build no longer runs.
+    //
+    // An engine's force is lerp(enginePowerLinearMin, enginePowerLinear, heat/100). Heat gains
+    // (100*engineHeatChangeExponent - heat*..., + 1) * engineHeatGain per tick -- 11 * gain from cold -- and
+    // drains by `consumed`, which is ~0.1 per physics tick spent at throttle. Upstream had deleted that drain
+    // (a2f1f7b), so under Vanilla heat only ever climbed and 0.03 was free; this build restored it. At 0.03
+    // the gain from cold is 0.33/tick against a drain of ~0.3 plus cooling, so heat never leaves the floor,
+    // every engine sits at enginePowerLinearMin -- 10000f, a fiftieth of the 500000f the preset advertised --
+    // and enginePowerLinear being high made it worse a second time by lifting the boost threshold
+    // (engineBoostOffset * enginePowerLinear) past anything a cold engine can reach.
+    //
+    // So: engineHeatGain is a floor, not a dial. Below roughly 0.05 an engine cannot outrun its own drain at
+    // full throttle, whatever enginePowerLinear says. Raise power, not patience.
+    //
+    // enableWaterAltitudeHold comes along with the boat values and reads `true` here, which is inert: the
+    // hold is gated on activeProfile == BOAT at its one use site and the helm checkbox writes BOAT directly,
+    // so this preset's copy of the key is never read.
+    @JvmStatic
+    fun airshipDefaults(s: Server) {
+        boatDefaults(s)
+    }
+
+    // PLACEHOLDER. Submarine handling is not implemented -- ControlProfile.SUBMARINE is never selected, so
+    // nothing here is read yet. The block exists now so the config file's shape is final and the values are
+    // ready to tune when the submarine work lands. Boat handling, slowed down, with more vertical authority.
+    @JvmStatic
+    fun submarineDefaults(s: Server) {
+        boatDefaults(s)
+        s.maxSpeedFromEngines = 40.0
+        s.maxReverseSpeedFromEngines = 24.0
+        s.turnSpeed = 0.4
+        s.turnAcceleration = 6.0
+        s.baseImpulseElevationRate = 3.0
+        s.baseImpulseDescendRate = 6.0
+        s.elevationSnappiness = 1.5
+        s.doFluidDrag = true
+    }
 
     class Client {
         @JsonSchema(description = "Master toggle for the piloted-ship HUD. When off, the Speed/Altitude/Heading readouts are all hidden (and greyed out in the helm menu).")
@@ -353,8 +411,9 @@ object EurekaConfig {
         @JsonSchema(description = "Dev: action-bar a message each time a per-set cruise HOLD-cancel fires (Horizontal/Vertical/Turn). Read globally off EurekaConfig.SERVER; toggle in-game with /vs cruise-cancel-debug <bool>.")
         var debugCruiseCancel = false
 
-        // region Eureka Assembler
-        // The Eureka Assembler (enabled per-player with /vs eureka-assembler <floater|balloon> <true|false>) auto-fills
+        // region Eureka Auto-Shipwright
+        // The Eureka Auto-Shipwright (enabled per-player from the helm menu, or with
+        // /vs auto-shipwright <floater|balloon|balloon-replace-all> <true|false>) fits out
         // a ship at assembly time by REPLACING existing hull blocks with floaters/balloons -- never adding new volume --
         // and only if the player has the required floater/balloon items in their inventory. These two ORDERED lists are
         // the replacement whitelists (anything not listed is never replaced). Order = priority: the assembler exhausts
@@ -364,7 +423,7 @@ object EurekaConfig {
         // GLOBALLY off EurekaConfig.SERVER, never per-ship.
 
         @JsonSchema(
-            description = "Eureka Assembler: the target ASCEND speed in m/s the 'balloon' auto-fill sizes for. " +
+            description = "Eureka Auto-Shipwright: the target ASCEND speed in m/s the 'balloon' auto-fill sizes for. " +
                 "Sizing balloons for neutral hover (= 0 here, the old behavior) lets a heavy ship hold itself up but " +
                 "never climb, because the ship's usable climb force is only the balloon lift SURPLUS over its weight. " +
                 "This adds mass-proportional lift headroom so every assembled ship -- light hull or heavy -- can " +
@@ -375,7 +434,7 @@ object EurekaConfig {
         var assemblerBalloonAscendRate = 2.0
 
         @JsonSchema(
-            description = "Eureka Assembler: ordered block ids the 'floater' auto-fill replaces, in priority order " +
+            description = "Eureka Auto-Shipwright: ordered block ids the 'floater' auto-fill replaces, in priority order " +
                 "(planks first -- oak..pale_oak -- then logs/stripped/bark). Add modded wood ids here to make them " +
                 "convertible. Wooden slabs are intentionally excluded (a double slab is not a plank)."
         )
@@ -398,7 +457,7 @@ object EurekaConfig {
         )
 
         @JsonSchema(
-            description = "Eureka Assembler: ordered block ids the 'balloon' auto-fill replaces, in priority order. " +
+            description = "Eureka Auto-Shipwright: ordered block ids the 'balloon' auto-fill replaces, in priority order. " +
                 "Defaults to every wool color (first), then every concrete color. Add block ids here to expand " +
                 "what balloons may be built from."
         )

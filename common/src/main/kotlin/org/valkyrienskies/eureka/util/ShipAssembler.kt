@@ -37,7 +37,7 @@ import kotlin.math.*
 object ShipAssembler {
     // BFS-collect the connected block set (world coordinates) that would become a ship, or null if it
     // exceeds maxShipBlocks. Deliberately does NOT clear snow or create the ship, so a caller can inspect
-    // (and, for the Eureka Assembler, mutate) the world set and still abort cleanly before anything is built.
+    // (and, for the Eureka Auto-Shipwright, mutate) the world set and still abort cleanly before anything is built.
     fun collectBlockPositions(level: ServerLevel, center: BlockPos, predicate: (BlockPos, BlockState) -> Boolean): HashSet<BlockPos>? {
         val blocks = DenseBlockPosSet()
 
@@ -57,7 +57,7 @@ object ShipAssembler {
     }
 
     // Back-compat one-shot collect-then-assemble (no pre-assembly hook). Kept for any external callers;
-    // the helm now drives the two steps directly so it can run the Eureka Assembler in between.
+    // the helm now drives the two steps directly so it can run the Eureka Auto-Shipwright in between.
     fun collectBlocks(level: ServerLevel, center: BlockPos, predicate: (BlockPos, BlockState) -> Boolean): ServerShip? =
         collectBlockPositions(level, center, predicate)?.let { finishAssembly(level, it) }
 

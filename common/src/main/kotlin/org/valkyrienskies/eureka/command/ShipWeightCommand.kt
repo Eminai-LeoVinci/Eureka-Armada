@@ -13,6 +13,7 @@ import net.minecraft.network.chat.Component
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.util.BuoyancyMath
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
 /**
@@ -46,27 +47,9 @@ import org.valkyrienskies.mod.common.command.arguments.ShipArgument
  */
 object ShipWeightCommand {
 
-    // Added buoyant factor at which a ship stops sinking (factor 2x neutral): Eureka's per-kg
-    // normalization puts this at exactly mass/floaterBuoyantFactorPerKg floaters for every ship.
-    // At this point the ship rides very low -- awash, interior flooding at the waterline.
-    private const val AFLOAT_ADDED_FACTOR = 1.0
-
-    // Added factor for a "high and dry" ride (keel around the waterline, interior dry).
-    // Calibrated in-game on a 556t fishing boat: keel-dry was reached at ~6.3 added factor and the
-    // hull was fully emerged by ~9.0; 7.5 clears keel-dry with headroom. Somewhat shape-dependent
-    // (denser/taller hulls sit deeper) and ride height keeps rising with extra floaters.
-    private const val DRY_ADDED_FACTOR = 7.5
-
-    // Reported needed-counts sit this much above the computed threshold: at the exact tie the ship
-    // is only neutrally buoyant (hovers/sits awash but won't climb), so recommend going one over.
-    // Floater-only now -- the balloon count instead uses assemblerBalloonAscendRate for real climb headroom.
-    private const val SAFETY_MARGIN = 1
-
-    // |EurekaShipControl.GRAVITY| (10.0). Balloons sized for neutral hover (mass/liftPerBalloon) hold the
-    // ship up but won't climb; the usable climb force is the lift SURPLUS over weight. Terminal climb speed
-    // when balloon-limited is balloonForce/mass - g, so the count for a target climb speed V is the hover
-    // count times (1 + V/g). This mirrors EurekaAssembler so the reported "needed" matches what it builds.
-    private const val GRAVITY_MAGNITUDE = 10.0
+    // The thresholds themselves live in BuoyancyMath, shared with the Auto-Shipwright that does the fitting
+    // and the helm's "now +N%" readout. They used to be duplicated here, which meant a change to one could
+    // leave this command confidently reporting a number the fill would never actually place.
 
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
@@ -97,7 +80,7 @@ object ShipWeightCommand {
         val msg = Component.literal("Ship '$slug' weighs ${fmtKg(mass)}").withStyle(ChatFormatting.WHITE)
         if (floater) {
             // Per unpowered floater BLOCK (the attachment counter stores fifteenths of this).
-            val perFloater = min(cfg.floaterBuoyantFactorPerKg / mass, 15.0 * cfg.maxFloaterBuoyantFactor)
+            val perFloater = BuoyancyMath.perFloater(mass)
             if (perFloater <= 0.0) {
                 ctx.source.sendFailure(
                     Component.literal(
@@ -107,8 +90,8 @@ object ShipWeightCommand {
                 )
                 return 0
             }
-            val afloat = ceil(AFLOAT_ADDED_FACTOR / perFloater).toInt() + SAFETY_MARGIN
-            val dry = maxOf(ceil(DRY_ADDED_FACTOR / perFloater).toInt(), afloat)
+            val afloat = BuoyancyMath.afloatFloaters(mass)
+            val dry = maxOf(BuoyancyMath.recommendedFloaters(mass), afloat)
             val units = control?.floaters ?: 0
             val effective = units / 15.0 // placed floaters in unpowered-equivalents
 
@@ -156,7 +139,7 @@ object ShipWeightCommand {
                     .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
             )
         } else {
-            val liftPerBalloon = cfg.massPerBalloon * cfg.balloonLiftMultiplier // kg of ship per balloon
+            val liftPerBalloon = BuoyancyMath.liftPerBalloon() // kg of ship per balloon
             if (liftPerBalloon <= 0.0) {
                 ctx.source.sendFailure(
                     Component.literal(
@@ -166,10 +149,9 @@ object ShipWeightCommand {
                 )
                 return 0
             }
-            // Match EurekaAssembler: size for a target climb speed, not neutral hover, so this count is what
-            // the assembler would place and "enough" means the ship can actually ascend (not just hover).
-            val ascendFactor = 1.0 + max(0.0, cfg.assemblerBalloonAscendRate) / GRAVITY_MAGNITUDE
-            val needed = ceil(mass * ascendFactor / liftPerBalloon).toInt()
+            // Sized for a target climb speed, not neutral hover, so this count is what the Auto-Shipwright
+            // would fit and "enough" means the ship can actually ascend rather than merely hover.
+            val needed = BuoyancyMath.recommendedBalloons(mass)
             val balloons = control?.balloons ?: 0
 
             msg.append(newline())

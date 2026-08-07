@@ -84,26 +84,41 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonProperty("cruise")
     var isCruising = false
 
-    // Per-ship control MODE. false = ADVANCED (engine-independent turn law + 3-set engage-to-latch cruise +
-    // retuned engine/elevation values). true = VANILLA = the pre-overhaul 833d445 feel (engine-DEPENDENT turn
-    // law + single isCruising toggle cruise + 833d445 engine/elevation values). Flipped from the helm menu
-    // ("Vanilla" checkbox -> ShipHelmBlockEntity.toggleVanillaControls). Selects which EurekaConfig preset the
-    // mode-affected physics reads come off of (see [cfg]). Persisted per-ship.
-    @JsonProperty("vanillaControls")
-    var vanillaControls = false
+    // What kind of vessel this is, and so which settings block it handles by. NOT persisted and never chosen
+    // by the player: it is re-derived every physics tick from the pooled floater and balloon counts and the
+    // keel's water contact (see the classification block in physTick). Written on the physics thread, read on
+    // the game thread by the helm menu and by setCruiseValueMenu's clamps -- hence volatile.
+    @JsonIgnore
+    @Volatile
+    var activeProfile = ControlProfile.BOAT
+        private set
 
-    // The config preset this ship reads its MODE-AFFECTED physics off of. ADVANCED unless vanillaControls.
-    // Only the 6 engine/elevation reads + the 2 turn fields inside this class route through cfg; everything
-    // else (engineHeatGain, maxShipBlocks, blockBlacklist, water-altitude-hold, debugCruiseCancel, and all the
-    // fields identical across presets) stays GLOBAL on EurekaConfig.SERVER. Computed getter, no backing field --
-    // not serialized (the class uses getterVisibility = NONE), like the `canDisassemble` getter.
-    private val cfg get() = if (vanillaControls) EurekaConfig.VANILLA else EurekaConfig.ADVANCED
+    // True when this vessel has BOTH floaters and balloons, i.e. it is a hybrid and its category can change
+    // under it. Published only so the helm can say so; the physics reads [activeProfile].
+    @JsonIgnore
+    @Volatile
+    var isHybrid = false
+        private set
 
-    // Public view of this ship's mode-affected preset, for off-class consumers that must honor the per-ship
-    // mode. EngineBlockEntity reads it for enginePowerLinear (the force this attachment's boost threshold is
-    // scaled against) and engineHeatGain, so a vanilla ship's engine force/heat match its 500000f/0.03f preset
-    // instead of the global ADVANCED defaults. Same instance as [cfg]; exposed read-only. Computed getter with
-    // no backing field, so it isn't serialized (the class sets getterVisibility = NONE), like [cfg]/[canDisassemble].
+    // A hybrid's wet/dry state, with hysteresis: it goes wet the moment the keel reaches water and stays wet
+    // until the hull has fully cleared it. Without that a ship sitting in surface chop would flicker between
+    // two sets of handling several times a second. Physics thread only.
+    @JsonIgnore
+    private var hybridWet = false
+
+    // The settings block this ship reads its per-category handling off of -- engine power, speed, turning,
+    // vertical response, thrust assists, stabilization and the waterline hold. Everything else (buoyancy and
+    // lift, assembly-time knobs, path/follow gains, cruise hold times, debug toggles) stays GLOBAL on
+    // EurekaConfig.SERVER; see the comment there for why lift in particular must not be per-category.
+    // Computed getter, no backing field -- not serialized (the class uses getterVisibility = NONE), like the
+    // `canDisassemble` getter.
+    private val cfg get() = activeProfile.preset
+
+    // Public view of this ship's category preset, for off-class consumers that must honor it. EngineBlockEntity
+    // reads it for enginePowerLinear (the force this attachment's boost threshold is scaled against) and
+    // engineHeatGain, so an airship's engine force and heat match its own preset rather than the boat's. Same
+    // instance as [cfg]; exposed read-only. Computed getter with no backing field, so it isn't serialized (the
+    // class sets getterVisibility = NONE), like [cfg]/[canDisassemble].
     val engineCfg: EurekaConfig.Server get() = cfg
 
     @JsonIgnore
@@ -406,10 +421,37 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // read here on the physics thread. VS2 core's liquidOverlap is the submerged fraction measured
     // against the dimension's flat sea-level plane, so it reads 0 for water bodies away from sea level
     // (man-made / elevated / sunken rivers + lakes). This direct keel-vs-water sample lets the altitude
-    // hold engage on ANY body of water at any altitude.
+    // hold engage -- and a hybrid pick the BOAT category -- on ANY body of water at any altitude.
+    //
+    // It samples the WORLD at the ship's world position, and a ship's own blocks live in the shipyard, so
+    // water assembled INTO a hull is invisible to it by construction: an airship with a pool on deck can
+    // never read as touching water.
     @JsonIgnore
     @Volatile
     var keelInWater = false
+
+    // Is THIS hull entirely under water -- sampled game-side at the TOP of the ship's world box, so it is
+    // true only once even the highest part of the ship is submerged. Written on the game thread.
+    @JsonIgnore
+    @Volatile
+    var fullySubmerged = false
+
+    // The same question asked of the whole VESSEL: every hull of the armada under water, pooled in physTick
+    // and published back for the game thread. Nothing selects ControlProfile.SUBMARINE off it yet -- that is
+    // the submarine installment's first line -- but the helm shows it, which is how the detection can be
+    // checked in game before there is a submarine control law to check it with.
+    @JsonIgnore
+    @Volatile
+    var vesselSubmerged = false
+        private set
+
+    // Environment readouts for the helm's per-category info boxes, in blocks, sampled game-side on a slow
+    // stagger. -1 means "not known" -- out of range, an unloaded chunk, or not applicable -- and the helm
+    // draws those as "--" rather than a number.
+    @JsonIgnore @Volatile var seabedDistance = -1   // keel down to the floor under the water
+    @JsonIgnore @Volatile var surfaceDistance = -1  // hull top up to open air
+    @JsonIgnore @Volatile var groundDistance = -1   // keel down to whatever solid ground is below
+    @JsonIgnore @Volatile var shoreDistance = -1    // nearest non-water column, horizontally
 
     // Per-axis hold state, written on the fixed-rate GAME thread (updateInputHolds, 20 TPS) and read on the
     // physics thread. SIGNED seconds: sign = held direction, magnitude = continuous-hold time (0 on release,
@@ -477,8 +519,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             physShip.doFluidDrag = true
             return
         }
-        // Disable fluid drag when helms are present, because it makes ships hard to drive
-        physShip.doFluidDrag = EurekaConfig.SERVER.doFluidDrag
+        // Disable fluid drag when helms are present, because it makes ships hard to drive. Per-category, and
+        // this runs BEFORE the category is re-derived below, so it is one tick stale -- which costs nothing:
+        // it is a boolean that only changes when a hybrid crosses the waterline, and the categories that
+        // could differ on it are a tick late either way.
+        physShip.doFluidDrag = cfg.doFluidDrag
 
         val ship = ship ?: return
         val armada = ArmadaShipControl.get(ship)
@@ -510,6 +555,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         var pooledBalloons = balloons
         var pooledFloaters = floaters
         var pooledKeelInWater = keelInWater
+        // ANDed, not ORed, unlike the others: "the vessel is under water" has to mean EVERY hull of it is.
+        var pooledFullySubmerged = fullySubmerged
         var pooledLiquidOverlap = physShip.liquidOverlap
         var pooledAnchorsActive = anchorsActive
 
@@ -538,6 +585,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             pooledBalloons += childControl.balloons
             pooledFloaters += childControl.floaters
             pooledKeelInWater = pooledKeelInWater || childControl.keelInWater
+            pooledFullySubmerged = pooledFullySubmerged && childControl.fullySubmerged
             pooledLiquidOverlap = max(pooledLiquidOverlap, childPhys.liquidOverlap)
         }
         body.build()
@@ -559,6 +607,36 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         val mass = body.mass
         val omega: Vector3dc = body.angularVelocity
         val vel: Vector3dc = body.velocity
+
+        // Water contact, pooled: any hull of the armada in the water puts the whole vessel in the water.
+        // keelInWater is sampled game-side from real blocks, so it sees rivers, lakes and man-made water at
+        // any altitude; VS2's liquidOverlap is the submerged fraction against the dimension's flat sea-level
+        // plane, so it only sees the ocean. Either counts. Hysteresis: it takes waterAltitudeHoldMinOverlap
+        // to become wet but a FULL clear of the water to become dry again.
+        //
+        // waterAltitudeHoldMinOverlap is read GLOBALLY here and nowhere else -- it is what decides the
+        // CATEGORY, and the category decides which preset to read, so taking it per-category would be
+        // circular. It answers "is this vessel in the water", a fact about the world rather than handling.
+        val inWater = pooledKeelInWater || pooledLiquidOverlap > EurekaConfig.SERVER.waterAltitudeHoldMinOverlap
+        val stillInWater = pooledKeelInWater || pooledLiquidOverlap > 0.0
+
+        // What kind of vessel this is. Everything below reads its handling off `cfg`, so this has to be
+        // settled before the first `cfg.` read (the balloon/engine cap immediately after). Classified from
+        // the POOLED counts, so a welded armada is one vessel of one category rather than a flagship
+        // disagreeing with its consorts.
+        //
+        // Only a hybrid -- floaters AND balloons -- can change category under way, and it does so on the
+        // hysteresis above: a boat while it is touching water, an airship once it is clear of it. A ship
+        // built as one thing or the other never switches at all, so there is nothing to chatter.
+        //
+        // pooledFullySubmerged is deliberately NOT consulted yet: a fully-submerged hybrid is what will pick
+        // ControlProfile.SUBMARINE, and until the submarine control law exists it stays a boat under water.
+        // The detection and the config block are both live, so that is a one-line change when it lands.
+        isHybrid = pooledBalloons > 0 && pooledFloaters > 0
+        vesselSubmerged = pooledFullySubmerged
+        hybridWet = inWater || (hybridWet && stillInWater)
+        activeProfile = ControlProfile.classify(pooledBalloons, pooledFloaters, hybridWet)
+
         var balloonForceProvided = pooledBalloons * forcePerBalloon
 
         if (EurekaConfig.SERVER.maxBalloonsPerEngine > 0 && pooledBalloons > 0) {
@@ -568,18 +646,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             )
         }
 
-        // Water altitude-hold engagement: a hybrid ship (floaters + balloons) whose keel is in water
-        // holds its Y instead of letting balloon lift float it back above the surface. Hysteresis on
-        // liquidOverlap (need > min to engage, but only a full clear of the water to release) keeps
-        // surface chop from flickering the mode. liquidOverlap is the submerged fraction (0..1).
-        // liquidOverlap is VS2's submerged fraction, but it's measured against the dimension's flat
-        // sea-level plane, so it's 0 for water away from Y=sea-level. keelInWater (sampled game-side from
-        // real blocks) makes the hold engage on ANY body of water -- rivers, lakes, man-made, at any
-        // altitude. Hysteresis: engage when the keel reaches water; stay until the hull fully clears it.
-        val inWater = pooledKeelInWater || pooledLiquidOverlap > EurekaConfig.SERVER.waterAltitudeHoldMinOverlap
-        val stillInWater = pooledKeelInWater || pooledLiquidOverlap > 0.0
-        holdEngaged = EurekaConfig.SERVER.enableWaterAltitudeHold && !disassembling && !armadaAnchored &&
-            pooledFloaters > 0 && pooledBalloons > 0 && (inWater || (holdEngaged && stillInWater))
+        // Water altitude-hold ("Water Lock") engagement: a ship on the water pins its current Y instead of
+        // letting buoyancy or balloon lift float it off the surface. It rides the same wet/dry hysteresis
+        // computed above, so surface chop can't flicker it.
+        //
+        // The gate is the BOAT category rather than the old "has floaters AND balloons": the helm's Water
+        // Lock checkbox now lives on the Boats & Ships tab and reads the boat preset's own
+        // enableWaterAltitudeHold, so a hybrid gets the hold exactly while it is being a boat -- which is to
+        // say while it is touching water -- and a plain floaters-only boat can hold its waterline too, which
+        // it could not before.
+        holdEngaged = cfg.enableWaterAltitudeHold && !disassembling && !armadaAnchored &&
+            activeProfile == ControlProfile.BOAT && pooledFloaters > 0 &&
+            (inWater || (holdEngaged && stillInWater))
         if (!holdEngaged) holdTargetY = null
 
         val buoyantFactorPerFloater = min(
@@ -615,7 +693,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
             val idealOmega = Vector3d(invRotationAxisAngle.x, invRotationAxisAngle.y, invRotationAxisAngle.z)
                 .mul(-angleUntilAligned)
-                .mul(EurekaConfig.SERVER.stabilizationSpeed)
+                .mul(cfg.stabilizationSpeed)
 
             body.applyAngularAcceleration(idealOmega)
         }
@@ -651,6 +729,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // what made a coasting armada wrench itself into a turn the moment the pilot stood up.
         stabilize(
             body,
+            cfg,
             // A ship following a route counts as piloted for both brakes below: the follower IS the pilot, it
             // just isn't sitting down. Without this the anti-velocity brake fights the thrust carrying the ship
             // along its route.
@@ -679,18 +758,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 )
                 // Restore the locked turn rate (angular twin of oldSpeed) so a reloaded ship keeps circling
                 // at the same rate; the release controller re-converges omega.y to it if physics drifted.
-                // VANILLA has no turn-orbit, so force it null there.
                 cruiseTurnOmega =
-                    if (!vanillaControls && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise) cruiseTurnOmegaSaved else null
+                    if (cruiseTurning && EurekaConfig.SERVER.enableTurnCruise) cruiseTurnOmegaSaved else null
             } else {
                 // isCruising was saved with no captured course (e.g. a helm-menu cruise activated with no
                 // recorded inputs, or saved on the exact activation tick before any steering). Keep cruising
                 // idle rather than dropping it -- the no-input auto-off was removed. controlData stays null so
                 // the ship coasts until a player (re)mounts the helm and the live-control path rebuilds it, or
                 // an armed set records a value. Rebuild the locked turn rate from the saved mirror if one was
-                // armed (VANILLA has no turn-orbit, so force it null there).
+                // armed.
                 cruiseTurnOmega =
-                    if (!vanillaControls && cruiseTurning && EurekaConfig.SERVER.enableTurnCruise) cruiseTurnOmegaSaved else null
+                    if (cruiseTurning && EurekaConfig.SERVER.enableTurnCruise) cruiseTurnOmegaSaved else null
             }
         }
 
@@ -738,8 +816,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             }
             // Mirror the locked turn rate so it survives a reload (cruiseTurnOmega is @JsonIgnore;
             // cruiseTurning persists directly and is kept in lockstep via capture/clearCruiseTurn()).
-            // VANILLA has no turn-orbit, so don't mirror it there.
-            if (!vanillaControls) cruiseTurnOmegaSaved = cruiseTurnOmega ?: 0.0
+            cruiseTurnOmegaSaved = cruiseTurnOmega ?: 0.0
         }
 
         // Forward/back thrust gets a different assist depending on what carries the ship.
@@ -748,14 +825,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // balloon lift to fly keeps the normal, unassisted thrust.
         val thrustMultiplier = when {
             balloonForceProvided >= mass * -GRAVITY -> 1.0
-            physShip.liquidOverlap > 0.0 -> EurekaConfig.SERVER.waterThrustAssist
-            else -> EurekaConfig.SERVER.landThrustAssist
+            physShip.liquidOverlap > 0.0 -> cfg.waterThrustAssist
+            else -> cfg.landThrustAssist
         }
 
         // Vertical additive trim: while the vertical set is latched, a held Space/V nudges the held climb/
         // descend rate toward full (tap = small, hold = ramp); releasing keeps it, so the ship holds that rate.
-        // ADVANCED-only (vanilla never sets cruiseVerticalActive, but guard explicitly).
-        if (!vanillaControls && cruiseVerticalActive) {
+        if (cruiseVerticalActive) {
             val liveUp = liveControl?.upImpulse ?: 0.0f
             if (liveUp != 0.0f) {
                 cruiseVerticalRate =
@@ -769,14 +845,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // activation stays free/live. Forward + turn pass the LIVE input through (so the additive ramps respond
         // and free sets steer); vertical replays the latched rate while latched, else live. Seat facing + the
         // held oldSpeed give the cruise heading/speed, so steering rotates the held velocity vector (circling).
-        // VANILLA freezes the captured controlData while cruising (no additive replay), so effective = controlData.
         // A recorded route carries elevation, so while one is being followed it owns the vertical -- ahead of
         // the cruise latch, behind the pilot. Null when nothing is following, which leaves every case below
         // exactly as it was.
         val pathVertical = pathVerticalRate
         val liveUp = liveControl?.upImpulse ?: 0.0f
 
-        val effective = if (!vanillaControls && isCruising) {
+        val effective = if (isCruising) {
             controlData?.let { frozen ->
                 ControlData(
                     frozen.seatInDirection,
@@ -789,7 +864,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 )
             }
         } else if (pathVertical != null) {
-            // Vanilla mode, or advanced-with-cruise-off: still fly the route's elevation.
+            // Cruise off, but still fly the route's elevation.
             controlData?.let { frozen ->
                 ControlData(
                     frozen.seatInDirection,
@@ -805,10 +880,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         // True when there's a COMMANDED vertical -- live pilot input, OR a latched cruise climb/descend rate --
         // so the water altitude-hold drives that rate; zero (a free set on release, or a latched rate trimmed
-        // to 0) lets it spring-hold the current altitude. VANILLA matches 833d445, which forced this false while
-        // cruising (!isCruising): a vanilla ship that engages cruise while holding ascend/descend springs to
-        // altitude-hold instead of driving vertical. ADVANCED keeps the latched-rate drive (cruise owns vertical).
-        val verticalInputActive = (effective?.upImpulse ?: 0.0f) != 0.0f && (!vanillaControls || !isCruising)
+        // to 0) lets it spring-hold the current altitude.
+        val verticalInputActive = (effective?.upImpulse ?: 0.0f) != 0.0f
 
         effective?.let { control ->
             applyPlayerControl(control, body, thrustMultiplier)
@@ -822,8 +895,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // press a key, and ascend/descend never drops cruise.
             applyWaterAltitudeHold(body, idealUpwardVel, verticalInputActive)
         } else {
-            val idealUpwardForce = (idealUpwardVel.y() - vel.y() - (GRAVITY / EurekaConfig.SERVER.elevationSnappiness)) *
-                    mass * EurekaConfig.SERVER.elevationSnappiness
+            val idealUpwardForce = (idealUpwardVel.y() - vel.y() - (GRAVITY / cfg.elevationSnappiness)) *
+                    mass * cfg.elevationSnappiness
 
             body.applyForce(Vector3d(0.0,
                 min(balloonForceProvided, max(idealUpwardForce, 0.0)) +
@@ -839,9 +912,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // that set (back to free/live), leaving the others AND leaving the whole cruise ON. Cruise no longer
         // auto-offs when the last set is canceled: with the helm-menu cruise, "cruising with no recorded sets"
         // is a valid idle state (the pilot re-records by driving or typing values). Cruise only ends on an
-        // explicit off -- the C toggle, the helm "Cruise Control" master, anchoring, or a mode switch.
-        // ADVANCED-only: vanilla has no per-set latches (its cancel happened in getControlData).
-        if (!vanillaControls && isCruising) {
+        // explicit off -- the C toggle, the helm "Cruise Control" master, or anchoring. A ship changing
+        // CATEGORY deliberately does not end cruise: a hybrid crossing a shoreline under cruise keeps it.
+        if (isCruising) {
             // Track each latched set's intent direction from its influence (retain inside the dead-zone), then
             // cancel the set when the OPPOSITE input is held for the set's duration. Reading abs()/sign() of one
             // signed @Volatile gives duration + held-direction atomically. Collect the set(s) canceled THIS tick
@@ -926,13 +999,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // (so it feels identical), and keep the setpoint pinned here so releasing the key holds at
             // this exact depth. Net force = mass * elevationSnappiness * (targetVel - vel.y).
             holdTargetY = currentY
-            ((idealUpwardVel.y() - vel.y()) * EurekaConfig.SERVER.elevationSnappiness - GRAVITY) * mass
+            ((idealUpwardVel.y() - vel.y()) * cfg.elevationSnappiness - GRAVITY) * mass
         } else {
             // Holding: critically-damped spring to the latched Y. -GRAVITY cancels weight; the spring
             // and damping (the net force after gravity) pull the ship back to exactly holdTargetY and
             // settle it there with no overshoot. Latch on first hold tick if not already set.
             val target = holdTargetY ?: currentY.also { holdTargetY = it }
-            val k = EurekaConfig.SERVER.waterAltitudeHoldStiffness
+            val k = cfg.waterAltitudeHoldStiffness
             val c = 2.0 * sqrt(k) // critical damping: firm hold, no oscillation/bounce
             ((target - currentY) * k - vel.y() * c - GRAVITY) * mass
         }
@@ -942,24 +1015,6 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     private fun getControlData(player: SeatedControllingPlayer): ControlData {
 
         val currentControlData = ControlData.create(player)
-
-        if (vanillaControls) {
-            // === VANILLA cruise (verbatim 833d445): a SINGLE isCruising toggle with instant any-key cancel. ===
-            // No per-set latches, no turn-orbit. C toggles cruise; pressing any movement key while cruising (once
-            // the control actually changes from the captured course) cancels. controlData is frozen by the
-            // physTick !isCruising gate, so the captured course/speed holds while cruising.
-            if (!wasCruisePressed && player.cruise) {
-                isCruising = !isCruising
-                showCruiseStatus()
-            } else if (!player.cruise && isCruising &&
-                (player.leftImpulse != 0.0f || player.sprintOn || player.upImpulse != 0.0f || player.forwardImpulse != 0.0f) &&
-                currentControlData != controlData
-            ) {
-                isCruising = false
-                showCruiseStatus()
-            }
-            return currentControlData
-        }
 
         if (!wasCruisePressed && player.cruise) {
             if (!isCruising) {
@@ -1023,101 +1078,71 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             dist = max(dist, center.distance(aabb.maxX(), center.y(), aabb.maxZ()))
 
             dist
-        }.coerceIn(0.5, EurekaConfig.SERVER.maxSizeForTurnSpeedPenalty)
+        }.coerceIn(0.5, cfg.maxSizeForTurnSpeedPenalty)
 
-        // largestDistance (computed above, identical in both modes) = the ship's turn radius reference.
-        val idealAlphaY: Double
-        if (vanillaControls) {
-            // === VANILLA turn law (verbatim pre-overhaul 833d445): engine-DEPENDENT, instantaneous. ===
-            // maxLinearSpeed adds extraForceAngular (engine angular power), so engines speed up turning -- the
-            // overhaul made turning engine-independent + delayed; this restores the original feel. cfg routes
-            // turnSpeed/turnAcceleration to the VANILLA preset (values identical to advanced, but kept for symmetry).
-            val maxLinearAcceleration = cfg.turnAcceleration
-            val maxLinearSpeed = cfg.turnSpeed + extraForceAngular
+        // === Turn law: engine-independent, with the TURN cruise set (one of the 3 independent sets) ===
+        // largestDistance (computed above) = the ship's turn radius reference.
+        // turnSpeed = base turn rate; turnAcceleration ramps in only after holding past turnAccelDelay.
+        val r = largestDistance
+        val baseCap = cfg.turnSpeed / r
+        val delay = cfg.turnAccelDelay.coerceAtLeast(0.05)
+        val held = abs(turnHold) // continuous turn-hold seconds (measured game-side at fixed 20 TPS)
+        val turnKeyHeld = control.leftImpulse != 0.0f
+        val dir = if (control.leftImpulse > 0.0f) 1.0 else if (control.leftImpulse < 0.0f) -1.0 else 0.0
+        // Turn cruise is live only in free flight (never while disassembling/aligning, where yaw must snap to grid).
+        val freeFlight = isCruising && !disassembling && !aligning && EurekaConfig.SERVER.enableTurnCruise
+        // turnLatched = an orbit is armed (Case B: a turn was active at activation). Else Case A: free,
+        // self-centering turning even while cruising (other sets unaffected). Canceling the orbit = hold the
+        // OPPOSITE turn for turnCancelHold seconds (the unified per-set cancel block in physTick).
+        val turnLatched = freeFlight && cruiseTurning
 
-            // acceleration = alpha * r  ->  maxAlpha = maxAcceleration / r
-            val maxOmegaY = maxLinearSpeed / largestDistance
-            val maxAlphaY = maxLinearAcceleration / largestDistance
+        // turnAcceleration engages only after holding past the delay (faster influence / sharper free turn).
+        val accelerating = turnKeyHeld && held > delay
+        val effCap = (if (accelerating) baseCap + (cfg.turnAcceleration / r) * (held - delay) else baseCap)
+            .coerceAtMost(TURN_OMEGA_MAX_LINEAR / r)
+        // Rate omega.y changes per second: base ramp reaches baseCap in `delay`s (so taps stay small), then the
+        // turnAcceleration rate. Also the maintain/center brake rate.
+        val chase = if (accelerating) max(baseCap / delay, cfg.turnAcceleration / r) else baseCap / delay
+        // The maintain branch (a latched orbit rate with no live turn key) converges omega.y to
+        // cruiseTurnOmega at a P-rate capped here. A C-captured orbit already sits at its rate, so its gap is
+        // tiny and the gentle base cap is plenty. But a MENU-TYPED cruiseTurnOmega starts from omega.y = 0,
+        // and on a large ship (r up to maxSizeForTurnSpeedPenalty) baseCap/delay is so small the ship crawls
+        // -- it reads as "not turning". Cap the maintain approach at the turnAcceleration rate so a typed rate
+        // is reached in ~a second regardless of ship size; the tiny-gap C-cruise hold is unaffected (its
+        // error stays well under this cap, so the applied alpha is unchanged).
+        val maintainChase = max(chase, cfg.turnAcceleration / r)
 
-            val isBelowMaxTurnSpeed = abs(omega.y()) < maxOmegaY
+        // A live path command outranks both cruise cases but never the pilot: grabbing the wheel always
+        // wins, and pure pursuit simply re-acquires the line once the key is released.
+        val pathOmega = pathTurnOmega
 
-            // A path command steers a Vanilla-mode ship too. Without this branch, following would simply do
-            // nothing on those ships -- the quietest possible failure -- so it converges omega.y to the
-            // commanded rate within this mode's own acceleration limit. The pilot still outranks it.
-            val pathOmegaVanilla = pathTurnOmega
-            idealAlphaY = if (pathOmegaVanilla != null && control.leftImpulse == 0.0f) {
-                (pathOmegaVanilla - omega.y()).coerceIn(-maxAlphaY, maxAlphaY)
-            } else {
-                val normalizedAlphaYMultiplier =
-                    if (isBelowMaxTurnSpeed && control.leftImpulse != 0.0f) control.leftImpulse.toDouble()
-                    else -omega.y().coerceIn(-1.0, 1.0)
+        val idealAlphaY: Double = when {
+            turnKeyHeld ->
+                // Hold to turn: converge toward the turnSpeed cap (effCap) in the held direction. The ship
+                // starts turning at the base rate IMMEDIATELY; only after turnAccelDelay of continuous hold
+                // does effCap climb (turnAcceleration) for a sharper turn. Latched or not, the HOLD feel is
+                // identical -- the ONLY difference is on RELEASE (below): an armed/latched turn keeps the rate
+                // it reached, a free turn re-centers. (Previously a latched hold ADDED influence from zero, so
+                // on a big ship nothing perceptible happened until acceleration kicked in and then it lurched;
+                // this converges smoothly, with the 0.6 s delay gating only the acceleration as intended.)
+                (effCap * dir - omega.y()).coerceIn(-chase, chase)
+            pathOmega != null ->
+                // Following a recorded route: converge to the rate the follower asked for. maintainChase
+                // is the right limit here for the same reason it is for a MENU-TYPED cruise rate (see
+                // above) -- the command arrives with omega.y at 0 and no hold to ramp it in, so the gentler
+                // base cap would leave a large hull visibly failing to make the corner.
+                (pathOmega - omega.y()).coerceIn(-maintainChase, maintainChase)
+            turnLatched ->
+                // Released while armed / a menu-typed rate: converge to and hold the locked orbit rate.
+                ((cruiseTurnOmega ?: 0.0) - omega.y()).coerceIn(-maintainChase, maintainChase)
+            else ->
+                // Released while free (not cruising): brake back to center.
+                (0.0 - omega.y()).coerceIn(-chase, chase)
+        }
 
-                normalizedAlphaYMultiplier * maxAlphaY
-            }
-        } else {
-            // === Turn law: engine-independent, with the TURN cruise set (one of the 3 independent sets) ===
-            // turnSpeed = base turn rate; turnAcceleration ramps in only after holding past turnAccelDelay.
-            val r = largestDistance
-            val baseCap = cfg.turnSpeed / r
-            val delay = EurekaConfig.SERVER.turnAccelDelay.coerceAtLeast(0.05)
-            val held = abs(turnHold) // continuous turn-hold seconds (measured game-side at fixed 20 TPS)
-            val turnKeyHeld = control.leftImpulse != 0.0f
-            val dir = if (control.leftImpulse > 0.0f) 1.0 else if (control.leftImpulse < 0.0f) -1.0 else 0.0
-            // Turn cruise is live only in free flight (never while disassembling/aligning, where yaw must snap to grid).
-            val freeFlight = isCruising && !disassembling && !aligning && EurekaConfig.SERVER.enableTurnCruise
-            // turnLatched = an orbit is armed (Case B: a turn was active at activation). Else Case A: free,
-            // self-centering turning even while cruising (other sets unaffected). Canceling the orbit = hold the
-            // OPPOSITE turn for turnCancelHold seconds (the unified per-set cancel block in physTick).
-            val turnLatched = freeFlight && cruiseTurning
-
-            // turnAcceleration engages only after holding past the delay (faster influence / sharper free turn).
-            val accelerating = turnKeyHeld && held > delay
-            val effCap = (if (accelerating) baseCap + (cfg.turnAcceleration / r) * (held - delay) else baseCap)
-                .coerceAtMost(TURN_OMEGA_MAX_LINEAR / r)
-            // Rate omega.y changes per second: base ramp reaches baseCap in `delay`s (so taps stay small), then the
-            // turnAcceleration rate. Also the maintain/center brake rate.
-            val chase = if (accelerating) max(baseCap / delay, cfg.turnAcceleration / r) else baseCap / delay
-            // The maintain branch (a latched orbit rate with no live turn key) converges omega.y to
-            // cruiseTurnOmega at a P-rate capped here. A C-captured orbit already sits at its rate, so its gap is
-            // tiny and the gentle base cap is plenty. But a MENU-TYPED cruiseTurnOmega starts from omega.y = 0,
-            // and on a large ship (r up to maxSizeForTurnSpeedPenalty) baseCap/delay is so small the ship crawls
-            // -- it reads as "not turning". Cap the maintain approach at the turnAcceleration rate so a typed rate
-            // is reached in ~a second regardless of ship size; the tiny-gap C-cruise hold is unaffected (its
-            // error stays well under this cap, so the applied alpha is unchanged).
-            val maintainChase = max(chase, cfg.turnAcceleration / r)
-
-            // A live path command outranks both cruise cases but never the pilot: grabbing the wheel always
-            // wins, and pure pursuit simply re-acquires the line once the key is released.
-            val pathOmega = pathTurnOmega
-
-            idealAlphaY = when {
-                turnKeyHeld ->
-                    // Hold to turn: converge toward the turnSpeed cap (effCap) in the held direction. The ship
-                    // starts turning at the base rate IMMEDIATELY; only after turnAccelDelay of continuous hold
-                    // does effCap climb (turnAcceleration) for a sharper turn. Latched or not, the HOLD feel is
-                    // identical -- the ONLY difference is on RELEASE (below): an armed/latched turn keeps the rate
-                    // it reached, a free turn re-centers. (Previously a latched hold ADDED influence from zero, so
-                    // on a big ship nothing perceptible happened until acceleration kicked in and then it lurched;
-                    // this converges smoothly, with the 0.6 s delay gating only the acceleration as intended.)
-                    (effCap * dir - omega.y()).coerceIn(-chase, chase)
-                pathOmega != null ->
-                    // Following a recorded route: converge to the rate the follower asked for. maintainChase
-                    // is the right limit here for the same reason it is for a MENU-TYPED cruise rate (see
-                    // above) -- the command arrives with omega.y at 0 and no hold to ramp it in, so the gentler
-                    // base cap would leave a large hull visibly failing to make the corner.
-                    (pathOmega - omega.y()).coerceIn(-maintainChase, maintainChase)
-                turnLatched ->
-                    // Released while armed / a menu-typed rate: converge to and hold the locked orbit rate.
-                    ((cruiseTurnOmega ?: 0.0) - omega.y()).coerceIn(-maintainChase, maintainChase)
-                else ->
-                    // Released while free (not cruising): brake back to center.
-                    (0.0 - omega.y()).coerceIn(-chase, chase)
-            }
-
-            // While the orbit is armed, track the achieved rate so a held/tapped adjustment sticks once released.
-            if (turnLatched && turnKeyHeld) {
-                cruiseTurnOmega = omega.y()
-            }
+        // While the orbit is armed, track the achieved rate so a held/tapped adjustment sticks once released.
+        if (turnLatched && turnKeyHeld) {
+            cruiseTurnOmega = omega.y()
         }
 
         // The commanded yaw acceleration (which covers both the turn and the brake back to centre, since they
@@ -1152,7 +1177,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     private fun getPlayerForwardVel(control: ControlData, body: ArmadaBody): Vector3d {
 
         val lead = body.lead
-        val scaledMass = body.mass * EurekaConfig.SERVER.speedMassScale
+        val scaledMass = body.mass * cfg.speedMassScale
         val vel: Vector3dc = body.velocity
 
         // region Player controlled forward and backward thrust
@@ -1162,8 +1187,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         forwardVector.normalize()
 
         val s = 1 / smoothingATanMax(
-            EurekaConfig.SERVER.linearMaxMass,
-            body.mass * EurekaConfig.SERVER.linearMassScaling + EurekaConfig.SERVER.linearBaseMass
+            cfg.linearMaxMass,
+            body.mass * cfg.linearMassScaling + cfg.linearBaseMass
         )
 
         // Throttle smoothing. When the HORIZONTAL set is latched it's ADDITIVE: only update oldSpeed while a
@@ -1200,7 +1225,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // Target speed in REAL m/s from here down. The base term is the throttle fraction times the
         // engine-less speed the config allows: linearCasualSpeed/3 is the historical throttle scale and
         // baseSpeed converts it to m/s, so an engine-less ship still tops out at exactly baseSpeed.
-        var speed = oldSpeed * EurekaConfig.SERVER.linearCasualSpeed / 3 * EurekaConfig.SERVER.baseSpeed
+        var speed = oldSpeed * cfg.linearCasualSpeed / 3 * cfg.baseSpeed
 
         val engineForceLinear = pooledForceLinear
         if (engineForceLinear != 0.0) {
@@ -1215,13 +1240,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // shortfall behaved like textbook linear drag and kept the same ratio however the config was
             // scaled. It was never drag; it was the engine force being spent on the first tick that read it.
             val enginePower =
-                (engineForceLinear + boost + boost * boost * EurekaConfig.SERVER.engineBoostExponentialPower) /
+                (engineForceLinear + boost + boost * boost * cfg.engineBoostExponentialPower) /
                     scaledMass
 
             speed += if (speed < 0) {
                 smoothingATanMax(cfg.maxReverseSpeedFromEngines, enginePower * oldSpeed)
             } else {
-                smoothingATanMax(EurekaConfig.SERVER.maxSpeedFromEngines, enginePower * oldSpeed)
+                smoothingATanMax(cfg.maxSpeedFromEngines, enginePower * oldSpeed)
             }
 
             // Engine heat drain: track how much of the engine power is being used this phys tick
@@ -1301,7 +1326,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                     else {
                         cfg.baseImpulseElevationRate +
                                 // Smoothing for how the elevation scales as you approaches the balloonElevationMaxSpeed
-                                smoothing(2.0, EurekaConfig.SERVER.balloonElevationMaxSpeed, balloonForceProvided / mass)
+                                smoothing(2.0, cfg.balloonElevationMaxSpeed, balloonForceProvided / mass)
                     }
                 )
         }
@@ -1321,18 +1346,6 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         cruiseTurning = false
         turnIntentSign = 0
         turnCancel.reset()
-    }
-
-    // Called from the helm when this ONE ship's control mode is flipped (advanced<->vanilla). Cancels any
-    // running cruise and clears ALL latch state so stale advanced latches (cruiseHorizontalActive/cruiseTurning)
-    // can't leak into the vanilla path's stabilize() yaw gate after a mode switch mid-cruise. Per-ship by
-    // construction: the helm resolves `control` via getLoadedShipManagingPos(blockPos), so only this ship cancels.
-    fun cancelCruiseForModeSwitch() {
-        if (isCruising) {
-            isCruising = false
-            showCruiseStatus()
-        }
-        clearCruiseLatches()
     }
 
     // Clears ALL three cruise latch sets (horizontal / vertical / turn) -- used on the whole-cruise-end paths
@@ -1525,8 +1538,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 // sat at 3, and nothing anywhere said why. The typed target needs no such protection: it is
                 // held closed-loop below, and the throttle it trims saturates at 1.0, so asking for more than
                 // the hull has simply means full power. Which is exactly what asking for it should mean.
-                val fwdMax = EurekaConfig.SERVER.baseSpeed + EurekaConfig.SERVER.maxSpeedFromEngines
-                val revMax = EurekaConfig.SERVER.baseSpeed + cfg.maxReverseSpeedFromEngines
+                val fwdMax = cfg.baseSpeed + cfg.maxSpeedFromEngines
+                val revMax = cfg.baseSpeed + cfg.maxReverseSpeedFromEngines
                 val clamped = value.coerceIn(-revMax, fwdMax)
                 // Exact target held closed-loop by getPlayerForwardVel; oldSpeed is only the initial throttle
                 // seed (open-loop estimate) that the trim then corrects onto the real speed. Seeded off the
@@ -1692,7 +1705,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      */
     private fun applyPathServo(body: ArmadaBody, physShip: PhysShip, servo: PathServo) {
         if (body.mass <= 0.0) return
-        val cfg = EurekaConfig.SERVER
+        // Named apart from the class's per-category `cfg` on purpose. The servo gains are deliberately GLOBAL
+        // -- a recorded route is flown the same way whatever the ship is -- and a local called `cfg` would
+        // shadow the category getter for this whole function, which is exactly the kind of silent capture
+        // that survives a refactor unnoticed.
+        val servoCfg = EurekaConfig.SERVER
 
         // An anchor drops out of this branch above, so a hull arriving here is meant to move -- including one
         // that was static when it was last anchored, since the line that clears that flag is the last of
@@ -1722,12 +1739,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // The recorded velocity does nearly all the work; the error term only closes whatever the last tick
         // failed to deliver. Capped as a whole, so a ship that has just been shoved a long way off its line
         // comes back briskly rather than at a speed of its own invention.
-        val drive = servoDrive.set(servo.velocity).fma(cfg.pathServoPosGain, error)
-        clampLength(drive, cfg.pathServoMaxSpeed)
+        val drive = servoDrive.set(servo.velocity).fma(servoCfg.pathServoPosGain, error)
+        clampLength(drive, servoCfg.pathServoMaxSpeed)
 
-        drive.sub(body.velocity).mul(cfg.pathServoVelGain)
+        drive.sub(body.velocity).mul(servoCfg.pathServoVelGain)
         drive.y -= GRAVITY
-        clampLength(drive, cfg.pathServoMaxAccel)
+        clampLength(drive, servoCfg.pathServoMaxAccel)
         body.applyForce(drive.mul(body.mass))
         // endregion
 
@@ -1741,7 +1758,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             val dz = servo.forward.z()
             val cross = heading.z * dx - heading.x * dz
             val dot = heading.x * dx + heading.z * dz
-            omega.y = atan2(cross, dot) * cfg.pathServoRotGain
+            omega.y = atan2(cross, dot) * servoCfg.pathServoRotGain
         }
 
         // Righting. The hull's own up crossed with the world's, `(-uz, 0, ux)`, is the axis that carries one
@@ -1750,12 +1767,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // out horizontal, so it never fights the yaw term above.
         val up = servoUp.set(0.0, 1.0, 0.0)
         body.lead.transform.shipToWorldRotation.transform(up)
-        omega.x -= up.z * cfg.pathServoRotGain
-        omega.z += up.x * cfg.pathServoRotGain
+        omega.x -= up.z * servoCfg.pathServoRotGain
+        omega.z += up.x * servoCfg.pathServoRotGain
 
-        clampLength(omega, cfg.pathServoMaxOmega)
-        omega.sub(body.angularVelocity).mul(cfg.pathServoOmegaGain)
-        clampLength(omega, cfg.pathServoMaxAlpha)
+        clampLength(omega, servoCfg.pathServoMaxOmega)
+        omega.sub(body.angularVelocity).mul(servoCfg.pathServoOmegaGain)
+        clampLength(omega, servoCfg.pathServoMaxAlpha)
         body.applyAngularAcceleration(omega)
         // endregion
     }
@@ -1809,10 +1826,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // Ship turn-radius estimate (blocks) for clamping a typed turn rate: half the horizontal diagonal of the
     // ship-local AABB, coerced to the same [0.5, maxSizeForTurnSpeedPenalty] band applyPlayerControl uses.
     private fun turnRadiusEstimate(): Double {
-        val a = ship?.shipAABB ?: return EurekaConfig.SERVER.maxSizeForTurnSpeedPenalty
+        val a = ship?.shipAABB ?: return cfg.maxSizeForTurnSpeedPenalty
         val dx = (a.maxX() - a.minX()) / 2.0
         val dz = (a.maxZ() - a.minZ()) / 2.0
-        return sqrt(dx * dx + dz * dz).coerceIn(0.5, EurekaConfig.SERVER.maxSizeForTurnSpeedPenalty)
+        return sqrt(dx * dx + dz * dz).coerceIn(0.5, cfg.maxSizeForTurnSpeedPenalty)
     }
     // endregion
 
@@ -1833,9 +1850,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // typed cruise speed, a pilot could type a number, watch it be accepted, and never come near it.
         val engineCount = if (pooledEngines >= 0) pooledEngines else engines
         val mass = (if (pooledMass > 0.0) pooledMass else ship?.inertiaData?.mass)
-            ?: return EurekaConfig.SERVER.baseSpeed
-        val scaledMass = mass * EurekaConfig.SERVER.speedMassScale
-        var speed = EurekaConfig.SERVER.linearCasualSpeed / 3.0 * EurekaConfig.SERVER.baseSpeed // oldSpeed -> 1
+            ?: return cfg.baseSpeed
+        val scaledMass = mass * cfg.speedMassScale
+        var speed = cfg.linearCasualSpeed / 3.0 * cfg.baseSpeed // oldSpeed -> 1
         val fullPower = engineCount * cfg.enginePowerLinear.toDouble()
         if (fullPower > 0.0 && scaledMass > 0.0) {
             var extra = fullPower
@@ -1843,11 +1860,11 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 (extra - cfg.enginePowerLinear * cfg.engineBoostOffset) * cfg.engineBoost,
                 0.0
             )
-            extra += boost + boost * boost * EurekaConfig.SERVER.engineBoostExponentialPower
+            extra += boost + boost * boost * cfg.engineBoostExponentialPower
             extra /= scaledMass
-            speed += smoothingATanMax(EurekaConfig.SERVER.maxSpeedFromEngines, extra) // * oldSpeed (=1)
+            speed += smoothingATanMax(cfg.maxSpeedFromEngines, extra) // * oldSpeed (=1)
         }
-        return max(EurekaConfig.SERVER.baseSpeed, speed)
+        return max(cfg.baseSpeed, speed)
     }
 
     companion object {
