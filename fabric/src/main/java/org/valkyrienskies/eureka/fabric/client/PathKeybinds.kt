@@ -70,6 +70,7 @@ object PathKeybinds {
     private lateinit var play: KeyMapping
     private lateinit var show: KeyMapping
     private lateinit var follow: KeyMapping
+    private lateinit var crew: KeyMapping
 
     /**
      * One key's worth of "is this a tap or a hold?".
@@ -110,6 +111,9 @@ object PathKeybinds {
         // `F` is vanilla's swap-offhand. That collision is handled for free by suppressVanillaCollisions, which
         // scans for whatever shares a key with one of `ours` rather than hard-coding any particular binding.
         follow = bind("follow", GLFW.GLFW_KEY_F)
+        // `C` for crew. Unbound in vanilla today, but it goes through the same collision scan as the rest, so a
+        // rebind or another mod landing on it is covered without anything here changing.
+        crew = bind("crew", GLFW.GLFW_KEY_C)
 
         recordGesture = Gesture(record)
         playGesture = Gesture(play)
@@ -138,14 +142,16 @@ object PathKeybinds {
         if (!client.options.keyShift.isDown) return
 
         for (mapping in client.options.keyMappings) {
-            if (mapping === record || mapping === play || mapping === show || mapping === follow) continue
+            if (mapping === record || mapping === play || mapping === show ||
+                mapping === follow || mapping === crew
+            ) continue
             // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
             if (ours.none { mapping.same(it) }) continue
             while (mapping.consumeClick()) Unit
         }
     }
 
-    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow) }
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow, crew) }
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -200,7 +206,7 @@ object PathKeybinds {
         drainClicks(record, play)
 
         if (!sneaking) {
-            drainClicks(show, follow)
+            drainClicks(show, follow, crew)
             return
         }
 
@@ -209,6 +215,11 @@ object PathKeybinds {
         // self-undoing -- pressing it again on the ship you are already chasing breaks off -- so a misfire costs
         // one more press rather than needing a different key to put right.
         if (follow.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
+
+        // Also a single press, for the same reasons as follow: it wants the crosshair on a person, and signing
+        // someone on is undone by pressing it at them again. The server decides whether this press meant
+        // "recruit" or "show me the roster" -- it is the only side that can see what the crosshair is on.
+        if (crew.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_CREW)
 
         if (show.consumeClick()) toggleShowAll(client)
     }

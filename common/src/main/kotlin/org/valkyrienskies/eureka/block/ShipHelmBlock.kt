@@ -6,8 +6,10 @@ import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -27,6 +29,7 @@ import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
 import org.valkyrienskies.core.api.attachment.getAttachment
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.crew.CrewBerths
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
@@ -65,6 +68,35 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
 
             control.helms -= 1
         }
+    }
+
+    /**
+     * A Heart of the Sea offered to the wheel buys one more berth.
+     *
+     * This overrides [useItemOn] rather than [useWithoutItem] because vanilla only routes to the latter when
+     * the player's hand is empty. Anything [CrewBerths] passes on falls straight through to `super`, whose
+     * default body returns `TRY_WITH_EMPTY_HAND` -- and it is exactly that fall-through which keeps an
+     * empty-handed click opening the menu or sitting the player down. Returning `PASS` here instead would
+     * quietly break both.
+     *
+     * This is only HALF the gesture: vanilla never calls a block at all when the player is crouching with a
+     * full hand, so the crouching case is caught by a `UseBlockCallback` in `CrewRegistrationsFabric` and both
+     * arms meet in [CrewBerths.offerHeart]. See there for why it is split that way.
+     *
+     * Deliberately works on an UNASSEMBLED helm: berths are a fact about the captain rather than about a hull.
+     */
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hitResult: BlockHitResult
+    ): InteractionResult {
+        val berth = CrewBerths.offerHeart(level, pos, player, stack)
+        if (berth != InteractionResult.PASS) return berth
+        return super.useItemOn(stack, state, level, pos, player, hand, hitResult)
     }
 
     override fun useWithoutItem(

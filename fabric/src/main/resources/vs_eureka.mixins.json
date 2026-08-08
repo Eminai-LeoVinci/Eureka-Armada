@@ -4,11 +4,17 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "MixinEntitySubAir",
-    "MixinVSCoreTeleport"
+    "MixinPoiCompetitorScan",
+    "MixinVSCoreTeleport",
+    "MixinVillagerCrewTenure",
+    "MixinYieldJobSite"
   ],
   "client": [
     "client.MixinRaycastUtils",
-    "client.MixinCameraSubAir"
+    "client.MixinCameraSubAir",
+    "client.MixinEntityRenderStateCrewPlate",
+    "client.MixinEntityRendererCrewNameTag",
+    "client.MixinNameTagBackdrop"
   ],
   "injectors": {
     "defaultRequire": 1

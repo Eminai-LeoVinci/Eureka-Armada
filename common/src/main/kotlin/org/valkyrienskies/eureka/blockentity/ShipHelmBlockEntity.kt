@@ -25,9 +25,12 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.block.state.properties.Half
+import net.minecraft.world.level.storage.ValueInput
+import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
 import org.joml.Vector3d
 import org.joml.Vector3dc
+import org.joml.primitives.AABBd
 import org.valkyrienskies.core.api.attachment.getAttachment
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaBlockEntities
@@ -43,6 +46,8 @@ import org.valkyrienskies.eureka.block.EngineBlock
 import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.command.AssemblerPreferences
+import org.valkyrienskies.eureka.crew.CrewRoster
+import org.valkyrienskies.eureka.crew.CrewTickets
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
 import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.eureka.ship.EurekaShipControl
@@ -88,6 +93,10 @@ const val FIT_PERCENT_NONE = -1000
 
 // Ticks between refreshes. 20 = once a second, which is faster than a helm's numbers need to move.
 private const val ENVIRONMENT_SAMPLE_TICKS = 20L
+
+// Ticks between POI ticket repairs (see CrewTickets). 600 = every thirty seconds: this fixes damage a save is
+// already carrying, so it only has to be sooner than a player gives up on the wheel.
+private const val TICKET_HEAL_TICKS = 600L
 
 // How far a vertical probe walks before giving up and reporting "not known". Deep enough to cross an ocean
 // trench or clear a mountain, short enough that a ship over the void costs nothing.
@@ -287,6 +296,50 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     fun setCruise(enable: Boolean) { control?.setCruiseFromMenu(enable, helmSeatDirection) }
     fun setCruiseAxis(axis: Int, armed: Boolean) { control?.setCruiseAxisArmed(axis, armed, helmSeatDirection) }
     fun setCruiseValue(axis: Int, value: Double) { control?.setCruiseValueMenu(axis, value, helmSeatDirection) }
+    /**
+     * The articles kept at this wheel: who is signed on, and who signed them.
+     *
+     * Held by the BLOCK ENTITY on purpose. Breaking the helm takes the block entity with it and the roster is
+     * simply gone -- no listener, no cleanup pass, no chance of a list outliving the thing it described. That
+     * is the behaviour, not a side effect of it: tear out the wheel and the crew has to be picked again.
+     *
+     * It survives assembly and disassembly for the same structural reason. Both directions RELOCATE blocks
+     * rather than break and re-place them, carrying block-entity data across exactly as a chest carries its
+     * contents, so a crew signed on at a dock is still signed on once the ship is built.
+     *
+     * Only the ship's PRIMARY helm's copy is ever read -- see [isCrewStation].
+     */
+    val crew = CrewRoster()
+
+    /**
+     * Whether this is the wheel a ship's articles are kept at.
+     *
+     * A ship can carry any number of helms and all of them steer, but exactly one holds the crew, so adding
+     * wheels can never add berths. Claimed by the helm that assembles the ship, which makes "the first one" the
+     * simple rule the feature was asked for. If that helm is destroyed the ship has no crew station at all
+     * until someone aims at another wheel and presses the crew key, which is the moment the articles are
+     * rewritten -- see `CrewStations`.
+     */
+    var isCrewStation = false
+
+    /**
+     * Persisted alongside the roster so a reload cannot leave a ship with two crew stations or none.
+     *
+     * `super` first in both, then our own keys; the roster is stored under a namespaced name because block
+     * entity NBT is a flat shared namespace and "Crew" is exactly the sort of key another mod would also pick.
+     */
+    override fun saveAdditional(output: ValueOutput) {
+        super.saveAdditional(output)
+        if (!crew.isEmpty) output.store("vs_eureka:crew", CrewRoster.CODEC, crew.entries())
+        if (isCrewStation) output.putBoolean("vs_eureka:crew_station", true)
+    }
+
+    override fun loadAdditional(input: ValueInput) {
+        super.loadAdditional(input)
+        crew.replaceAll(input.read("vs_eureka:crew", CrewRoster.CODEC).orElse(emptyList()))
+        isCrewStation = input.getBooleanOr("vs_eureka:crew_station", false)
+    }
+
     private val seats = mutableListOf<ShipMountingEntity>()
     val assembled get() = ship != null
     val aligning get() = control?.aligning ?: false
@@ -553,6 +606,15 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             curControl.helmSeatDir = helmSeatDirection
         }
 
+        // Hand back berths that vanilla's job-site code took and never returned. Slow and staggered by
+        // position: this is a repair, not a service, and a healthy helm bails out on one record read. See
+        // CrewTickets -- a helm drained before the leak was fixed would otherwise stay drained for good.
+        if (sLevel is ServerLevel &&
+            sLevel.gameTime % TICKET_HEAL_TICKS == (blockPos.hashCode().toLong() and 0xFFL) % TICKET_HEAL_TICKS
+        ) {
+            CrewTickets.heal(sLevel, blockPos)
+        }
+
         // The ShipMountingEntity seat does not tick server-side: shipyard chunks are only
         // promoted to BLOCK_TICKING (see VS2 MixinChunkHolder), never ENTITY_TICKING, so the
         // vanilla Player.rideTick() sneak-to-dismount check never runs for a seated player.
@@ -728,7 +790,40 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             }
         }
 
+        // Fall-through hold through the BUILD, the mirror of the one disassemble() arms for the teardown. The
+        // hull is about to be lifted out of the world and re-created in the shipyard, and for a moment neither
+        // copy is collidable -- so anything standing on the deck drops. Disassembly has been holding entities
+        // through that gap since the stuck-in-the-deck fix; assembly never was, which is why the blink could
+        // drop you through the lower deck one time in several.
+        //
+        // Keyed on the WORLD footprint of the blocks being taken, computed while they are still in the world,
+        // rather than on the new ship's id: the id-keyed spawn grace VS2 arms inside assembleToShip needs the
+        // ship's chunk set to be populated before it can decide who is standing over it, and during the swap
+        // it briefly isn't. A box needs nothing to be ready.
+        //
+        // Armed twice, before and after, for the same reason disassemble() does: the second one starts its
+        // clock when the world-side work is finished rather than when it began.
+        val holdAABB = worldFootprint(blockPositions)
+        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s, self-expiring
+
+        // This wheel becomes the ship's crew station -- "the first helm wins", stated as the one that built the
+        // ship. Set BEFORE the assembly, so the flag is part of the block entity data the relocation carries
+        // into the shipyard rather than something that has to be written to it afterwards.
+        isCrewStation = true
+        setChanged()
+
         val builtShip = ShipAssembler.finishAssembly(level, blockPositions)
+
+        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+
+        // Where that wheel ended up, so the roster can be found in one block-entity lookup instead of a walk of
+        // the ship's blocks. Rounds the same way the assembler does: the block containing the helm's centre.
+        val helmInShip = builtShip.worldToShip.transformPosition(
+            Vector3d(blockPos.x + 0.5, blockPos.y + 0.5, blockPos.z + 0.5)
+        )
+        val crewStation = BlockPos(
+            floor(helmInShip.x).toInt(), floor(helmInShip.y).toInt(), floor(helmInShip.z).toInt()
+        ).asLong()
 
         // A freshly-assembled ship is created as ShipData and only becomes a
         // LoadedServerShip once vs-core builds its ShipObject (usually the next
@@ -759,6 +854,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.anchorsActive = activeAnchorCount
             control.engines = engineCount
             control.assembledBlocks = blockCount
+            control.crewStationPos = crewStation
         }
 
         val loaded = level.shipObjectWorld.loadedShips.getById(shipId)
@@ -771,6 +867,38 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 }
             }
         }
+    }
+
+    /**
+     * The world-space box the collected blocks occupy, with a block of slack on every side.
+     *
+     * [EntityShipCollisionUtils.isInWorldFreeze] tests an entity's POSITION POINT, not its bounding box, and
+     * someone standing on the top deck has their feet at exactly the hull's upper face -- on the boundary,
+     * where a strict test is a coin flip. The slack is what makes standing on deck unambiguous, and it also
+     * covers a mob mid-step off the gunwale.
+     *
+     * [ShipAssembler.collectBlockPositions] always seeds the set with the helm, so it is never empty.
+     */
+    private fun worldFootprint(blockPositions: Set<BlockPos>): AABBd {
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var minZ = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+        var maxZ = Int.MIN_VALUE
+        for (pos in blockPositions) {
+            if (pos.x < minX) minX = pos.x
+            if (pos.y < minY) minY = pos.y
+            if (pos.z < minZ) minZ = pos.z
+            if (pos.x > maxX) maxX = pos.x
+            if (pos.y > maxY) maxY = pos.y
+            if (pos.z > maxZ) maxZ = pos.z
+        }
+        // maxN + 1 is the far face of the block at maxN; the extra 1 on each side is the slack.
+        return AABBd(
+            minX - 1.0, minY - 1.0, minZ - 1.0,
+            maxX + 2.0, maxY + 2.0, maxZ + 2.0
+        )
     }
 
     fun disassemble() {

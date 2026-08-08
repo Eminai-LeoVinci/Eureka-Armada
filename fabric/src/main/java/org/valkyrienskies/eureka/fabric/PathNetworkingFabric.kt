@@ -3,10 +3,13 @@ package org.valkyrienskies.eureka.fabric
 import io.netty.buffer.Unpooled
 import net.fabricmc.api.EnvType
 import net.fabricmc.api.Environment
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
+import net.minecraft.core.RegistryAccess
 import net.minecraft.network.FriendlyByteBuf
+import net.minecraft.network.RegistryFriendlyByteBuf
 import net.minecraft.network.chat.Component
 import net.minecraft.network.codec.ByteBufCodecs
 import net.minecraft.network.codec.StreamCodec
@@ -14,9 +17,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import net.minecraft.world.item.ItemStack
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.crew.CrewManifest
+import org.valkyrienskies.eureka.crew.CrewMarkers
+import org.valkyrienskies.eureka.crew.ShipCrews
+import org.valkyrienskies.eureka.fabric.client.ClientCrewMarkers
 import org.valkyrienskies.eureka.fabric.client.PathHud
+import org.valkyrienskies.eureka.fabric.client.crew.CrewManifestScreen
 import org.valkyrienskies.eureka.path.ClientPathState
 import org.valkyrienskies.eureka.path.PathFollower
 import org.valkyrienskies.eureka.path.PathMessages
@@ -54,11 +63,21 @@ object PathNetworkingFabric {
     private val ROUTES_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_routes")
     private val LIVE_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_live")
     private val MESSAGE_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "path_message")
+    private val CREW_MARKS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_marks")
+    private val CREW_MANIFEST_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_manifest")
+    private val CREW_DETAIL_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail")
+    private val CREW_ASK_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail_ask")
+    private val CREW_RENAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_rename")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
     private val ROUTES_TYPE = CustomPacketPayload.Type<RoutesPayload>(ROUTES_RL)
     private val LIVE_TYPE = CustomPacketPayload.Type<LivePayload>(LIVE_RL)
     private val MESSAGE_TYPE = CustomPacketPayload.Type<MessagePayload>(MESSAGE_RL)
+    private val CREW_MARKS_TYPE = CustomPacketPayload.Type<CrewMarksPayload>(CREW_MARKS_RL)
+    private val CREW_MANIFEST_TYPE = CustomPacketPayload.Type<CrewManifestPayload>(CREW_MANIFEST_RL)
+    private val CREW_DETAIL_TYPE = CustomPacketPayload.Type<CrewDetailPayload>(CREW_DETAIL_RL)
+    private val CREW_ASK_TYPE = CustomPacketPayload.Type<CrewAskPayload>(CREW_ASK_RL)
+    private val CREW_RENAME_TYPE = CustomPacketPayload.Type<CrewRenamePayload>(CREW_RENAME_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ActionPayload::data) { ActionPayload(it) }
@@ -68,6 +87,16 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, LivePayload::data) { LivePayload(it) }
     private val MESSAGE_CODEC: StreamCodec<FriendlyByteBuf, MessagePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, MessagePayload::data) { MessagePayload(it) }
+    private val CREW_MARKS_CODEC: StreamCodec<FriendlyByteBuf, CrewMarksPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewMarksPayload::data) { CrewMarksPayload(it) }
+    private val CREW_MANIFEST_CODEC: StreamCodec<FriendlyByteBuf, CrewManifestPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewManifestPayload::data) { CrewManifestPayload(it) }
+    private val CREW_DETAIL_CODEC: StreamCodec<FriendlyByteBuf, CrewDetailPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDetailPayload::data) { CrewDetailPayload(it) }
+    private val CREW_ASK_CODEC: StreamCodec<FriendlyByteBuf, CrewAskPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewAskPayload::data) { CrewAskPayload(it) }
+    private val CREW_RENAME_CODEC: StreamCodec<FriendlyByteBuf, CrewRenamePayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewRenamePayload::data) { CrewRenamePayload(it) }
 
     class ActionPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = ACTION_TYPE
@@ -83,6 +112,31 @@ object PathNetworkingFabric {
 
     class MessagePayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = MESSAGE_TYPE
+    }
+
+    /** Entity ids of the crew to mark on this client's screen. An empty list puts the markers away. */
+    class CrewMarksPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_MARKS_TYPE
+    }
+
+    /** A ship's crew manifest: who is aboard, in which berth, and how many berths this captain holds. */
+    class CrewManifestPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_MANIFEST_TYPE
+    }
+
+    /** One crew member in full, trades included. Sent only when a player opens their card. */
+    class CrewDetailPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_DETAIL_TYPE
+    }
+
+    /** "Tell me about this one." */
+    class CrewAskPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_ASK_TYPE
+    }
+
+    /** "Call this one that." */
+    class CrewRenamePayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_RENAME_TYPE
     }
 
     // The hotkey actions a client can ask for. Ordinals are the wire format; append only.
@@ -113,6 +167,17 @@ object PathNetworkingFabric {
      * makes the pair a mode switch as well as a start.
      */
     const val ACTION_PLAY_REPLAY: Byte = 6
+
+    /**
+     * Sneak+C: sign on or pay off the villager under the crosshair, read the articles of the wheel under it,
+     * or -- aimed at neither -- mark the crew on the deck you are standing on.
+     *
+     * ONE action for three meanings rather than three, because the client cannot tell them apart: which the
+     * player meant is decided by what the SERVER's raycast finds, and the server is the only side allowed to
+     * answer that. Same reasoning as [ACTION_FOLLOW_SHIP], which also carries no target -- a client-supplied
+     * entity id would be a client choosing whose crew a villager joins.
+     */
+    const val ACTION_CREW: Byte = 7
 
     /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
     private const val NO_ROUTE = 0L
@@ -157,6 +222,42 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(ROUTES_TYPE, ROUTES_CODEC)
         PayloadTypeRegistry.playS2C().register(LIVE_TYPE, LIVE_CODEC)
         PayloadTypeRegistry.playS2C().register(MESSAGE_TYPE, MESSAGE_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_MARKS_TYPE, CREW_MARKS_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_MANIFEST_TYPE, CREW_MANIFEST_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_DETAIL_TYPE, CREW_DETAIL_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_ASK_TYPE, CREW_ASK_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_RENAME_TYPE, CREW_RENAME_CODEC)
+
+        // Both of these report whether the push went out, which is what lets ShipCrews fall back to the roster
+        // in chat rather than leaving a client the payload cannot reach with a key that does nothing.
+        CrewManifest.sender = { player, snapshot ->
+            if (ServerPlayNetworking.canSend(player, CREW_MANIFEST_TYPE)) {
+                ServerPlayNetworking.send(player, CrewManifestPayload(encodeManifest(snapshot)))
+                true
+            } else {
+                false
+            }
+        }
+
+        CrewManifest.detailSender = { player, detail ->
+            if (ServerPlayNetworking.canSend(player, CREW_DETAIL_TYPE)) {
+                ServerPlayNetworking.send(player, CrewDetailPayload(encodeDetail(detail, player.registryAccess())))
+                true
+            } else {
+                false
+            }
+        }
+
+        // Point :common's crew markers at the wire. Guarded on the client having declared the channel, like
+        // every other S2C send here -- Fabric treats a send on an undeclared channel as an error, not a no-op.
+        CrewMarkers.sender = { player, ids ->
+            if (ServerPlayNetworking.canSend(player, CREW_MARKS_TYPE)) {
+                val buf = FriendlyByteBuf(Unpooled.buffer())
+                buf.writeVarInt(ids.size)
+                for (id in ids) buf.writeVarInt(id)
+                ServerPlayNetworking.send(player, CrewMarksPayload(toArray(buf)))
+            }
+        }
 
         // Point `:common`'s feedback at the stacking HUD, but only for players whose client actually declared
         // the channel -- sending to one that didn't is an error, not a no-op. Anyone else keeps the action bar,
@@ -188,7 +289,36 @@ object PathNetworkingFabric {
                     ACTION_STOP -> ShipPaths.stop(level, player)
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
                     ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
+                    ACTION_CREW -> ShipCrews.gesture(level, player)
                 }
+            }
+        }
+
+        // The helm position rides both of these rather than the server keeping a per-player handle on an open
+        // manifest. That makes a stale or forged request simply a lookup that fails, and it means a player who
+        // logs out with the screen open leaves nothing behind to clean up.
+        ServerPlayNetworking.registerGlobalReceiver(CREW_ASK_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val villager = buf.readUUID()
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                CrewManifest.requestDetail(level, player, helm, villager)
+            }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(CREW_RENAME_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val villager = buf.readUUID()
+            // Bounded on the way IN as well as on the way out: the server sanitises and caps the string, but a
+            // buffer read is what a hostile client reaches first.
+            val name = buf.readUtf(CrewManifest.MAX_NAME_LENGTH * 4)
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                CrewManifest.requestRename(level, player, helm, villager, name)
             }
         }
     }
@@ -202,6 +332,27 @@ object PathNetworkingFabric {
         ClientPlayNetworking.registerGlobalReceiver(LIVE_TYPE) { payload, context ->
             val update = decodeLive(payload.data)
             context.client().execute { update.apply() }
+        }
+        // Markers are the only client state here keyed on entity ids, which are per-connection: carrying a set
+        // into the next world would draw plates over whatever happened to inherit those ids.
+        ClientPlayConnectionEvents.DISCONNECT.register { _, _ -> ClientCrewMarkers.clear() }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_MARKS_TYPE) { payload, context ->
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val ids = IntArray(buf.readVarInt()) { buf.readVarInt() }
+            context.client().execute { ClientCrewMarkers.replace(ids) }
+        }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_MANIFEST_TYPE) { payload, context ->
+            val snapshot = decodeManifest(payload.data)
+            context.client().execute { CrewManifestScreen.open(snapshot) }
+        }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_DETAIL_TYPE) { payload, context ->
+            // Decoded on the netty thread, so the registries come from the connection rather than from a client
+            // field that may be mid-swap.
+            val detail = decodeDetail(payload.data, context.client().connection!!.registryAccess())
+            context.client().execute { CrewManifestScreen.acceptDetail(detail) }
         }
         ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
@@ -219,6 +370,117 @@ object PathNetworkingFabric {
     fun sendAction(action: Byte) {
         ClientPlayNetworking.send(ActionPayload(byteArrayOf(action)))
     }
+
+    /** Client: ask for one crew member's card. Answered by a [CrewDetailPayload], or by silence. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewAsk(helm: Long, villager: UUID) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeUUID(villager)
+        ClientPlayNetworking.send(CrewAskPayload(toArray(buf)))
+    }
+
+    /** Client: rename one crew member. An empty name asks for the berth's default back. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRename(helm: Long, villager: UUID, name: String) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeUUID(villager)
+        buf.writeUtf(name.take(CrewManifest.MAX_NAME_LENGTH))
+        ClientPlayNetworking.send(CrewRenamePayload(toArray(buf)))
+    }
+
+    // region crew manifest codecs
+
+    private fun encodeManifest(snapshot: CrewManifest.Snapshot): ByteArray {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeUtf(snapshot.ship)
+        buf.writeLong(snapshot.helm)
+        buf.writeVarInt(snapshot.berths)
+        buf.writeVarInt(snapshot.maxBerths)
+        buf.writeVarInt(snapshot.rows.size)
+        for (row in snapshot.rows) {
+            buf.writeVarInt(row.slot)
+            buf.writeUUID(row.villager)
+            buf.writeVarInt(row.entityId)
+            buf.writeUtf(row.profession)
+            buf.writeUtf(row.villagerType)
+            buf.writeVarInt(row.level)
+            buf.writeUtf(row.name)
+        }
+        return toArray(buf)
+    }
+
+    @Environment(EnvType.CLIENT)
+    private fun decodeManifest(data: ByteArray): CrewManifest.Snapshot {
+        val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
+        val ship = buf.readUtf()
+        val helm = buf.readLong()
+        val berths = buf.readVarInt()
+        val maxBerths = buf.readVarInt()
+        val rows = List(buf.readVarInt()) {
+            CrewManifest.Row(
+                slot = buf.readVarInt(),
+                villager = buf.readUUID(),
+                entityId = buf.readVarInt(),
+                profession = buf.readUtf(),
+                villagerType = buf.readUtf(),
+                level = buf.readVarInt(),
+                name = buf.readUtf()
+            )
+        }
+        return CrewManifest.Snapshot(ship, helm, berths, maxBerths, rows)
+    }
+
+    /**
+     * The card, including whole trade stacks.
+     *
+     * This is the one payload here that needs a REGISTRY-aware buffer: `ItemStack.OPTIONAL_STREAM_CODEC` resolves
+     * items and data components against the connection's registries, and enchantments are data components. The
+     * byte-array payload style does not hand one out, so we build it -- a `RegistryFriendlyByteBuf` is a plain
+     * buffer plus a `RegistryAccess`, and both ends already have theirs.
+     */
+    private fun encodeDetail(detail: CrewManifest.Detail, registries: RegistryAccess): ByteArray {
+        val buf = RegistryFriendlyByteBuf(Unpooled.buffer(), registries)
+        buf.writeUUID(detail.villager)
+        buf.writeUtf(detail.name)
+        buf.writeUtf(detail.profession)
+        buf.writeVarInt(detail.level)
+        buf.writeVarInt(detail.xp)
+        buf.writeVarInt(detail.offers.size)
+        for (offer in detail.offers) {
+            ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.costA)
+            ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.costB)
+            ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.result)
+            buf.writeVarInt(offer.uses)
+            buf.writeVarInt(offer.maxUses)
+            buf.writeBoolean(offer.outOfStock)
+        }
+        return toArray(buf)
+    }
+
+    @Environment(EnvType.CLIENT)
+    private fun decodeDetail(data: ByteArray, registries: RegistryAccess): CrewManifest.Detail {
+        val buf = RegistryFriendlyByteBuf(Unpooled.wrappedBuffer(data), registries)
+        val villager = buf.readUUID()
+        val name = buf.readUtf()
+        val profession = buf.readUtf()
+        val level = buf.readVarInt()
+        val xp = buf.readVarInt()
+        val offers = List(buf.readVarInt()) {
+            CrewManifest.Offer(
+                costA = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
+                costB = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
+                result = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
+                uses = buf.readVarInt(),
+                maxUses = buf.readVarInt(),
+                outOfStock = buf.readBoolean()
+            )
+        }
+        return CrewManifest.Detail(villager, name, profession, level, xp, offers)
+    }
+
+    // endregion
 
     // region server broadcast
 

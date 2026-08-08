@@ -130,6 +130,14 @@ object EurekaConfig {
         var pathLineWidth = 2.0
 
         @JsonSchema(
+            description = "How far away, in blocks, crew nameplates stay drawn. Nameplates are toggled with " +
+                "SHIFT+C while standing on a ship and show only YOUR crew on THAT ship, so this is purely " +
+                "about legibility: a full 32-strong crew seen from across the water is a wall of text. " +
+                "Vanilla stops drawing its own name tags at 64. Default 48.0."
+        )
+        var crewNameplateRange = 48.0
+
+        @JsonSchema(
             description = "Seconds each path message stays on screen before fading. Messages stack rather " +
                 "than overwriting one another, so a burst of them is all readable. Default 6.0."
         )
@@ -923,6 +931,71 @@ object EurekaConfig {
                 "would flip between port and starboard every tick. Raise it to make sides stickier. Default 0.5."
         )
         var followSideFlipMargin = 0.5
+        // endregion
+
+        // region Crew (Sneak+C -- see the org.valkyrienskies.eureka.crew package)
+        // A ship helm is a villager workstation like a barrel or a fletching table, except that it employs more
+        // than one villager: a ship needs a crew, not a shopkeeper. Berths are bought with Hearts of the Sea and
+        // belong to the PLAYER, but are counted per ship -- so one captain's eight can crew two vessels at four
+        // apiece. Nothing here is per ship category, so all of it lives on the base `server` block.
+
+        @JsonSchema(
+            description = "How many villagers one ship helm can employ at once. This is the point-of-interest " +
+                "ticket count, and it is the one thing that makes a helm unlike every vanilla job site: a barrel " +
+                "employs one villager, a helm employs a crew. Read ONCE at startup and baked into each helm's POI " +
+                "record the first time that block is seen, so lowering it does NOT evict villagers from helms " +
+                "that already exist. Beware the interaction with villages: an unemployed villager will notice a " +
+                "job site 48 blocks away, so a helm docked near one can pull this many villagers off their own " +
+                "workstations. Default 32."
+        )
+        var crewmanHelmPoiTickets = 32
+
+        @JsonSchema(
+            description = "How close, in blocks, a villager must get to a helm for it to count as having reached " +
+                "its workstation. 1 is what every vanilla job site uses and is almost certainly what you want; " +
+                "raising it mostly just lets crewmen work from further down the deck. Default 1."
+        )
+        var crewmanHelmPoiRange = 1
+
+        @JsonSchema(
+            description = "How many crew a player can command on any ONE ship before offering a single Heart of " +
+                "the Sea to a helm. The limit is per ship, not a global budget: with eight berths you can crew " +
+                "one hull to six and another to eight. Raising this applies retroactively to anyone who has " +
+                "never spent a heart. Default 4."
+        )
+        var crewSlotsBase = 4
+
+        @JsonSchema(
+            description = "The most berths any player can ever hold. Each Heart of the Sea offered to a helm buys " +
+                "exactly one, so the default pair means a full crew costs 28 hearts. Default 32."
+        )
+        var crewSlotsMax = 32
+
+        @JsonSchema(
+            description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
+                "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
+                "weights are the whole distribution. At the defaults (100/12/5/1) plain comes up about half the " +
+                "time and pink about one time in two hundred, which is roughly a pink sheep. Default 100."
+        )
+        var balloonTradeWeightPlain = 100
+
+        @JsonSchema(
+            description = "Crewman balloon trade: weight of EACH of white, light gray, gray, black and brown. " +
+                "Default 12."
+        )
+        var balloonTradeWeightNatural = 12
+
+        @JsonSchema(
+            description = "Crewman balloon trade: weight of EACH of red, orange, yellow, lime, green, light blue, " +
+                "cyan and blue. Default 5."
+        )
+        var balloonTradeWeightDyed = 5
+
+        @JsonSchema(
+            description = "Crewman balloon trade: weight of EACH of purple, magenta and pink -- the rare three. " +
+                "Default 1."
+        )
+        var balloonTradeWeightRare = 1
         // endregion
 
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and

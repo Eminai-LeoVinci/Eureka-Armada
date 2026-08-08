@@ -290,6 +290,22 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     var helmSeatDir: Direction? = null
     // endregion
 
+    /**
+     * Where this ship keeps its articles: the SHIPYARD block position of the crew-station helm, packed with
+     * `BlockPos.asLong()`, or [NO_CREW_STATION].
+     *
+     * A ship may carry any number of helms and all of them steer; exactly one holds the crew, so bolting on
+     * more wheels can never buy more berths. Claimed by the helm that assembles the ship, which is the "first
+     * helm wins" rule stated plainly.
+     *
+     * A position rather than a search, because the alternative is walking a ship's block entities every time
+     * anyone asks who is aboard -- and the roster itself lives on the block entity at this address, so a helm
+     * that has been mined resolves to nothing and the ship correctly has no crew station until one is claimed
+     * again.
+     */
+    @JsonProperty("crewHelm")
+    var crewStationPos: Long = NO_CREW_STATION
+
     @JsonProperty("cruiseSpeed")
     var oldSpeed = 0.0
 
@@ -1868,6 +1884,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     }
 
     companion object {
+        /**
+         * "This ship has no crew station."
+         *
+         * `BlockPos.asLong()` cannot produce this value -- it packs Y into 12 bits, so the sign bit of the
+         * result is never set on its own like this -- which is what makes it safe as a sentinel rather than a
+         * position somebody could theoretically stand at.
+         */
+        const val NO_CREW_STATION: Long = Long.MIN_VALUE
+
         fun getOrCreate(ship: LoadedServerShip): EurekaShipControl {
             return ship.getAttachment<EurekaShipControl>()
                 ?: EurekaShipControl().also { ship.setAttachment(it) }

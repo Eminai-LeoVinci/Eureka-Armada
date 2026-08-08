@@ -56,6 +56,10 @@ public class EurekaModFabric implements ModInitializer {
 
         EurekaMod.init();
 
+        // The Crewman's job site and its trades. Must follow EurekaMod.init(): the POI walks each helm block's
+        // state definition, and its ticket count is read from the config that init() loads.
+        CrewRegistrationsFabric.register();
+
         // "/vs get-ship-weight <ship> <floater|balloon>" + "/vs eureka-assembler <floater|balloon> <bool>"
         // -- SERVER commands; Brigadier merges these "vs" literals into VS2's root, and VS2's
         // vs_command_passthrough mixin lets the client send them.
