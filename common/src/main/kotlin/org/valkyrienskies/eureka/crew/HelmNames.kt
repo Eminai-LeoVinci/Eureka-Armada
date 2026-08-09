@@ -9,6 +9,7 @@ import net.minecraft.util.StringUtil
 import net.minecraft.world.level.block.state.BlockState
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.mod.common.vsCore
 
 /**
@@ -63,8 +64,10 @@ object HelmNames {
      * punctuation stays significant, because a captain who typed one thing and meant it should not have their
      * crew handed to someone who typed something else.
      */
-    fun keyOf(name: Component): String =
-        name.string.trim().lowercase().replace(WHITESPACE_RUN, " ")
+    fun keyOf(name: Component): String = keyOf(name.string)
+
+    /** The same normalisation for a name already in string form -- one already read back out of the ledger. */
+    fun keyOf(name: String): String = name.trim().lowercase().replace(WHITESPACE_RUN, " ")
 
     /** Whether two wheels carry the same name for crew purposes. Null is never equal to anything, blank included. */
     fun sameName(a: Component?, b: Component?): Boolean {
@@ -124,7 +127,41 @@ object HelmNames {
         if (!withinReach(level, player, helm)) return false
 
         val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
-        helm.setHelmName(if (cleaned.isEmpty()) null else Component.literal(cleaned))
+        val ledger = CrewLedger.get(level.server)
+        val previous = helm.helmName
+
+        // A wheel carrying a roster from before the ledger existed hands it over the moment it has a name to
+        // file it under. Done first, so a rename immediately after naming moves the adopted crew too.
+        ledger.adoptLegacy(helm)
+
+        if (cleaned.isEmpty()) {
+            // Clearing a name would leave any crew filed under it unreachable -- there would be no key to look
+            // them up by, and no way to type the old name back except from memory. Refuse while anyone is
+            // signed on; paying the crew off is the deliberate way to retire a name.
+            if (previous != null && ledger.anyUnder(keyOf(previous), variantOf(helm.blockState))) {
+                PathMessages.send(
+                    player,
+                    "${previous.string} still has crew signed on. Pay them off before clearing the name.",
+                    PathMessages.Kind.ERROR
+                )
+                return false
+            }
+            helm.setHelmName(null)
+            return true
+        }
+
+        // Move the crew with the name. Refused rather than merged when the captain already has a crew of the
+        // new name on this wood -- see CrewLedger.renameAll.
+        if (previous != null && !ledger.renameAll(previous.string, cleaned, variantOf(helm.blockState))) {
+            PathMessages.send(
+                player,
+                "You already have a crew called $cleaned on this wood. Pick another name.",
+                PathMessages.Kind.ERROR
+            )
+            return false
+        }
+
+        helm.setHelmName(Component.literal(cleaned))
         return true
     }
 

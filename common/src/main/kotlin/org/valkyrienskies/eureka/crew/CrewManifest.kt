@@ -111,17 +111,33 @@ object CrewManifest {
 
     // region building it
 
-    /** Everything [player] can see about the crew of the ship whose articles [station] keeps. */
+    /**
+     * Everything [player] can see about the crew filed under [station]'s name.
+     *
+     * Rows come from the LEDGER, not from who happens to be standing on the deck. That is the whole point of
+     * the ledger: a crew member left ashore is still on the articles and still holds their berth, and a list
+     * that quietly dropped them would disagree with the number in its own corner the moment anybody wandered
+     * off.
+     *
+     * Live villagers are matched in by uuid where they can be found, which is what fills in profession, level
+     * and the entity the head icon is drawn from. A berth with nobody to match falls back to the name and slot
+     * the ledger carries -- enough to list them honestly as crew who are not here.
+     */
     fun build(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity): Snapshot {
         val ship = CrewStations.shipOf(level, station)
-        val rows = if (ship == null) emptyList() else {
-            ShipCrew.villagersAboard(level, ship)
-                .filter { station.crew.ownerOf(it.uuid) == player.uuid }
-                .map { rowFor(station, it) }
-                .sortedBy { it.slot }
+        val key = crewKey(player, station)
+        val berths = if (key == null) emptyList() else CrewLedger.get(level.server).crew(key)
+
+        val present = if (ship == null) emptyMap() else {
+            ShipCrew.villagersAboard(level, ship).associateBy { it.uuid }
         }
+
+        val rows = berths
+            .map { berth -> rowFor(berth, present[berth.villager]) }
+            .sortedBy { it.slot }
+
         return Snapshot(
-            ship = if (ship == null) "" else ShipCrew.name(ship),
+            ship = station.helmName?.string ?: (if (ship == null) "" else ShipCrew.name(ship)),
             helm = station.blockPos.asLong(),
             berths = CrewData.slots(player),
             maxBerths = EurekaConfig.SERVER.crewSlotsMax,
@@ -129,10 +145,30 @@ object CrewManifest {
         )
     }
 
-    private fun rowFor(station: ShipHelmBlockEntity, villager: Villager): Row {
+    /** The ledger key this wheel makes for this captain, or null while the wheel is unnamed. */
+    fun crewKey(player: ServerPlayer, station: ShipHelmBlockEntity): CrewLedger.Key? {
+        val name = station.helmName ?: return null
+        return CrewLedger.Key(player.uuid, HelmNames.keyOf(name), HelmNames.variantOf(station.blockState))
+    }
+
+    private fun rowFor(berth: CrewLedger.Berth, villager: Villager?): Row {
+        // NO_ENTITY rather than a real id: the screen draws its head icon by rendering the entity, and asks
+        // the client for it by id. There is nothing to render for somebody who is not here, and the screen's
+        // own skin-composite fallback covers it.
+        if (villager == null) {
+            return Row(
+                slot = berth.slot,
+                villager = berth.villager,
+                entityId = NO_ENTITY,
+                profession = NO_PROFESSION,
+                villagerType = DEFAULT_TYPE,
+                level = 0,
+                name = berth.name
+            )
+        }
         val data = villager.villagerData
         return Row(
-            slot = station.crew.slotOf(villager.uuid),
+            slot = berth.slot,
             villager = villager.uuid,
             entityId = villager.id,
             profession = keyOf(data.profession(), NO_PROFESSION),
@@ -187,15 +223,20 @@ object CrewManifest {
     fun rename(
         level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID, raw: String
     ): Boolean {
+        val ledger = CrewLedger.get(level.server)
         val crew = crewMember(level, player, station, villager) ?: return false
         val clean = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
 
         if (clean.isEmpty()) {
             crew.setCustomName(null)
-            CrewNames.applyDefault(crew, station.crew.slotOf(villager))
+            CrewNames.applyDefault(crew, ledger.slotOf(villager))
         } else {
             crew.setCustomName(Component.literal(clean))
         }
+        // The ledger keeps its own copy so the manifest can still name them once they are ashore, so both have
+        // to move together -- read back off the entity rather than from `clean`, which is blank in the reset
+        // case and would file them under no name at all.
+        ledger.renameMember(villager, CrewNames.displayName(crew))
         // SynchedEntityData carries DATA_CUSTOM_NAME to every tracking client on its own, so there is nothing
         // to push here beyond the manifest the caller refreshes.
         return true
@@ -255,11 +296,18 @@ object CrewManifest {
         return station
     }
 
-    /** [villager] if they are on [station]'s articles under [player] AND standing on the ship. */
+    /**
+     * [villager] if they are on the crew [station] names for [player] AND standing on the ship.
+     *
+     * Membership is the ledger's answer; being aboard is a second, separate condition, and both are required
+     * because everything this gates -- reading trades, renaming -- needs the live entity. A crew member who is
+     * ashore is legitimately on the articles and legitimately not answerable here.
+     */
     private fun crewMember(
         level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID
     ): Villager? {
-        if (station.crew.ownerOf(villager) != player.uuid) return null
+        val key = crewKey(player, station) ?: return null
+        if (CrewLedger.get(level.server).crewOf(villager) != key) return null
         val ship = CrewStations.shipOf(level, station) ?: return null
         return ShipCrew.villagersAboard(level, ship).firstOrNull { it.uuid == villager }
     }
@@ -268,6 +316,14 @@ object CrewManifest {
         holder.unwrapKey().map { it.identifier().toString() }.orElse(fallback)
 
     // endregion
+
+    /**
+     * "There is no entity behind this row."
+     *
+     * Entity ids are non-negative, so this cannot collide with a real one. It means the crew member is on the
+     * articles but not loaded near the wheel -- ashore, or in a chunk nobody is standing in.
+     */
+    const val NO_ENTITY = -1
 
     const val NO_PROFESSION = "minecraft:none"
 

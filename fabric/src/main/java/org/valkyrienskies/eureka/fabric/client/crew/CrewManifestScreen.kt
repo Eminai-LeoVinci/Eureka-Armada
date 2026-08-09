@@ -4,6 +4,7 @@ import net.fabricmc.api.EnvType
 import net.fabricmc.api.Environment
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
+import net.minecraft.core.BlockPos
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.inventory.InventoryScreen
@@ -57,10 +58,31 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var nameValue = ""
     private var nameBox: EditBox? = null
 
+    /** The crew's own name, edited in the header. Same keep-across-rebuild reasoning as [nameValue]. */
+    private var crewNameValue = ""
+    private var crewNameBox: EditBox? = null
+    private var renamingCrew = false
+
     override fun init() {
         left = (width - PANEL_W) / 2
         top = (height - PANEL_H) / 2
         clampScroll()
+
+        // The crew's name is edited in place: clicking the heading swaps it for a box over the same pixels,
+        // which is the only spot in this panel wide enough for a name and the one a player would aim at.
+        // Built only while actually renaming, for the same reason the card's widgets are -- see below.
+        if (openCard == null && renamingCrew) {
+            crewNameBox = addRenderableWidget(
+                EditBox(font, left + 6, top + 3, PANEL_W - 12 - BERTHS_GUTTER, NAME_BOX_H, RENAME_TEXT)
+            ).also {
+                it.setMaxLength(CrewManifest.MAX_NAME_LENGTH)
+                it.value = crewNameValue
+                it.setResponder { typed -> crewNameValue = typed }
+                it.isFocused = true
+                this.focused = it
+            }
+            return
+        }
 
         // Widgets exist only while a card is open. Building them unconditionally and hiding them would leave
         // an invisible EditBox eating clicks and keystrokes over the list.
@@ -111,6 +133,32 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         rebuildWidgets()
     }
 
+    /** Start editing the crew's name, seeded with what it is now. */
+    private fun beginCrewRename() {
+        crewNameValue = snapshot.ship
+        renamingCrew = true
+        rebuildWidgets()
+    }
+
+    /**
+     * Send the crew's new name, or abandon the edit.
+     *
+     * Goes through the same `helm_name` path the anvil and the block share, so there is one server-side place
+     * that decides what a wheel is called -- including the refusals for clearing a crewed name and for
+     * colliding with a crew you already have.
+     */
+    private fun commitCrewRename(send: Boolean) {
+        if (send) {
+            val typed = crewNameValue.trim()
+            if (typed.isNotEmpty() && typed != snapshot.ship) {
+                PathNetworkingFabric.sendHelmName(BlockPos.of(snapshot.helm), typed)
+            }
+        }
+        renamingCrew = false
+        crewNameBox = null
+        rebuildWidgets()
+    }
+
     private fun commitRename() {
         val villager = openCard ?: return
         PathNetworkingFabric.sendCrewRename(snapshot.helm, villager, nameValue)
@@ -147,6 +195,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         val mx = mouseButtonEvent.x.toInt()
         val my = mouseButtonEvent.y.toInt()
+
+        // Clicking anywhere off the box while renaming commits it, the way a name field is expected to behave.
+        if (renamingCrew) {
+            commitCrewRename(send = true)
+            return true
+        }
+
+        // The heading is the crew's name, and clicking it edits it. Bounded to the left of the berth counter
+        // so aiming at the count never starts a rename.
+        if (mx >= left && mx <= left + PANEL_W - BERTHS_GUTTER && my >= top + 2 && my < top + LIST_TOP - 4) {
+            beginCrewRename()
+            return true
+        }
+
         if (mx < left || mx > left + PANEL_W) return false
         if (my < top + LIST_TOP || my >= top + LIST_BOTTOM) return false
 
@@ -170,11 +232,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 commitRename()
                 return true
             }
+            if (renamingCrew) {
+                commitCrewRename(send = true)
+                return true
+            }
         }
-        // Escape steps back out of a card before it leaves the manifest.
-        if (keyEvent.key() == GLFW.GLFW_KEY_ESCAPE && openCard != null) {
-            closeCard()
-            return true
+        // Escape steps back out of whatever is innermost: a rename, then a card, then the manifest.
+        if (keyEvent.key() == GLFW.GLFW_KEY_ESCAPE) {
+            if (renamingCrew) {
+                commitCrewRename(send = false)
+                return true
+            }
+            if (openCard != null) {
+                closeCard()
+                return true
+            }
         }
         return super.keyPressed(keyEvent)
     }
@@ -200,9 +272,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun drawHeader(guiGraphics: GuiGraphics) {
-        val heading = if (snapshot.ship.isEmpty()) TITLE
-        else Component.literal("${TITLE.string} — ${snapshot.ship}")
-        guiGraphics.drawString(font, heading, left + 8, top + 6, TEXT, false)
+        // While renaming, the box occupies these pixels -- drawing the heading underneath would show through.
+        if (!renamingCrew) {
+            val heading = if (snapshot.ship.isEmpty()) TITLE else Component.literal(snapshot.ship)
+            guiGraphics.drawString(font, heading, left + 8, top + 6, TEXT, false)
+        }
 
         val berths = Component.translatable(
             "gui.vs_eureka.crew_berths", snapshot.rows.size, snapshot.berths
@@ -531,6 +605,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val CARD_H = 178
         private const val CARD_PAD = 8
         private const val NAME_BOX_H = 14
+
+        /**
+         * Pixels reserved at the right of the header for the berth counter.
+         *
+         * Both the name box and the click target that opens it stop short of this, so "3/8 berths" stays
+         * readable while renaming and can never be mistaken for part of the name.
+         */
+        private const val BERTHS_GUTTER = 76
         private const val RENAME_BTN_W = 44
         private const val BACK_BTN_W = 44
         private const val BACK_BTN_H = 14

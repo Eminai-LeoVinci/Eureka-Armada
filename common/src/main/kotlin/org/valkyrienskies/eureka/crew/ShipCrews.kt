@@ -82,27 +82,35 @@ object ShipCrews {
             return
         }
 
-        val existing = station.crew.ownerOf(villager.uuid)
+        val ledger = CrewLedger.get(level.server)
+        // A wheel that still carries a pre-ledger roster hands it over before anything is read off the ledger,
+        // so crew signed on under the old scheme are already present when the checks below run.
+        ledger.adoptLegacy(station)
+        val existing = ledger.crewOf(villager.uuid)
 
-        if (existing == player.uuid) {
+        // Discharging works from ANY wheel, not just the one they signed at. Their own wheel may be at the
+        // bottom of the sea, and a villager who could never be released would be a villager nobody could ever
+        // use again -- the one way this rule could strand something permanently.
+        if (existing != null && existing.captain == player.uuid) {
             // Both of these have to happen before the entry is struck out: the berth is what says which
             // default name is being handed back, and the name is what the message calls them by.
             val paidOff = CrewNames.displayName(villager)
-            CrewNames.clearDefault(villager, station.crew.slotOf(villager.uuid))
-            station.crew.payOff(villager.uuid)
-            station.setChanged()
-            // Counted after the entry is struck out, so the number quoted is the one they now have.
+            CrewNames.clearDefault(villager, ledger.slotOf(villager.uuid))
+            ledger.payOff(villager.uuid)
             PathMessages.send(
                 player,
-                "Paid off $paidOff, a ${professionName(villager)}. Crew aboard: " +
-                    "${crewOf(level, ship, station, player.uuid).size}/${CrewData.slots(player)}.",
+                "Paid off $paidOff, a ${professionName(villager)}, from ${existing.name}.",
                 PathMessages.Kind.GOOD
             )
             return
         }
 
         if (existing != null) {
-            PathMessages.send(player, "That one already sails with another captain.", PathMessages.Kind.ERROR)
+            PathMessages.send(
+                player,
+                "That one already sails with ${existing.name}, under another captain.",
+                PathMessages.Kind.ERROR
+            )
             return
         }
 
@@ -111,12 +119,22 @@ object ShipCrews {
             return
         }
 
+        // A crew cannot be filed without a name, so a blank wheel names itself here rather than refusing. This
+        // is the first moment a name is actually needed -- naming every wheel at placement would burn a name on
+        // every throwaway test helm, and would give a three-wheeled ship three separate crews.
+        val crewName = station.helmName ?: nameTheCrew(level, player, station)
+        val key = CrewLedger.Key(
+            player.uuid,
+            HelmNames.keyOf(crewName),
+            HelmNames.variantOf(station.blockState)
+        )
+
         val slots = CrewData.slots(player)
-        val aboard = crewOf(level, ship, station, player.uuid).size
-        if (aboard >= slots) {
+        val signed = ledger.crew(key).size
+        if (signed >= slots) {
             PathMessages.send(
                 player,
-                "No berth for them -- ${ShipCrew.name(ship)} is already carrying $aboard of your $slots crew.",
+                "No berth for them -- ${crewName.string} already musters $signed of your $slots.",
                 PathMessages.Kind.ERROR
             )
             return
@@ -124,16 +142,42 @@ object ShipCrews {
 
         // The berth number is an identity, not a reservation: it names them and fixes their row in the
         // manifest, and it is deliberately NOT what the limit above is counted from.
-        val berth = station.crew.freeSlot(player.uuid, EurekaConfig.SERVER.crewSlotsMax)
-        station.crew.sign(villager.uuid, player.uuid, berth)
-        station.setChanged()
+        val berth = ledger.freeSlot(key, EurekaConfig.SERVER.crewSlotsMax)
         CrewNames.applyDefault(villager, berth)
+        ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager))
         PathMessages.send(
             player,
-            "Signed on ${CrewNames.displayName(villager)}, a ${professionName(villager)}. " +
-                "Crew aboard: ${aboard + 1}/$slots.",
+            "Signed on ${CrewNames.displayName(villager)}, a ${professionName(villager)}, " +
+                "to ${crewName.string}. Crew: ${signed + 1}/$slots.",
             PathMessages.Kind.GOOD
         )
+    }
+
+    /**
+     * Give an unnamed wheel a crew name, and say so.
+     *
+     * Announced rather than done quietly, because the name that appears here is the one the captain will have
+     * to re-type to get this crew back if the wheel is ever destroyed. A name nobody was told about is a crew
+     * nobody can recover.
+     */
+    private fun nameTheCrew(
+        level: ServerLevel,
+        player: ServerPlayer,
+        station: ShipHelmBlockEntity
+    ): Component {
+        val ledger = CrewLedger.get(level.server)
+        val variant = HelmNames.variantOf(station.blockState)
+        val generated = CrewNameGenerator.generate(level.random) { candidate ->
+            ledger.exists(player.uuid, candidate, variant)
+        }
+        val name = Component.literal(generated)
+        station.setHelmName(name)
+        PathMessages.send(
+            player,
+            "This wheel had no crew, so they are now $generated. Rename them from the crew menu or an anvil.",
+            PathMessages.Kind.WARN
+        )
+        return name
     }
 
     // endregion
@@ -198,7 +242,7 @@ object ShipCrews {
         val slots = CrewData.slots(player)
         // One query answers both questions -- who is signed on, and who is merely standing on the deck.
         val villagers = ShipCrew.villagersAboard(level, ship)
-        val crew = villagers.filter { station.crew.ownerOf(it.uuid) == player.uuid }
+        val crew = crewOf(level, ship, station, player.uuid)
         val free = (slots - crew.size).coerceAtLeast(0)
 
         // The detail goes to CHAT, not the stacking HUD: PathHud holds six entries and drops the oldest, so a
@@ -298,14 +342,23 @@ object ShipCrews {
 
     // region lookups
 
-    /** [owner]'s crew currently aboard [ship] -- the list the berth limit is tested against, and the one marked. */
+    /**
+     * [owner]'s crew currently aboard [ship] -- the ones there is something to mark or count on this deck.
+     *
+     * Membership is the ledger's, being aboard is the world's, and this is the intersection. An unnamed wheel
+     * names no crew at all, so it has nobody: there is no key to look them up under.
+     */
     private fun crewOf(
         level: ServerLevel,
         ship: LoadedServerShip,
         station: ShipHelmBlockEntity,
         owner: UUID
-    ): List<Villager> =
-        ShipCrew.villagersAboard(level, ship).filter { station.crew.ownerOf(it.uuid) == owner }
+    ): List<Villager> {
+        val name = station.helmName ?: return emptyList()
+        val key = CrewLedger.Key(owner, HelmNames.keyOf(name), HelmNames.variantOf(station.blockState))
+        val ledger = CrewLedger.get(level.server)
+        return ShipCrew.villagersAboard(level, ship).filter { ledger.crewOf(it.uuid) == key }
+    }
 
     /**
      * The villager under the crosshair, or null.
