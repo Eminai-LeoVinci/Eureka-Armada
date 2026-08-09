@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
+import net.minecraft.core.BlockPos
 import net.minecraft.core.RegistryAccess
 import net.minecraft.network.FriendlyByteBuf
 import net.minecraft.network.RegistryFriendlyByteBuf
@@ -22,6 +23,7 @@ import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
+import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.crew.ShipCrews
 import org.valkyrienskies.eureka.fabric.client.ClientCrewMarkers
 import org.valkyrienskies.eureka.fabric.client.PathHud
@@ -68,6 +70,8 @@ object PathNetworkingFabric {
     private val CREW_DETAIL_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail")
     private val CREW_ASK_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail_ask")
     private val CREW_RENAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_rename")
+    private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
+    private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
     private val ROUTES_TYPE = CustomPacketPayload.Type<RoutesPayload>(ROUTES_RL)
@@ -78,6 +82,8 @@ object PathNetworkingFabric {
     private val CREW_DETAIL_TYPE = CustomPacketPayload.Type<CrewDetailPayload>(CREW_DETAIL_RL)
     private val CREW_ASK_TYPE = CustomPacketPayload.Type<CrewAskPayload>(CREW_ASK_RL)
     private val CREW_RENAME_TYPE = CustomPacketPayload.Type<CrewRenamePayload>(CREW_RENAME_RL)
+    private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
+    private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ActionPayload::data) { ActionPayload(it) }
@@ -97,6 +103,10 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewAskPayload::data) { CrewAskPayload(it) }
     private val CREW_RENAME_CODEC: StreamCodec<FriendlyByteBuf, CrewRenamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewRenamePayload::data) { CrewRenamePayload(it) }
+    private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
+    private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ShipNamePayload::data) { ShipNamePayload(it) }
 
     class ActionPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = ACTION_TYPE
@@ -137,6 +147,22 @@ object PathNetworkingFabric {
     /** "Call this one that." */
     class CrewRenamePayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_RENAME_TYPE
+    }
+
+    /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
+    class HelmNamePayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = HELM_NAME_TYPE
+    }
+
+    /**
+     * "Call this SHIP that." The helm menu's Rename button, off `/vs rename` and onto a payload.
+     *
+     * Carries the wheel's position rather than a ship id: the position is what the menu already knows, and it
+     * is what the server can check a player is standing next to. A ship id would be a number a client could
+     * make up.
+     */
+    class ShipNamePayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = SHIP_NAME_TYPE
     }
 
     // The hotkey actions a client can ask for. Ordinals are the wire format; append only.
@@ -227,6 +253,8 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(CREW_DETAIL_TYPE, CREW_DETAIL_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_ASK_TYPE, CREW_ASK_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_RENAME_TYPE, CREW_RENAME_CODEC)
+        PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
+        PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
         // Both of these report whether the push went out, which is what lets ShipCrews fall back to the roster
         // in chat rather than leaving a client the payload cannot reach with a key that does nothing.
@@ -321,10 +349,40 @@ object PathNetworkingFabric {
                 CrewManifest.requestRename(level, player, helm, villager, name)
             }
         }
+
+        ServerPlayNetworking.registerGlobalReceiver(HELM_NAME_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val pos = buf.readBlockPos()
+            // Read bound as well as sanitised: the server trims and caps the string, but the buffer read is
+            // what a hostile client reaches first. x4 leaves room for multi-byte characters in the cap.
+            val name = buf.readUtf(HelmNames.MAX_NAME_LENGTH * 4)
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                HelmNames.rename(level, player, pos, name)
+            }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(SHIP_NAME_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val pos = buf.readBlockPos()
+            val name = buf.readUtf(HelmNames.MAX_NAME_LENGTH * 4)
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                HelmNames.renameShip(level, player, pos, name)
+            }
+        }
     }
 
     @Environment(EnvType.CLIENT)
     fun registerClient() {
+        // The helm menu lives in :common and cannot reach this package, so it names a wheel through this seam.
+        // Installed here rather than at the screen, so a screen opened before the client is ready still finds
+        // a live sender rather than the no-op default.
+        HelmNames.clientSender = { pos, name -> sendHelmName(pos, name) }
+        HelmNames.clientShipSender = { pos, name -> sendShipName(pos, name) }
+
         ClientPlayNetworking.registerGlobalReceiver(ROUTES_TYPE) { payload, context ->
             val routes = decodeRoutes(payload.data)
             context.client().execute { ClientPathState.replaceRoutes(routes) }
@@ -388,6 +446,24 @@ object PathNetworkingFabric {
         buf.writeUUID(villager)
         buf.writeUtf(name.take(CrewManifest.MAX_NAME_LENGTH))
         ClientPlayNetworking.send(CrewRenamePayload(toArray(buf)))
+    }
+
+    /** Client: name the wheel at [pos]. An empty name clears it back to blank. */
+    @Environment(EnvType.CLIENT)
+    fun sendHelmName(pos: BlockPos, name: String) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeBlockPos(pos)
+        buf.writeUtf(name.take(HelmNames.MAX_NAME_LENGTH))
+        ClientPlayNetworking.send(HelmNamePayload(toArray(buf)))
+    }
+
+    /** Client: name the SHIP that the wheel at [pos] belongs to. */
+    @Environment(EnvType.CLIENT)
+    fun sendShipName(pos: BlockPos, name: String) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeBlockPos(pos)
+        buf.writeUtf(name.take(HelmNames.MAX_NAME_LENGTH))
+        ClientPlayNetworking.send(ShipNamePayload(toArray(buf)))
     }
 
     // region crew manifest codecs

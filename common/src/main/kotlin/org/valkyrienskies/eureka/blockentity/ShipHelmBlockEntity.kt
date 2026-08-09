@@ -4,15 +4,25 @@ import net.minecraft.commands.arguments.EntityAnchorArgument
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.core.Direction.Axis
+import net.minecraft.core.HolderLookup
+import net.minecraft.core.component.DataComponentGetter
+import net.minecraft.core.component.DataComponentMap
+import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
+import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.ComponentSerialization
+import net.minecraft.network.protocol.Packet
+import net.minecraft.network.protocol.game.ClientGamePacketListener
+import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.tags.FluidTags
 import net.minecraft.tags.TagKey
 import net.minecraft.world.MenuProvider
+import net.minecraft.world.Nameable
 import net.minecraft.world.entity.EntitySpawnReason
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
@@ -112,7 +122,7 @@ private val SHORE_RAYS = arrayOf(
 )
 
 class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
-    BlockEntity(EurekaBlockEntities.SHIP_HELM.get(), pos, state), MenuProvider {
+    BlockEntity(EurekaBlockEntities.SHIP_HELM.get(), pos, state), MenuProvider, Nameable {
 
     private val ship: LoadedServerShip? get() = (level as ServerLevel).getLoadedShipManagingPos(this.blockPos)
     private val control: EurekaShipControl? get() = ship?.getAttachment(EurekaShipControl::class.java)
@@ -323,6 +333,76 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     var isCrewStation = false
 
     /**
+     * The name written on this wheel, or null while it is still blank.
+     *
+     * This is the ship's identity, not a label on a block. A named wheel lends its name to whatever hull it
+     * assembles, and -- with the wood variant and the captain -- it is the key a crew is filed under, so two
+     * wheels that agree on all three are the same berth even if one of them was crafted this morning.
+     *
+     * Stored as vanilla's own `CustomName`, deliberately NOT under a `vs_eureka:` prefix like the roster
+     * beside it. That key is a contract with three pieces of vanilla we want for free: the implicit-component
+     * round trip below, the `copy_custom_name` in the helm loot tables, and the anvil. Namespacing it would
+     * mean re-implementing all three by hand.
+     */
+    var helmName: Component? = null
+        private set
+
+    /**
+     * Write (or erase, with null) the name on this wheel.
+     *
+     * Marks dirty AND pushes a block update, because the name has to reach the client: it is drawn in the helm
+     * menu, and unlike everything else on this block entity there is no menu slot carrying it. Blank and
+     * whitespace-only are both stored as null, so "is this wheel named?" is one null check everywhere else.
+     */
+    fun setHelmName(name: Component?) {
+        helmName = name?.takeIf { it.string.isNotBlank() }
+        setChanged()
+        level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
+    }
+
+    override fun getName(): Component = helmName ?: blockState.block.name
+
+    override fun getCustomName(): Component? = helmName
+
+    /**
+     * Carries the name across the block/item boundary in both directions.
+     *
+     * [applyImplicitComponents] runs when a named helm is PLACED, reading the stack's `custom_name`;
+     * [collectImplicitComponents] runs when one is picked up. Between them and the `copy_custom_name` in the
+     * loot tables, a wheel can be mined, stacked, renamed on an anvil and re-placed without a line of code in
+     * the block class. This is the same mechanism a shulker box uses.
+     */
+    override fun applyImplicitComponents(componentGetter: DataComponentGetter) {
+        super.applyImplicitComponents(componentGetter)
+        helmName = componentGetter.get(DataComponents.CUSTOM_NAME)
+    }
+
+    override fun collectImplicitComponents(components: DataComponentMap.Builder) {
+        super.collectImplicitComponents(components)
+        components.set(DataComponents.CUSTOM_NAME, helmName)
+    }
+
+    /** Stops the name being written twice -- once as a component, once as raw block-entity NBT on the stack. */
+    override fun removeComponentsFromTag(output: ValueOutput) {
+        output.discard("CustomName")
+    }
+
+    /**
+     * Sends this wheel's saved data to clients that can see it.
+     *
+     * The helm menu has to draw the name, and a container menu cannot carry one -- its sync slots are ints.
+     * So the name rides the ordinary block-entity update instead, which is also what makes it correct after a
+     * chunk reload rather than only right after someone typed it.
+     *
+     * [saveCustomOnly] sends the roster along with it. That is a few dozen bytes on a block nobody updates in
+     * a hot loop, and the alternative is a hand-built tag that has to be kept in step with [saveAdditional]
+     * every time a field is added -- a bug waiting on the next feature, to save nothing worth saving.
+     */
+    override fun getUpdateTag(registries: HolderLookup.Provider): CompoundTag = saveCustomOnly(registries)
+
+    override fun getUpdatePacket(): Packet<ClientGamePacketListener>? = ClientboundBlockEntityDataPacket.create(this)
+
+    /**
      * Persisted alongside the roster so a reload cannot leave a ship with two crew stations or none.
      *
      * `super` first in both, then our own keys; the roster is stored under a namespaced name because block
@@ -330,12 +410,14 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      */
     override fun saveAdditional(output: ValueOutput) {
         super.saveAdditional(output)
+        output.storeNullable("CustomName", ComponentSerialization.CODEC, helmName)
         if (!crew.isEmpty) output.store("vs_eureka:crew", CrewRoster.CODEC, crew.entries())
         if (isCrewStation) output.putBoolean("vs_eureka:crew_station", true)
     }
 
     override fun loadAdditional(input: ValueInput) {
         super.loadAdditional(input)
+        helmName = BlockEntity.parseCustomNameSafe(input, "CustomName")
         crew.replaceAll(input.read("vs_eureka:crew", CrewRoster.CODEC).orElse(emptyList()))
         isCrewStation = input.getBooleanOr("vs_eureka:crew_station", false)
     }
@@ -350,9 +432,14 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         return ShipHelmScreenMenu(id, playerInventory, this)
     }
 
-    override fun getDisplayName(): Component {
-        return Component.translatable("gui.vs_eureka.ship_helm")
-    }
+    /**
+     * The menu title. A named wheel puts its own name up there, so you can tell at a glance which of a big
+     * ship's helms you opened; a blank one keeps the generic title it always had.
+     *
+     * Resolves the [MenuProvider] / [Nameable] clash explicitly -- both declare `getDisplayName`, one abstract
+     * and one defaulted -- which is why this override has to exist rather than being inherited.
+     */
+    override fun getDisplayName(): Component = helmName ?: Component.translatable("gui.vs_eureka.ship_helm")
 
     // Needs to get called server-side
     fun spawnSeat(blockPos: BlockPos, state: BlockState, level: ServerLevel): ShipMountingEntity {

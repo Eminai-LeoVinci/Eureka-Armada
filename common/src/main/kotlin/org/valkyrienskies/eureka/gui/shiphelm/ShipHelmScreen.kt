@@ -14,6 +14,7 @@ import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
+import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.mod.common.getShipManagingPos
 import kotlin.math.roundToInt
@@ -318,24 +319,50 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             it.setFilter { s -> s.matches(PERCENT) }
         }
 
+    /**
+     * Open the name box, or commit what is in it.
+     *
+     * This names the SHIP. The wheel's own name is a different thing entirely -- it names the CREW, and is
+     * typed in the crew menu or on an anvil, not here.
+     *
+     * The typed value goes over a payload rather than `sendCommand("vs rename ...")`. That command is gated
+     * behind an op permission in VS2, so the old button silently did nothing for an ordinary player on a
+     * server; it only ever appeared to work because a single-player host is op. Slugging is left to the
+     * server, which uses the same `HelmNames.slugOf` this screen compares against below.
+     */
     private fun toggleRename() {
         val s = ship ?: return
         if (!renaming) {
-            renameBox.value = (pendingNames[s.id] ?: s.slug)?.replace('-', ' ') ?: ""
+            renameBox.value = shipName() ?: ""
             renameBox.visible = true
             this.focused = renameBox
             renameBox.isFocused = true
             renaming = true
             renameButton.message = SAVE_TEXT
         } else {
-            val slugName = renameBox.value.trim().replace("\"", "").replace(' ', '-')
-            val shown = pendingNames[s.id] ?: s.slug
-            if (slugName.isNotEmpty() && slugName != shown) {
-                minecraft?.player?.connection?.sendCommand("vs rename @v[id=${s.id}] \"$slugName\"")
-                pendingNames[s.id] = slugName
+            val typed = renameBox.value.trim()
+            val helmPos = pos
+            if (helmPos != null && typed.isNotEmpty() && typed != (shipName() ?: "")) {
+                HelmNames.clientShipSender(helmPos, typed)
+                // Shown until vs-core's own value comes back, so the box does not flicker to the old name for
+                // the round trip.
+                pendingNames[s.id] = typed
             }
             cancelRename()
         }
+    }
+
+    /**
+     * This ship's name as a player reads it, or null if it has none.
+     *
+     * `slug` is the stored form and it cannot hold a space, so the dashes are shown back as the spaces they
+     * stand in for -- what the player typed is what the player sees. A pending local edit wins until vs-core's
+     * version of it arrives.
+     */
+    private fun shipName(): String? {
+        val s = ship ?: return null
+        pendingNames[s.id]?.let { return it.ifEmpty { null } }
+        return s.slug?.replace('-', ' ')
     }
 
     private fun cancelRename() {
@@ -384,7 +411,15 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         val newShip = pos?.let { Minecraft.getInstance().level?.getShipManagingPos(it) }
         if (newShip != null) ship = newShip
 
-        ship?.let { sh -> if (pendingNames[sh.id] == sh.slug) pendingNames.remove(sh.id) }
+        // Drop the local echo once vs-core's own value agrees with it -- from then on the ship is the single
+        // source, and a stale echo would survive a rename made from anywhere else. Compared through the same
+        // slugging the server applies, so "Going Merry" and `Going-Merry` are recognised as the same answer.
+        ship?.let { sh ->
+            val pending = pendingNames[sh.id]
+            if (pending != null && HelmNames.slugOf(Component.literal(pending)) == sh.slug) {
+                pendingNames.remove(sh.id)
+            }
+        }
 
         val isLookingAtShip = ship != null
         // Whether THIS helm's ship is assembled, from the server-synced DataSlot -- NOT the crosshair raycast.
@@ -464,6 +499,11 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         val weightStr = String.format("%,d", menu.shipMass)
         if (shipWeightBox.value != weightStr) shipWeightBox.value = weightStr
 
+        // Naming needs a WHEEL, not a ship. A helm sitting on the dock can be named before it has ever built
+        // anything -- which is the whole point of a name that travels with the block -- so this is gated on
+        // having a block position rather than on `isLookingAtShip` the way it was when it renamed the ship.
+        // Only a ship can be renamed, so an unassembled wheel has nothing to offer here. Naming the CREW is
+        // always available, but it lives in the crew menu.
         renameButton.visible = isLookingAtShip
         renameButton.active = isLookingAtShip
         if (!isLookingAtShip && renaming) cancelRename()
@@ -544,13 +584,15 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         drawFitPercent(guiGraphics, menu.floaterFitPercent, cruiseRowY(0))
         drawFitPercent(guiGraphics, menu.balloonFitPercent, cruiseRowY(1))
 
-        val s = ship ?: return
-
+        // The SHIP's name. Drawn only while there is a ship to name -- an unassembled wheel steers nothing yet,
+        // and the crew's name (the wheel's own) belongs to the crew menu, not here.
         if (!renaming) {
-            (pendingNames[s.id] ?: s.slug)?.let {
-                guiGraphics.drawString(font, "Name: " + it.replace('-', ' '), titleLabelX, titleLabelY, INFO_TEXT, false)
+            shipName()?.let { shown ->
+                guiGraphics.drawString(font, "Name: $shown", titleLabelX, titleLabelY, INFO_TEXT, false)
             }
         }
+
+        val s = ship ?: return
 
         // Bottom-left info boxes -- the same three whatever the ship is.
         val topLine = "Top Speed: ${menu.topSpeed}m/s~"
@@ -709,6 +751,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     }
 
     companion object {
+        /**
+         * A just-typed name, keyed on the WHEEL's packed block position, held until the server's own copy of
+         * the block entity agrees with it.
+         *
+         * Static because the screen is rebuilt on every resize and would otherwise forget an in-flight rename.
+         * Was keyed on ship id when this box renamed ships; the key moved with the name, onto the block that
+         * now carries it -- which also means a wheel that has never built a ship can hold a pending name.
+         */
         private val pendingNames = HashMap<Long, String>()
         private val NUMERIC = Regex("-?\\d*\\.?\\d*")
         // Whole non-negative percent, up to 3 digits, with an optional trailing '%' (so the displayed "5%" re-parses).

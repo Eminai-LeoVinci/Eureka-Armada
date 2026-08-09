@@ -120,8 +120,7 @@ object ShipCrew {
      * What to call a ship in a message.
      *
      * `slug` is the only name a VS ship has and it is nullable, so this matches what `ArmadaCommand` already
-     * prints: the name if it has one, the raw id if it doesn't. A ship nobody has named is still a thing you
-     * need to be able to refer to.
+     * prints. A wheel's own name belongs to its CREW, not to the hull, so it deliberately does not appear here.
      */
     fun name(ship: Ship): String = ship.slug ?: "ship #${ship.id}"
 }

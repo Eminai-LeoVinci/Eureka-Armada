@@ -34,6 +34,7 @@
   "block.vs_eureka.sub_air": "Sub Air",
   "entity.vs_eureka.villager.crewman": "Crewman",
   "entity.vs_eureka.villager.unemployed": "Unemployed",
+  "gui.vs_eureka.helm_unnamed": "(unnamed)",
   "gui.vs_eureka.crew_manifest": "Crew Manifest",
   "gui.vs_eureka.crew_berths": "%s aboard — %s berths",
   "gui.vs_eureka.crew_berth_locked": "Berth locked",

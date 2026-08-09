@@ -7,7 +7,16 @@
       "entries": [
         {
           "type": "minecraft:item",
-          "name": "vs_eureka:warped_ship_helm"
+          "name": "vs_eureka:warped_ship_helm",
+          "functions": [
+            {
+              "function": "minecraft:copy_components",
+              "source": "block_entity",
+              "include": [
+                "minecraft:custom_name"
+              ]
+            }
+          ]
         }
       ],
       "conditions": [
