@@ -64,6 +64,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedMassHigh = 0     // remaining high bits (a DataSlot transmits only a 16-bit short)
     private var syncedAssembled = false // is THIS helm's ship assembled (authoritative, not the client raycast)
     private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
+    private var syncedKeepName = true    // does this WHEEL re-apply the last ship name it saw
     private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
     init {
         addDataSlot(object : DataSlot() {
@@ -223,6 +224,13 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = if (blockEntity?.isArmadaChild == true) 1 else 0
             override fun set(value: Int) { syncedIsChild = value == 1 }
         })
+        // "Keep Name" -- whether this wheel re-applies the name of the last ship it steered. A property of the
+        // BLOCK, not of a ship, so it syncs (and is togglable) on an unassembled helm too, which is exactly
+        // when a captain carrying a wheel to a new hull would want to check it.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = if (blockEntity?.keepName != false) 1 else 0
+            override fun set(value: Int) { syncedKeepName = value == 1 }
+        })
         // Armada Parent checkbox state, bit-packed: it ticks either because this ship really leads an armada
         // (bit0) or because this player has only just marked it as the parent to bind to (bit1, per-player --
         // hence read against the opener, not globally).
@@ -242,6 +250,9 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     val assembled: Boolean get() = blockEntity?.assembled ?: syncedAssembled
     // Server-authoritative, synced above: is this helm's ship an armada child (controls read-only if so).
     val isArmadaChild: Boolean get() = blockEntity?.isArmadaChild ?: syncedIsChild
+
+    /** Whether this wheel re-applies its remembered ship name. Read off the block server-side, the slot client-side. */
+    val keepName: Boolean get() = blockEntity?.keepName ?: syncedKeepName
     // Whether the "Armada Parent" box shows ticked: this ship leads an armada, or the viewer has marked it as
     // the parent their next children bind to.
     val isArmadaParent: Boolean get() =
@@ -374,9 +385,17 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             return true
         }
 
-        // Ids 2, 6 and 7 are FREE. 6 and 7 were the Advanced / Vanilla radio, which the three ship-category
-        // tabs replace -- and those need no button id at all, because the category is derived from the ship
-        // rather than chosen, and clicking a tab only changes what the client draws.
+        // "Keep Name" checkbox -> whether this wheel re-applies its remembered ship name on the next assembly.
+        // Deliberately NOT gated on `assembled`: a wheel in a player's hand, or newly placed on a bare hull, is
+        // exactly when this needs setting, and it is a property of the block rather than of any ship.
+        if (id == 2 && server) {
+            blockEntity.setKeepName(!blockEntity.keepName)
+            return true
+        }
+
+        // Ids 6 and 7 are FREE. They were the Advanced / Vanilla radio, which the three ship-category tabs
+        // replace -- and those need no button id at all, because the category is derived from the ship rather
+        // than chosen, and clicking a tab only changes what the client draws.
 
         // "Armada Parent" / "Armada Child" markers. 16 is deliberately NOT child-locked: unticking Child is how
         // a bound ship gets released, so it has to stay live at a child's otherwise read-only helm.

@@ -132,19 +132,15 @@ class CrewLedger : SavedData() {
     }
 
     /**
-     * Move a crew from one name to another, for a wheel being renamed.
-     *
-     * Refuses rather than merges when the destination already has a crew. Merging would be irreversible and
-     * silent -- two crews walk in, one walks out, and no message could put them back -- whereas refusing costs
-     * the captain one rename they have to think about. Moving ONTO an empty key is the ordinary case and is
-     * what makes a rename keep the crew rather than strand them under the old name.
-     */
-    /**
      * Re-file every crew on a wheel that has just been renamed, whatever captain they belong to.
      *
      * A wheel's name changes for everybody at once, so moving only the renaming player's crew would orphan
-     * anyone else's under a name no wheel answers to any more. Returns false and moves NOTHING if any single
-     * crew would collide, because a rename that half-happened is worse than one that did not.
+     * anyone else's under a name no wheel answers to any more.
+     *
+     * Refuses rather than merges when a destination already has a crew, and moves NOTHING if any single crew
+     * would collide: merging would be irreversible and silent -- two crews walk in, one walks out, and no
+     * message could put them back -- whereas refusing costs the captain one rename they have to think about,
+     * and a rename that half-happened is worse than one that did not.
      */
     fun renameAll(oldName: String, newName: String, variant: String): Boolean {
         val from = HelmNames.keyOf(oldName)
@@ -188,17 +184,6 @@ class CrewLedger : SavedData() {
         station.crew.replaceAll(emptyList())
         station.setChanged()
         setDirty()
-    }
-
-    fun rename(from: Key, to: Key): Boolean {
-        if (from == to) return true
-        val moving = crews[from] ?: return true            // nothing to move; the rename is free
-        if (crews[to]?.isNotEmpty() == true) return false  // would merge two crews
-        crews.remove(from)
-        crews[to] = moving
-        for (berth in moving) byVillager[berth.villager] = to
-        setDirty()
-        return true
     }
 
     // endregion
@@ -255,12 +240,6 @@ class CrewLedger : SavedData() {
          */
         fun get(server: MinecraftServer): CrewLedger =
             server.overworld().dataStorage.computeIfAbsent(TYPE)
-
-        /** Build the key a wheel's name and wood make for [captain]. Null when the wheel is unnamed. */
-        fun keyFor(captain: UUID, name: net.minecraft.network.chat.Component?, variant: String): Key? {
-            val text = name ?: return null
-            return Key(captain, HelmNames.keyOf(text), variant)
-        }
 
         /** A hand-edited or truncated id drops one entry rather than taking the world's crews down with it. */
         private fun parseUuid(raw: String): UUID? =

@@ -69,12 +69,6 @@ object HelmNames {
     /** The same normalisation for a name already in string form -- one already read back out of the ledger. */
     fun keyOf(name: String): String = name.trim().lowercase().replace(WHITESPACE_RUN, " ")
 
-    /** Whether two wheels carry the same name for crew purposes. Null is never equal to anything, blank included. */
-    fun sameName(a: Component?, b: Component?): Boolean {
-        if (a == null || b == null) return false
-        return keyOf(a) == keyOf(b)
-    }
-
     /**
      * The wood variant of a helm, as the block's registry id.
      *
@@ -186,6 +180,10 @@ object HelmNames {
         val slug = slugOf(Component.literal(StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)))
             ?: return false
         vsCore.renameShip(ship, slug)
+        // The wheel this was typed at remembers immediately, so Keep Name is right even if the ship is taken
+        // apart in the same breath. Every OTHER wheel on the hull picks the new name up from its own tick --
+        // see ShipHelmBlockEntity.tick -- which is why this does not have to go looking for them.
+        helm.rememberShipName(slug)
         return true
     }
 

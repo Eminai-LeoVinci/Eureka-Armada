@@ -24,7 +24,7 @@ import org.valkyrienskies.mod.util.logger
  */
 object CrewNameGenerator {
 
-    /** The half of the name that never varies. Also what [isAutoName] recognises. */
+    /** The half of the name that never varies, and what makes an auto-named crew recognisable as one. */
     const val PREFIX = "Motley Crew"
 
     /**
@@ -51,13 +51,28 @@ object CrewNameGenerator {
     }
 
     /**
-     * Whether [name] looks like one of ours rather than one a player chose.
+     * Whether [slug] looks like a SHIP name vs-core made up, rather than one a player chose.
      *
-     * Used to decide when a name may be replaced without asking. A captain who typed "Straw Hat Pirates" meant
-     * it; one who was handed "Motley Crew Drake" did not choose it, so a later rename is a correction rather
-     * than a change of mind.
+     * vs-core names a new ship by joining three words from [pool] with dashes -- `drake-hay-rock`,
+     * `revenant-creation-editing`. Testing all three against the pool makes this precise rather than a guess
+     * about shape: a player would have to type three dash-joined dictionary nouns in lower case to be mistaken
+     * for one, and the only cost if they do is that Keep Name declines to remember that particular name.
+     *
+     * This exists because Keep Name reads the ship's slug on a timer. Without it, a hull that came up with a
+     * generated name would overwrite the name the captain had chosen, and one failed re-apply would erase the
+     * memory for good -- which is exactly how it failed the first time.
      */
-    fun isAutoName(name: String): Boolean = name.startsWith(PREFIX)
+    fun looksGenerated(slug: String): Boolean {
+        val parts = slug.split('-')
+        // AT LEAST three, not exactly three: the list contains hyphenated nouns ("arm-rest", "t-shirt"), so a
+        // three-word name can arrive with more than three dash-separated pieces -- `arm-rest-cabana-fanny` is
+        // one vs-core actually produced. Requiring exactly three let those through to be remembered as though
+        // a player had chosen them.
+        if (parts.size < GENERATED_WORDS) return false
+        if (parts.any { it.isEmpty() || it.any { c -> c !in 'a'..'z' } }) return false
+        val words = pool
+        return parts.all { it in words }
+    }
 
     /**
      * The noun pool, read once on first use.
@@ -86,6 +101,9 @@ object CrewNameGenerator {
 
     private const val NOUN_RESOURCE = "nounlist.txt"
     private const val ATTEMPTS = 24
+
+    /** How many words vs-core joins to name a ship. */
+    private const val GENERATED_WORDS = 3
     private const val MIN_WORD = 3
     private const val MAX_WORD = 12
 

@@ -35,6 +35,7 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.block.state.properties.Half
+import net.minecraft.world.item.component.CustomData
 import net.minecraft.world.level.storage.ValueInput
 import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
@@ -56,6 +57,7 @@ import org.valkyrienskies.eureka.block.EngineBlock
 import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.command.AssemblerPreferences
+import org.valkyrienskies.eureka.crew.CrewNameGenerator
 import org.valkyrienskies.eureka.crew.CrewRoster
 import org.valkyrienskies.eureka.crew.CrewTickets
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
@@ -107,6 +109,16 @@ private const val ENVIRONMENT_SAMPLE_TICKS = 20L
 // Ticks between POI ticket repairs (see CrewTickets). 600 = every thirty seconds: this fixes damage a save is
 // already carrying, so it only has to be sooner than a player gives up on the wheel.
 private const val TICKET_HEAL_TICKS = 600L
+
+// The two Keep Name fields. Namespaced because they are written into `custom_data` on the ITEM as well as into
+// block-entity NBT, and custom_data is a shared bag every mod may put things in.
+private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
+private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
+private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
+
+// How long after a ship loads before its remembered name is applied. Long enough for vs-core to have finished
+// building the ship -- a slug set while it is still doing so does not survive -- and far too short to see.
+private const val NAME_APPLY_DELAY_TICKS = 5L
 
 // How far a vertical probe walks before giving up and reporting "not known". Deep enough to cross an ocean
 // trench or clear a mountain, short enough that a ship over the void costs nothing.
@@ -360,6 +372,67 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
     }
 
+    /**
+     * The slug of the last ship this wheel steered, or null if it has never named one.
+     *
+     * A THIRD name, and deliberately not either of the other two. [helmName] is the crew's and never touches a
+     * hull; the ship's own name is `Ship.slug` and dies with the ship at disassembly. This is what the wheel
+     * REMEMBERS, so a hull can be taken apart and rebuilt -- or replaced entirely -- and still be the ship it
+     * was. Stored already slugged, because that is the form vs-core takes and re-slugging on every assembly
+     * would be a second place for the rules to drift.
+     */
+    var rememberedShipName: String? = null
+        private set
+
+    /**
+     * Whether this wheel re-applies [rememberedShipName] to whatever it assembles.
+     *
+     * Defaults ON, because a captain who has named a ship almost always wants it to stay named, and the case
+     * this protects against -- a forgotten wheel quietly renaming a hull you had called something else -- is
+     * rarer than the case it serves. Unticking stops BOTH halves: nothing is remembered and nothing is
+     * applied, so a wheel deliberately switched off cannot surprise anyone later.
+     */
+    var keepName: Boolean = true
+        private set
+
+    /**
+     * The name of the ship this wheel is currently part of, as the CLIENT should display it.
+     *
+     * `Ship.slug` cannot be read on the client and trusted: VS2 tells a client a ship's name when the ship
+     * loads and does not push later changes, so a renamed ship keeps its old name on every client until
+     * something reloads it. The helm menu appeared to work only because it echoes what the player typed --
+     * a name set by anything else (Keep Name, another player's `/vs rename`) showed the stale one.
+     *
+     * So the wheel carries it. This block entity already syncs to clients, so the name rides along with
+     * everything else and the menu has a value it can trust. Refreshed on the same slow stagger as the
+     * environment probes; a name that takes a second to appear is not a name anyone is watching change.
+     */
+    var shipSlug: String? = null
+        private set
+
+    /** Toggle the Keep Name behaviour. Clearing it also forgets, so unticking is a complete off switch. */
+    fun setKeepName(value: Boolean) {
+        keepName = value
+        if (!value) rememberedShipName = null
+        setChanged()
+        level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
+    }
+
+    /**
+     * Record the name of the ship this wheel is currently part of. Ignored while Keep Name is off.
+     *
+     * A name vs-core made up is deliberately NOT remembered. The point of the feature is to keep the name a
+     * captain chose, and remembering a generated one would mean any hull that came up unnamed -- including one
+     * where re-applying had just failed -- would overwrite the real name and lose it for good.
+     */
+    fun rememberShipName(slug: String?) {        if (!keepName || slug.isNullOrEmpty()) return
+        if (rememberedShipName == slug) return
+        if (CrewNameGenerator.looksGenerated(slug)) return
+        rememberedShipName = slug
+        setChanged()
+        level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
+    }
+
     override fun getName(): Component = helmName ?: blockState.block.name
 
     override fun getCustomName(): Component? = helmName
@@ -375,11 +448,31 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     override fun applyImplicitComponents(componentGetter: DataComponentGetter) {
         super.applyImplicitComponents(componentGetter)
         helmName = componentGetter.get(DataComponents.CUSTOM_NAME)
+
+        // The remembered ship name has no vanilla component of its own, so it travels in custom_data. Read
+        // defensively: this component belongs to everybody, and a stack that has been through another mod's
+        // hands may carry anything at all under keys that are not ours.
+        val custom = componentGetter.get(DataComponents.CUSTOM_DATA)
+        if (custom != null) {
+            val tag = custom.copyTag()
+            rememberedShipName = tag.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+            keepName = tag.getBooleanOr(KEEP_NAME_KEY, true)
+        }
     }
 
     override fun collectImplicitComponents(components: DataComponentMap.Builder) {
         super.collectImplicitComponents(components)
         components.set(DataComponents.CUSTOM_NAME, helmName)
+
+        // Only written when there is something to say. A wheel that has never named a ship and is switched on
+        // -- which is most of them -- puts no custom_data on the item at all, so an ordinary helm stacks with
+        // every other ordinary helm instead of splitting into singletons.
+        if (rememberedShipName != null || !keepName) {
+            val tag = CompoundTag()
+            rememberedShipName?.let { tag.putString(REMEMBERED_SHIP_KEY, it) }
+            if (!keepName) tag.putBoolean(KEEP_NAME_KEY, false)
+            components.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+        }
     }
 
     /** Stops the name being written twice -- once as a component, once as raw block-entity NBT on the stack. */
@@ -413,6 +506,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         output.storeNullable("CustomName", ComponentSerialization.CODEC, helmName)
         if (!crew.isEmpty) output.store("vs_eureka:crew", CrewRoster.CODEC, crew.entries())
         if (isCrewStation) output.putBoolean("vs_eureka:crew_station", true)
+        rememberedShipName?.let { output.putString(REMEMBERED_SHIP_KEY, it) }
+        // Written for the sync rather than for the save -- getUpdateTag is saveCustomOnly, so this is how the
+        // client learns the ship's name at all. Harmless on disk; re-derived from the ship on the next tick.
+        shipSlug?.let { output.putString(SHIP_SLUG_KEY, it) }
+        // Written only when OFF, so the default costs nothing and every wheel already in a save keeps the
+        // behaviour switched on without a migration.
+        if (!keepName) output.putBoolean(KEEP_NAME_KEY, false)
     }
 
     override fun loadAdditional(input: ValueInput) {
@@ -420,6 +520,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         helmName = BlockEntity.parseCustomNameSafe(input, "CustomName")
         crew.replaceAll(input.read("vs_eureka:crew", CrewRoster.CODEC).orElse(emptyList()))
         isCrewStation = input.getBooleanOr("vs_eureka:crew_station", false)
+        rememberedShipName = input.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+        keepName = input.getBooleanOr(KEEP_NAME_KEY, true)
+        shipSlug = input.getString(SHIP_SLUG_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
     }
 
     private val seats = mutableListOf<ShipMountingEntity>()
@@ -677,6 +780,19 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // contact above. Nothing steers by these -- they are numbers on a screen.
             if (sLevel.gameTime % ENVIRONMENT_SAMPLE_TICKS == (blockPos.hashCode().toLong() and 0xFL) % ENVIRONMENT_SAMPLE_TICKS) {
                 sampleEnvironment(sLevel, curShip, curControl)
+                // Keep Name: every wheel notes what its own ship is called, on the same slow stagger. Doing it
+                // here rather than at the rename means it needs no notification and no walk of the hull -- a
+                // wheel that was placed later, or renamed from a different wheel, still ends up knowing. The
+                // write is a no-op unless the name actually changed.
+                rememberShipName(curShip.slug)
+                // And the name the MENU shows, which is a different question: this one follows the ship even
+                // when Keep Name is off or the name is a generated one, because it is a readout rather than a
+                // memory. Pushed to clients only when it actually changes.
+                if (shipSlug != curShip.slug) {
+                    shipSlug = curShip.slug
+                    setChanged()
+                    sLevel.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL)
+                }
             }
             // Measure per-axis input-hold time on the fixed-rate game thread (physics TPS is variable) so the
             // physics turn law can gate the acceleration phase and all three sets can do hold-to-cancel.
@@ -784,6 +900,19 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // about to be frozen aligned to world axes. Seeds ShipInfluenceOrientation at ASSEMBLY so the influence-
         // border faces lock to the helm the instant the ship exists (see the seed call after finishAssembly).
         val forwardAtAssembly = helmSeatDirection
+
+        // Keep Name, read NOW for the same reason the bow direction is.
+        //
+        // Assembly relocates this wheel into the shipyard, and the relocation RESETS the block entity it moved
+        // FROM -- the destination copy gets the data, and this object is reloaded from an empty tag. `this` is
+        // therefore blank by the time the deferred applyControl below runs, and reading the field there yields
+        // null however long it waits. That is not a timing problem and no amount of deferring fixes it; the
+        // value simply has to be taken off the block before the assembly starts.
+        //
+        // This is also what made the first attempt at naming a ship from its wheel fail: it read the helm's
+        // name inside applyControl and wrote a null every time.
+        val keepNameAtAssembly = keepName
+        val rememberedAtAssembly = rememberedShipName
 
         // Assembly places blocks straight into the shipyard without firing onPlace, so the
         // counters BalloonBlock/FloaterBlock/AnchorBlock/ShipHelmBlock maintain via onPlace
@@ -942,6 +1071,33 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.engines = engineCount
             control.assembledBlocks = blockCount
             control.crewStationPos = crewStation
+
+            // Keep Name: give the hull back the name this wheel last steered under, using the value read off
+            // the block BEFORE the assembly reset it (see keepNameAtAssembly above).
+            //
+            // A ship's slug lives in TWO places and they are not the same object: the persisted record in
+            // `allShips`, which is what reaches disk and what `/vs` selectors match, and the loaded ship in
+            // `loadedShips`, which is what the helm menu and every client actually read. Writing only the
+            // persisted one gets a ship that is correctly named on disk but shows its generated name until
+            // something reloads the world -- which is exactly how this looked while it seemed broken.
+            //
+            // So both, a few ticks after the ship loads rather than immediately: a slug written into a ship
+            // vs-core is still assembling does not survive. `renameShip` is a plain setter, so writing twice
+            // costs nothing and is idempotent.
+            if (keepNameAtAssembly && rememberedAtAssembly != null) {
+                val named = loadedShip.id
+                val server = level.server
+                val applyAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
+                server.executeIf({ server.overworld().gameTime >= applyAt }) {
+                    val world = level.shipObjectWorld
+                    world.allShips.getById(named)?.let {
+                        ValkyrienSkiesMod.vsCore.renameShip(it, rememberedAtAssembly)
+                    }
+                    world.loadedShips.getById(named)?.let {
+                        ValkyrienSkiesMod.vsCore.renameShip(it, rememberedAtAssembly)
+                    }
+                }
+            }
         }
 
         val loaded = level.shipObjectWorld.loadedShips.getById(shipId)
@@ -1005,6 +1161,12 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.aligning = true
             return
         }
+
+        // Keep Name: the last chance to read what this ship was called. A disassembly destroys the ship object
+        // and its slug with it, so a wheel that has not written the name down by now has lost it. Deliberately
+        // AFTER the canDisassemble gate, so a deferred teardown records the name once it actually happens
+        // rather than on every waiting tick.
+        rememberShipName(ship.slug)
 
         val inWorld = ship.shipToWorld.transformPosition(this.blockPos.toJOMLD())
 
