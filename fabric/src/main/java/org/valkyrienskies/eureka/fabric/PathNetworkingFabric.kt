@@ -70,6 +70,7 @@ object PathNetworkingFabric {
     private val CREW_DETAIL_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail")
     private val CREW_ASK_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail_ask")
     private val CREW_RENAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_rename")
+    private val CREW_DISMISS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_dismiss")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
@@ -82,6 +83,7 @@ object PathNetworkingFabric {
     private val CREW_DETAIL_TYPE = CustomPacketPayload.Type<CrewDetailPayload>(CREW_DETAIL_RL)
     private val CREW_ASK_TYPE = CustomPacketPayload.Type<CrewAskPayload>(CREW_ASK_RL)
     private val CREW_RENAME_TYPE = CustomPacketPayload.Type<CrewRenamePayload>(CREW_RENAME_RL)
+    private val CREW_DISMISS_TYPE = CustomPacketPayload.Type<CrewDismissPayload>(CREW_DISMISS_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
@@ -103,6 +105,8 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewAskPayload::data) { CrewAskPayload(it) }
     private val CREW_RENAME_CODEC: StreamCodec<FriendlyByteBuf, CrewRenamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewRenamePayload::data) { CrewRenamePayload(it) }
+    private val CREW_DISMISS_CODEC: StreamCodec<FriendlyByteBuf, CrewDismissPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDismissPayload::data) { CrewDismissPayload(it) }
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -147,6 +151,11 @@ object PathNetworkingFabric {
     /** "Call this one that." */
     class CrewRenamePayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_RENAME_TYPE
+    }
+
+    /** "This one is off the articles." Whether that is allowed is the server's business, not the button's. */
+    class CrewDismissPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_DISMISS_TYPE
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
@@ -253,6 +262,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(CREW_DETAIL_TYPE, CREW_DETAIL_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_ASK_TYPE, CREW_ASK_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_RENAME_TYPE, CREW_RENAME_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_DISMISS_TYPE, CREW_DISMISS_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
@@ -347,6 +357,17 @@ object PathNetworkingFabric {
             context.server().execute {
                 val level = player.level() as? ServerLevel ?: return@execute
                 CrewManifest.requestRename(level, player, helm, villager, name)
+            }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(CREW_DISMISS_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val villager = buf.readUUID()
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                CrewManifest.requestDismiss(level, player, helm, villager)
             }
         }
 
@@ -448,6 +469,15 @@ object PathNetworkingFabric {
         ClientPlayNetworking.send(CrewRenamePayload(toArray(buf)))
     }
 
+    /** Client: strike one crew member off the articles. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewDismiss(helm: Long, villager: UUID) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeUUID(villager)
+        ClientPlayNetworking.send(CrewDismissPayload(toArray(buf)))
+    }
+
     /** Client: name the wheel at [pos]. An empty name clears it back to blank. */
     @Environment(EnvType.CLIENT)
     fun sendHelmName(pos: BlockPos, name: String) {
@@ -523,6 +553,7 @@ object PathNetworkingFabric {
         buf.writeUtf(detail.profession)
         buf.writeVarInt(detail.level)
         buf.writeVarInt(detail.xp)
+        buf.writeBoolean(detail.aboard)
         buf.writeVarInt(detail.offers.size)
         for (offer in detail.offers) {
             ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.costA)
@@ -543,6 +574,7 @@ object PathNetworkingFabric {
         val profession = buf.readUtf()
         val level = buf.readVarInt()
         val xp = buf.readVarInt()
+        val aboard = buf.readBoolean()
         val offers = List(buf.readVarInt()) {
             CrewManifest.Offer(
                 costA = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
@@ -553,7 +585,7 @@ object PathNetworkingFabric {
                 outOfStock = buf.readBoolean()
             )
         }
-        return CrewManifest.Detail(villager, name, profession, level, xp, offers)
+        return CrewManifest.Detail(villager, name, profession, level, xp, offers, aboard)
     }
 
     // endregion

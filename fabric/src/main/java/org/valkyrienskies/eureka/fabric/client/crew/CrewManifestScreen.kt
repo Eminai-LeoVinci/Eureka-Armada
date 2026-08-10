@@ -63,6 +63,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var crewNameBox: EditBox? = null
     private var renamingCrew = false
 
+    /**
+     * Whether the Dismiss button is on its second press.
+     *
+     * Paying somebody off is not catastrophic -- walk up to them and press the crew key and they are back --
+     * but it is not free either: their berth is handed to whoever is next, their written copy is discarded, and
+     * if they were ashore when it happened there may be no walking up to them at all. One misclick should not
+     * do that, so the button asks.
+     */
+    private var dismissArmed = false
+
     override fun init() {
         left = (width - PANEL_W) / 2
         top = (height - PANEL_H) / 2
@@ -84,9 +94,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             return
         }
 
-        // Widgets exist only while a card is open. Building them unconditionally and hiding them would leave
-        // an invisible EditBox eating clicks and keystrokes over the list.
-        if (openCard == null) return
+        // Clicking the heading still starts a rename -- it is the most direct thing to aim at -- but a button
+        // says the rename EXISTS, which a click target does not. It also has somewhere to put the price.
+        if (openCard == null) {
+            addRenderableWidget(
+                ShipHelmButton(
+                    left + 6, top + PANEL_H - 16, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
+                ) { beginCrewRename() }
+            )
+            return
+        }
 
         val boxW = CARD_W - 2 * CARD_PAD - RENAME_BTN_W - 4
         nameBox = addRenderableWidget(
@@ -106,6 +123,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         addRenderableWidget(
             ShipHelmButton(
+                cardX() + CARD_PAD, cardY() + CARD_H - CARD_PAD - BACK_BTN_H,
+                DISMISS_BTN_W, BACK_BTN_H,
+                if (dismissArmed) DISMISS_CONFIRM_TEXT else DISMISS_TEXT, font
+            ) { pressDismiss() }
+        )
+
+        addRenderableWidget(
+            ShipHelmButton(
                 cardX() + CARD_W - CARD_PAD - BACK_BTN_W, cardY() + CARD_H - CARD_PAD - BACK_BTN_H,
                 BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
             ) { closeCard() }
@@ -119,6 +144,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private fun openCard(row: CrewManifest.Row) {
         openCard = row.villager
         detail = null
+        dismissArmed = false
         // The row already carries the name, so the field is right the instant the card opens rather than one
         // round trip later. The detail packet only ever adds to what is on screen; it never corrects it.
         nameValue = row.name
@@ -130,7 +156,26 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         openCard = null
         detail = null
         nameBox = null
+        dismissArmed = false
         rebuildWidgets()
+    }
+
+    /**
+     * First press arms, second press sends.
+     *
+     * The card is closed on the way out rather than waiting for the answer: the server replies with a whole
+     * fresh manifest, and [refresh] closes a card whose crew member is no longer on it anyway. Doing it here
+     * simply means the screen never spends a round trip showing somebody who has already been paid off.
+     */
+    private fun pressDismiss() {
+        val villager = openCard ?: return
+        if (!dismissArmed) {
+            dismissArmed = true
+            rebuildWidgets()
+            return
+        }
+        PathNetworkingFabric.sendCrewDismiss(snapshot.helm, villager)
+        closeCard()
     }
 
     /** Start editing the crew's name, seeded with what it is now. */
@@ -464,7 +509,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         guiGraphics.drawString(font, SELLS_TEXT, x, y, TEXT, false)
         y += 12
 
-        if (card.offers.isEmpty()) {
+        // What somebody is selling is the one thing the articles cannot know about them: trades change every
+        // time a player buys, and the written copy is only as fresh as the last time they were in hand. So an
+        // absent crew member's card says where they are instead of showing a stale or empty list, which would
+        // read as "this one has no trades".
+        if (!card.aboard) {
+            small(guiGraphics, ASHORE_TEXT, x, y + 1, DIM)
+            y += 12
+        } else if (card.offers.isEmpty()) {
             small(guiGraphics, NO_TRADES_TEXT, x, y + 1, DIM)
             y += 12
         } else {
@@ -582,6 +634,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val EMPTY_TEXT: Component = Component.translatable("gui.vs_eureka.crew_berth_empty")
         private val RENAME_TEXT: Component = Component.translatable("gui.vs_eureka.crew_rename")
         private val BACK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_back")
+        private val RENAME_CREW_TEXT: Component = Component.translatable("gui.vs_eureka.crew_rename_crew")
+        private val DISMISS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_dismiss")
+        private val DISMISS_CONFIRM_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_dismiss_confirm")
+        private val ASHORE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ashore")
         private val SELLS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_sells")
         private val NO_TRADES_TEXT: Component = Component.translatable("gui.vs_eureka.crew_no_trades")
         private val LOADING_TEXT: Component = Component.translatable("gui.vs_eureka.crew_loading")
@@ -616,6 +673,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val RENAME_BTN_W = 44
         private const val BACK_BTN_W = 44
         private const val BACK_BTN_H = 14
+
+        /** Wide enough for "Really?" as well as "Dismiss", so the button does not resize under the cursor. */
+        private const val DISMISS_BTN_W = 58
+
+        private const val CREW_RENAME_BTN_W = 78
         private const val OFFER_H = 20
 
         /** The square the head is drawn in, one pixel inside the row. */

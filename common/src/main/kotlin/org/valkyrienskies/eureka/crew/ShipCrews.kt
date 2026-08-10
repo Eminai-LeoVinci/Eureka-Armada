@@ -85,7 +85,7 @@ object ShipCrews {
         val ledger = CrewLedger.get(level.server)
         // A wheel that still carries a pre-ledger roster hands it over before anything is read off the ledger,
         // so crew signed on under the old scheme are already present when the checks below run.
-        ledger.adoptLegacy(station)
+        ledger.adoptLegacy(level.server, station)
         val existing = ledger.crewOf(villager.uuid)
 
         // Discharging works from ANY wheel, not just the one they signed at. Their own wheel may be at the
@@ -144,7 +144,9 @@ object ShipCrews {
         // manifest, and it is deliberately NOT what the limit above is counted from.
         val berth = ledger.freeSlot(key, EurekaConfig.SERVER.crewSlotsMax)
         CrewNames.applyDefault(villager, berth)
-        ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager))
+        // Written down from the moment they sign on, so a crew member is recoverable even if the very next
+        // thing that happens is their chunk unloading. The copy is refreshed whenever they are next in hand.
+        ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager), CrewSnapshot.capture(villager))
         PathMessages.send(
             player,
             "Signed on ${CrewNames.displayName(villager)}, a ${professionName(villager)}, " +

@@ -126,7 +126,7 @@ object HelmNames {
 
         // A wheel carrying a roster from before the ledger existed hands it over the moment it has a name to
         // file it under. Done first, so a rename immediately after naming moves the adopted crew too.
-        ledger.adoptLegacy(helm)
+        ledger.adoptLegacy(level.server, helm)
 
         if (cleaned.isEmpty()) {
             // Clearing a name would leave any crew filed under it unreachable -- there would be no key to look
@@ -143,6 +143,9 @@ object HelmNames {
             helm.setHelmName(null)
             return true
         }
+
+        // Typing the name it already has is not a rename -- nothing to move, nothing to write.
+        if (previous?.string == cleaned) return true
 
         // Move the crew with the name. Refused rather than merged when the captain already has a crew of the
         // new name on this wood -- see CrewLedger.renameAll.

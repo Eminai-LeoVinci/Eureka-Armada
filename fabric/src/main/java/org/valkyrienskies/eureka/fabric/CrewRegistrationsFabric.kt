@@ -1,7 +1,12 @@
 package org.valkyrienskies.eureka.fabric
 
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents
 import net.fabricmc.fabric.api.event.player.UseBlockCallback
+import net.minecraft.world.entity.npc.villager.Villager
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
+import org.valkyrienskies.eureka.crew.CrewNames
+import org.valkyrienskies.eureka.path.PathMessages
 // `object` is a Kotlin keyword, and Fabric's object-builder API has it as a package segment -- hence the
 // backticks. Without them this is a parse error, not an unresolved import.
 import net.fabricmc.fabric.api.`object`.builder.v1.trade.TradeOfferHelper
@@ -10,6 +15,7 @@ import net.minecraft.world.InteractionResult
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.crew.CrewBerths
+import org.valkyrienskies.eureka.crew.CrewLedger
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.crew.CrewTrades
@@ -63,6 +69,86 @@ object CrewRegistrationsFabric {
         // and their first press toggles OFF -- a key that appears to do nothing.
         ServerPlayConnectionEvents.DISCONNECT.register { handler, _ ->
             CrewMarkers.forget(handler.player.uuid)
+        }
+
+        registerTombstoneSweep()
+        registerDeathAndConversion()
+    }
+
+    /**
+     * Strike a crew member off the articles when the world takes them, and carry a berth through a conversion.
+     *
+     * A berth held by somebody who no longer exists is not a harmless stale entry. The manifest lists them, so
+     * the row is there; nothing can be read off them, so it has no rank and no trades; and nothing can be done
+     * to them, so it cannot even be renamed. It reads exactly like a bug, it occupies a berth the captain has
+     * paid a Heart of the Sea for, and until now the only cure was to know it had happened.
+     *
+     * Two ways to stop being the entity you were, and the rule that covers both is the same one: a berth is
+     * held by a living villager or by nobody.
+     *  - DEATH frees the berth, and the captain is told. They are owed the news -- a crew member can die a long
+     *    way from anyone, and finding out by counting the manifest is not finding out.
+     *  - CONVERSION replaces one entity with another. If what walks away is still a villager the berth follows
+     *    them, name and number intact, re-keyed WITHOUT a tombstone because the old id is genuinely spent
+     *    rather than merely out of reach. If it is a witch or a zombie, they are off the articles: keeping the
+     *    berth would leave it held by something the manifest can never show and nobody can ever dismiss, which
+     *    is the very thing this exists to prevent.
+     */
+    private fun registerDeathAndConversion() {
+        ServerLivingEntityEvents.AFTER_DEATH.register { entity, _ ->
+            if (entity !is Villager) return@register
+            strikeOff(entity)
+        }
+
+        ServerLivingEntityEvents.MOB_CONVERSION.register { previous, converted, _ ->
+            if (previous !is Villager) return@register
+            val server = previous.level().server ?: return@register
+            if (converted is Villager) {
+                CrewLedger.get(server).rekey(previous.uuid, converted.uuid)
+            } else {
+                strikeOff(previous)
+            }
+        }
+    }
+
+    /** Free [villager]'s berth and tell their captain, if they held one. */
+    private fun strikeOff(villager: Villager) {
+        val server = villager.level().server ?: return
+        val ledger = CrewLedger.get(server)
+        // Read the name BEFORE striking them out: the berth is what the name is filed against, and the message
+        // is the only place it is ever said out loud.
+        val name = CrewNames.displayName(villager)
+        val key = ledger.payOff(villager.uuid) ?: return
+        ledger.clearTombstone(villager.uuid)
+        // The crew is deliberately not named here. A ledger key holds the FOLDED name -- lowercased, so that a
+        // captain retyping it does not have to match their own capitals -- and printing that back at them would
+        // look like the mod had mangled it.
+        server.playerList.getPlayer(key.captain)?.let {
+            PathMessages.send(it, "$name is lost. Their berth is free again.", PathMessages.Kind.WARN)
+        }
+    }
+
+    /**
+     * Destroy a crew member who has already been re-signed from the articles.
+     *
+     * Mustering cannot move a villager in a chunk nobody has loaded, so it rebuilds them from the written copy
+     * and gives the copy a new id. The original is still out there. The moment its chunk does load there are
+     * two of the same crew member -- and the stale one carries trades a player may already have used, which is
+     * a duplication bug rather than a cosmetic one. So the dead id is recorded when the copy is made and the
+     * original is removed the instant it appears.
+     *
+     * `discard` rather than `kill`: this is not a death. There is nothing to drop, no experience to award and
+     * nobody to mourn -- the crew member did not die, they are standing on a deck somewhere with a new id.
+     *
+     * The tombstone is cleared as it fires, so the set only ever holds ids that have genuinely not turned up
+     * yet, and a world where every stale copy has been swept carries none at all.
+     */
+    private fun registerTombstoneSweep() {
+        ServerEntityEvents.ENTITY_LOAD.register { entity, level ->
+            if (entity !is Villager) return@register
+            val ledger = CrewLedger.get(level.server)
+            if (!ledger.isTombstoned(entity.uuid)) return@register
+            ledger.clearTombstone(entity.uuid)
+            entity.discard()
         }
     }
 

@@ -13,6 +13,7 @@ import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.ShipCrew
+import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
 
 /**
@@ -84,7 +85,16 @@ object CrewManifest {
         val profession: String,
         val level: Int,
         val xp: Int,
-        val offers: List<Offer>
+        val offers: List<Offer>,
+        /**
+         * Whether there was a living villager to read this card off.
+         *
+         * False means the crew member could not be found anywhere on the server -- an unloaded chunk, or a
+         * dimension nobody is standing in -- so the card was built from the written copy the articles carry.
+         * That knows who they are but cannot know what they are selling: trades change every time somebody
+         * buys. The card says as much rather than showing an empty list, which would read as "no trades".
+         */
+        val aboard: Boolean
     )
 
     // endregion
@@ -128,8 +138,26 @@ object CrewManifest {
         val key = crewKey(player, station)
         val berths = if (key == null) emptyList() else CrewLedger.get(level.server).crew(key)
 
-        val present = if (ship == null) emptyMap() else {
-            ShipCrew.villagersAboard(level, ship).associateBy { it.uuid }
+        // Anyone this crew member could be read off, wherever they are standing. Deliberately not limited to
+        // the ship: a crew member on the quay is as readable as one on the deck, and looking only at the deck
+        // is what made somebody who had stepped ashore appear in the list as a nameless, rankless, faceless row
+        // -- the client draws a real head by rendering the real entity, so having their entity id is the whole
+        // difference between a face and a blank.
+        val present = HashMap<UUID, Villager>()
+        if (ship != null) for (crew in ShipCrew.villagersAboard(level, ship)) present[crew.uuid] = crew
+        for (berth in berths) {
+            if (berth.villager in present) continue
+            CrewMuster.findAnywhere(level.server, berth.villager)?.let { present[berth.villager] = it }
+        }
+
+        // Opening the manifest is the most reliable moment a whole crew is in hand at once, so it is where the
+        // written copies are brought up to date. A snapshot that is one look-at-the-articles old is close
+        // enough to be worth rebuilding from, and this costs nothing anybody can feel.
+        if (key != null) {
+            val ledger = CrewLedger.get(level.server)
+            for (berth in berths) {
+                present[berth.villager]?.let { ledger.updateSnapshot(berth.villager, CrewSnapshot.capture(it)) }
+            }
         }
 
         val rows = berths
@@ -153,16 +181,20 @@ object CrewManifest {
 
     private fun rowFor(berth: CrewLedger.Berth, villager: Villager?): Row {
         // NO_ENTITY rather than a real id: the screen draws its head icon by rendering the entity, and asks
-        // the client for it by id. There is nothing to render for somebody who is not here, and the screen's
-        // own skin-composite fallback covers it.
+        // the client for it by id. There is nothing here to render for somebody who is not here.
+        //
+        // What they ARE is still known, though, because the written copy carries it -- so an absent crew member
+        // is listed with their trade and their rank rather than as a blank line. A row that said nothing but a
+        // name was indistinguishable from a broken one, which is exactly how it read.
         if (villager == null) {
+            val papers = CrewSnapshot.papers(berth.snapshot)
             return Row(
                 slot = berth.slot,
                 villager = berth.villager,
                 entityId = NO_ENTITY,
-                profession = NO_PROFESSION,
-                villagerType = DEFAULT_TYPE,
-                level = 0,
+                profession = papers?.profession ?: NO_PROFESSION,
+                villagerType = papers?.type ?: DEFAULT_TYPE,
+                level = papers?.level ?: 0,
                 name = berth.name
             )
         }
@@ -187,7 +219,26 @@ object CrewManifest {
      * same thing right-clicking them does, and harmless, but it is a side effect and worth knowing.
      */
     fun detailFor(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID): Detail? {
-        val crew = crewMember(level, player, station, villager) ?: return null
+        val berth = berthOf(level, player, station, villager) ?: return null
+        val crew = CrewMuster.findAnywhere(level.server, villager)
+
+        // Nobody to ask: answer from the articles instead of not answering at all. Silence here left the card
+        // showing "Reading the articles..." for as long as it was open, which is what a crew member who had
+        // died or walked ashore looked like -- a row that would not open, could not be renamed, and showed no
+        // rank. It was one missing answer wearing three costumes.
+        if (crew == null) {
+            val papers = CrewSnapshot.papers(berth.snapshot)
+            return Detail(
+                villager = villager,
+                name = berth.name,
+                profession = papers?.profession ?: NO_PROFESSION,
+                level = papers?.level ?: 0,
+                xp = papers?.xp ?: 0,
+                offers = emptyList(),
+                aboard = false
+            )
+        }
+
         val data = crew.villagerData
         return Detail(
             villager = villager,
@@ -195,7 +246,8 @@ object CrewManifest {
             profession = keyOf(data.profession(), NO_PROFESSION),
             level = data.level(),
             xp = crew.villagerXp,
-            offers = crew.offers.map { offerOf(it) }
+            offers = crew.offers.map { offerOf(it) },
+            aboard = true
         )
     }
 
@@ -224,22 +276,52 @@ object CrewManifest {
         level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID, raw: String
     ): Boolean {
         val ledger = CrewLedger.get(level.server)
-        val crew = crewMember(level, player, station, villager) ?: return false
+        berthOf(level, player, station, villager) ?: return false
         val clean = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
 
-        if (clean.isEmpty()) {
-            crew.setCustomName(null)
-            CrewNames.applyDefault(crew, ledger.slotOf(villager))
-        } else {
-            crew.setCustomName(Component.literal(clean))
+        // Renaming used to require the crew member to be standing here, which made a name something you could
+        // only change while looking at them -- and left an ashore crew member's row permanently unrenamable.
+        // The articles are the authority on what somebody is called, so the ledger is always written; the
+        // entity is brought into line if it can be reached, and by `CrewMuster.answerTo` if it cannot.
+        val crew = CrewMuster.findAnywhere(level.server, villager)
+        if (crew != null) {
+            if (clean.isEmpty()) {
+                crew.setCustomName(null)
+                CrewNames.applyDefault(crew, ledger.slotOf(villager))
+            } else {
+                crew.setCustomName(Component.literal(clean))
+            }
+            CrewSnapshot.capture(crew)?.let { ledger.updateSnapshot(villager, it) }
         }
-        // The ledger keeps its own copy so the manifest can still name them once they are ashore, so both have
-        // to move together -- read back off the entity rather than from `clean`, which is blank in the reset
+        // Read back off the entity where there is one, rather than from `clean`, which is blank in the reset
         // case and would file them under no name at all.
-        ledger.renameMember(villager, CrewNames.displayName(crew))
+        ledger.renameMember(
+            villager,
+            if (crew != null) CrewNames.displayName(crew)
+            else clean.ifEmpty { CrewNames.defaultFor(ledger.slotOf(villager)) }
+        )
         // SynchedEntityData carries DATA_CUSTOM_NAME to every tracking client on its own, so there is nothing
         // to push here beyond the manifest the caller refreshes.
         return true
+    }
+
+    /**
+     * Discharge one crew member from the articles, whether or not they are here.
+     *
+     * The manifest needs this because the world can take a crew member away in ways nobody chose: a berth held
+     * by somebody who has died, or who is standing in a chunk that no longer exists, is a berth that could not
+     * otherwise be freed -- paying somebody off is a gesture aimed at a villager, and there is no villager to
+     * aim at. So the button works off the articles alone.
+     *
+     * Their default name is taken back if they can be reached, exactly as the crew key does it, so a paid-off
+     * villager stops looking like crew. A name the player chose is theirs and stays.
+     */
+    fun dismiss(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID): String? {
+        val berth = berthOf(level, player, station, villager) ?: return null
+        val ledger = CrewLedger.get(level.server)
+        CrewMuster.findAnywhere(level.server, villager)?.let { CrewNames.clearDefault(it, berth.slot) }
+        ledger.payOff(villager)
+        return berth.name
     }
 
     // endregion
@@ -264,6 +346,15 @@ object CrewManifest {
     fun requestRename(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, raw: String) {
         val station = stationAt(level, player, helm) ?: return
         if (!rename(level, player, station, villager, raw)) return
+        sender(player, build(level, player, station))
+    }
+
+    /** Discharge one crew member and hand back a manifest without them. */
+    fun requestDismiss(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID) {
+        val station = stationAt(level, player, helm) ?: return
+        val name = dismiss(level, player, station, villager) ?: return
+        val crewName = station.helmName?.string ?: "the articles"
+        PathMessages.send(player, "Paid off $name from $crewName.", PathMessages.Kind.GOOD)
         sender(player, build(level, player, station))
     }
 
@@ -297,19 +388,20 @@ object CrewManifest {
     }
 
     /**
-     * [villager] if they are on the crew [station] names for [player] AND standing on the ship.
+     * [villager]'s berth if they are on the crew [station] names for [player], or null.
      *
-     * Membership is the ledger's answer; being aboard is a second, separate condition, and both are required
-     * because everything this gates -- reading trades, renaming -- needs the live entity. A crew member who is
-     * ashore is legitimately on the articles and legitimately not answerable here.
+     * The one authorisation check every card action shares, and deliberately the ledger's alone. Being aboard
+     * used to be required as well, on the reasoning that reading trades and renaming both need the live entity
+     * -- but that made every action on the card fail together the moment a crew member stepped ashore, when
+     * what was wanted was for each to do as much as it honestly can.
      */
-    private fun crewMember(
+    private fun berthOf(
         level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID
-    ): Villager? {
+    ): CrewLedger.Berth? {
         val key = crewKey(player, station) ?: return null
-        if (CrewLedger.get(level.server).crewOf(villager) != key) return null
-        val ship = CrewStations.shipOf(level, station) ?: return null
-        return ShipCrew.villagersAboard(level, ship).firstOrNull { it.uuid == villager }
+        val ledger = CrewLedger.get(level.server)
+        if (ledger.crewOf(villager) != key) return null
+        return ledger.crew(key).firstOrNull { it.villager == villager }
     }
 
     private fun <T : Any> keyOf(holder: Holder<T>, fallback: String): String =

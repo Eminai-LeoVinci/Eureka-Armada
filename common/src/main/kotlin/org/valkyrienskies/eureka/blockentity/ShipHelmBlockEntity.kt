@@ -57,6 +57,11 @@ import org.valkyrienskies.eureka.block.EngineBlock
 import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.command.AssemblerPreferences
+import org.valkyrienskies.eureka.crew.CrewData
+import org.valkyrienskies.eureka.crew.CrewMuster
+import org.valkyrienskies.eureka.crew.HelmNames
+import org.valkyrienskies.eureka.follow.ShipCrew
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.crew.CrewNameGenerator
 import org.valkyrienskies.eureka.crew.CrewRoster
 import org.valkyrienskies.eureka.crew.CrewTickets
@@ -914,6 +919,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         val keepNameAtAssembly = keepName
         val rememberedAtAssembly = rememberedShipName
 
+        // The crew's name and the wheel's wood, read here for exactly the same reason: mustering runs in the
+        // deferred branch below, by which point this block entity has been blanked by its own relocation.
+        val crewNameAtAssembly = helmName?.string
+        val variantAtAssembly = HelmNames.variantOf(blockState)
+
         // Assembly places blocks straight into the shipyard without firing onPlace, so the
         // counters BalloonBlock/FloaterBlock/AnchorBlock/ShipHelmBlock maintain via onPlace
         // would all stay zero on a freshly assembled ship -- leaving it with no buoyancy.
@@ -1098,6 +1108,16 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                     }
                 }
             }
+
+            // Bring the crew filed under this wheel aboard. Deferred with everything else here because the
+            // deck has to exist to stand on, and fed entirely from values read before the assembly, because
+            // the wheel this ran from no longer holds them.
+            if (crewNameAtAssembly != null && player is ServerPlayer) {
+                CrewMuster.muster(
+                    level, player, loadedShip,
+                    crewNameAtAssembly, variantAtAssembly, CrewData.slots(player), crewStation
+                )
+            }
         }
 
         val loaded = level.shipObjectWorld.loadedShips.getById(shipId)
@@ -1168,6 +1188,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // rather than on every waiting tick.
         rememberShipName(ship.slug)
 
+        // Everything the crew stand-down below needs, read while the ship still exists and while this block
+        // entity is still the one holding the articles. The unfill relocates the wheel back into the world,
+        // which resets THIS object exactly as an assembly does -- see the top of `assemble`.
+        val crewName = helmName?.string
+        val crewVariant = HelmNames.variantOf(blockState)
+        val sailors = if (crewName == null) emptyList() else ShipCrew.aboard(level as ServerLevel, ship)
+
         val inWorld = ship.shipToWorld.transformPosition(this.blockPos.toJOMLD())
 
         // Fall-through hold through the teardown: the shipyard collision vanishes for a split second before the
@@ -1200,6 +1227,31 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
         shouldDisassembleWhenPossible = false
+
+        // Take the crew off the deck and into the articles, now that there is definitely no deck. Deliberately
+        // AFTER the unfill rather than before it: the unfill can decline (a hull that will not fit under the
+        // world's height limit is left assembled), and a crew stood down for a disassembly that then did not
+        // happen would be villagers vanishing off a ship that is still floating.
+        //
+        // The box is the one captured above, because the ship is gone by now and cannot be asked where it was.
+        // The crew have not moved -- they are world-space entities standing where the deck used to be, which is
+        // where its blocks now are.
+        //
+        // Unlike mustering, this is nobody's action in particular: disassembly has no player behind it, so
+        // every crew filed under this wheel is stood down, whoever signed them on.
+        if (crewName != null) {
+            val stood = CrewMuster.standDown(serverLevel, holdAABB, crewName, crewVariant)
+            if (stood > 0) {
+                val who = if (stood == 1) "crew member is" else "crew are"
+                for (sailor in sailors) {
+                    PathMessages.send(
+                        sailor,
+                        "$stood $who back on the articles. They muster when $crewName sails again.",
+                        PathMessages.Kind.GOOD
+                    )
+                }
+            }
+        }
     }
 
     fun align() {
