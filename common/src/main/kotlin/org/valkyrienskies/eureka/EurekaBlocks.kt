@@ -232,7 +232,11 @@ object EurekaBlocks {
         BLOCKS.forEach {
             // The wheel block is a render-only virtual block; it must not have an item.
             if (it.name == "ship_helm_wheel") return@forEach
-            items.register(it.name) { BlockItem(it.get(), itemProps()) }
+            // useBlockDescriptionPrefix: 1.21.11 stopped giving BlockItems the block's translation key for
+            // free -- Item.Properties now carries the choice, and it defaults to the item prefix. Every name
+            // in this mod is written as block.vs_eureka.*, so without this every item asks for a key no lang
+            // file defines and renders as the raw id, in hand and in tooltips alike.
+            items.register(it.name) { BlockItem(it.get(), itemProps().useBlockDescriptionPrefix()) }
         }
     }
 }
