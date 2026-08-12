@@ -41,6 +41,7 @@ import org.valkyrienskies.eureka.path.PathCommand;
 import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
+import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
 import org.valkyrienskies.eureka.registry.CreativeTabs;
@@ -66,6 +67,9 @@ public class EurekaModFabric implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             ShipWeightCommand.INSTANCE.register(dispatcher);
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
+            // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
+            // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
+            ShipTemplateCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
             ArmadaCommand.INSTANCE.register(dispatcher);
             // "/armada route list|info|rename|delete|stop" -- merges onto the same "armada" literal.
