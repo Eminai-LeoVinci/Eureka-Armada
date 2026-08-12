@@ -493,6 +493,29 @@ downstream of that same line of work.
 
 ---
 
+## 6b. Deferred — known, understood, not urgent
+
+**Duplicate ship names are still possible.** Nothing enforces uniqueness. `/vs rename` will
+happily give two ships the same name, and a helm that legitimately remembers a player-given name
+will apply it to a second hull while the first is still afloat. Either case makes *both* ships
+unreachable by name: `ShipArgument.getShip` returns a ship only when exactly one matches and
+otherwise throws `ERROR_MANY_SHIP_FOUND`, so teleport, rename and everything else that takes a
+ship argument stop working until you dig out with `@v[id=...]`.
+
+Agreed shape when it gets built: one shared "is this name taken" check against `allShips`, wired
+into three places — the Keep Name re-apply at assembly, the helm's rename box, and `/vs rename`
+(which lives in VS2, so it needs a mixin). On a clash, refuse and tell the player the name is in
+use rather than silently renaming.
+
+Note this is *separate* from the template name strip, which is already shipped and prevents the
+common case: a captured template carries no name, so copies never collide.
+
+**Armour stands glide about a block on disassembly.** Cosmetic. Armour stands go through the
+rider pass, which calls `teleportTo` -- an instant server-side snap -- but clients interpolate
+position for non-player entities, so a correction renders as a slide. The distance is the
+rotation snap: disassembly rounds the hull's heading to the nearest 90 degrees and moves riders
+by the delta, so a harder alignment swing means a longer glide. Nothing is lost or duplicated.
+
 ## 7. Open questions
 
 1. **A pirate ship can self-disassemble with a player standing on it.** The abandon sequence is

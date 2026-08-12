@@ -11,6 +11,9 @@ import net.minecraft.core.BlockPos
 import net.minecraft.network.chat.Component
 import net.minecraft.server.permissions.Permissions
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.template.BillOfMaterials
+import org.valkyrienskies.eureka.template.PlacementCheck
+import org.valkyrienskies.eureka.template.ShipManifest
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
@@ -32,6 +35,9 @@ import org.valkyrienskies.mod.common.command.arguments.ShipArgument
  */
 object ShipTemplateCommand {
 
+    /** Chat cannot hold a full manifest for a real ship; the rest is the blueprint screen's problem. */
+    private const val MATERIAL_ROWS = 12
+
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
             literal("vs").then(
@@ -47,6 +53,16 @@ object ShipTemplateCommand {
                     .then(
                         literal("load").then(
                             argument("name", StringArgumentType.word()).executes { load(it) }
+                        )
+                    )
+                    .then(
+                        literal("info").then(
+                            argument("name", StringArgumentType.word()).executes { info(it) }
+                        )
+                    )
+                    .then(
+                        literal("check").then(
+                            argument("name", StringArgumentType.word()).executes { check(it) }
                         )
                     )
                     .then(literal("list").executes { list(it) })
@@ -104,6 +120,82 @@ object ShipTemplateCommand {
                 1
             }
             else -> 0
+        }
+    }
+
+    /** The bill of materials, which is what a blueprint page will show a player. */
+    private fun info(ctx: CommandContext<CommandSourceStack>): Int {
+        val name = StringArgumentType.getString(ctx, "name")
+        val template = ShipTemplate.find(ctx.source.level, name)
+            ?: run {
+                ctx.source.sendFailure(Component.literal("No template named '$name'."))
+                return 0
+            }
+
+        val manifest = ShipManifest.of(template)
+        val census = manifest.census
+        val msg = Component.literal(
+            "$name -- ${manifest.width}x${manifest.height}x${manifest.length}, " +
+                "${"%,d".format(manifest.blocks)} blocks, ${"%,d".format(manifest.items)} items"
+        ).withStyle(ChatFormatting.WHITE)
+        msg.append(
+            Component.literal(
+                "\nWeighs ${"%,.0f".format(manifest.mass)} kg -- " +
+                    "${"%,d".format(manifest.floatersToRideDry)} floaters to ride dry, " +
+                    "${"%,d".format(manifest.balloonsToAscend)} balloons to ascend"
+            ).withStyle(ChatFormatting.YELLOW)
+        )
+
+        // Heaviest first: the top of a shopping list is the part that decides whether you can afford it.
+        census.entries.sortedByDescending { it.value }.take(MATERIAL_ROWS).forEach { (item, count) ->
+            msg.append(Component.literal("\n  ${"%,d".format(count)} x ").withStyle(ChatFormatting.GRAY))
+                .append(Component.translatable(item.descriptionId).withStyle(ChatFormatting.AQUA))
+        }
+        if (census.size > MATERIAL_ROWS) {
+            msg.append(
+                Component.literal("\n  ...and ${census.size - MATERIAL_ROWS} more kinds")
+                    .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
+            )
+        }
+
+        ctx.source.sendSuccess({ msg }, false)
+        return 1
+    }
+
+    /** Would it fit here? Writes nothing -- this is the test the bottle runs before it commits. */
+    private fun check(ctx: CommandContext<CommandSourceStack>): Int {
+        val name = StringArgumentType.getString(ctx, "name")
+        val template = ShipTemplate.find(ctx.source.level, name)
+            ?: run {
+                ctx.source.sendFailure(Component.literal("No template named '$name'."))
+                return 0
+            }
+
+        val at = BlockPos.containing(ctx.source.position)
+        return when (val result = PlacementCheck.test(ctx.source.level, template, at)) {
+            is PlacementCheck.Fits -> {
+                ctx.source.sendSuccess({
+                    Component.literal("'$name' fits here.").withStyle(ChatFormatting.GREEN)
+                }, false)
+                1
+            }
+            is PlacementCheck.Blocked -> {
+                ctx.source.sendFailure(
+                    Component.literal(
+                        "'$name' does not fit -- ${result.by} at " +
+                            "${result.at.x}, ${result.at.y}, ${result.at.z} is in the way."
+                    )
+                )
+                0
+            }
+            is PlacementCheck.OutOfWorld -> {
+                ctx.source.sendFailure(
+                    Component.literal(
+                        "'$name' does not fit -- it would reach y=${result.at.y}, outside the world."
+                    )
+                )
+                0
+            }
         }
     }
 

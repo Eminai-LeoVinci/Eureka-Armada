@@ -292,9 +292,7 @@ object ShipTemplate {
      */
     fun place(level: ServerLevel, name: String, at: BlockPos): Outcome {
         val id = idFor(name) ?: return Failed("'$name' is not a usable template name.")
-        val found = level.server.structureManager.get(id)
-        if (found.isEmpty) return Failed("No template named '$name'.")
-        val template = found.get()
+        val template = find(level, name) ?: return Failed("No template named '$name'.")
 
         // Explicit rather than relying on the default: entities are half the point of a captured ship.
         val settings = StructurePlaceSettings().setIgnoreEntities(false)
@@ -304,6 +302,17 @@ object ShipTemplate {
 
         val size = template.size
         return Placed(id, at, BlockPos(size.x, size.y, size.z))
+    }
+
+    /**
+     * Load a saved template by name, or null if there is none.
+     *
+     * Resolves through `StructureTemplateManager.get`, which reads from a datapack *or* from `<world>/generated`
+     * -- so a hull shipped inside the jar and one a player captured come back through the same call.
+     */
+    fun find(level: ServerLevel, name: String): StructureTemplate? {
+        val id = idFor(name) ?: return null
+        return level.server.structureManager.get(id).orElse(null)
     }
 
     /** Every template this mod can see, ours only -- the manager also lists vanilla's and other mods'. */
