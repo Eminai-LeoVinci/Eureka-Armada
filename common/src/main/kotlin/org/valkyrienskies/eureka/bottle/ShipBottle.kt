@@ -120,6 +120,39 @@ object ShipBottle {
     }
 
     /**
+     * Let the ship out onto open water, keel at the waterline and centred on where the player aimed.
+     *
+     * The surface is found by walking up from [water] until the fluid stops, never assumed: lakes sit at
+     * whatever height the terrain gave them, and a hardcoded sea level would strand a ship in the air over one
+     * and bury it in another. Terrain Diffusion makes that worse, not better.
+     *
+     * Nothing here worries about the ship assembling the sea along with itself. The hull that gets assembled is
+     * the exact block list the template describes, so water is not on it -- the keel can rest in as much of it
+     * as it likes.
+     */
+    fun releaseOnWater(level: ServerLevel, player: ServerPlayer, stack: ItemStack, water: BlockPos): Boolean {
+        val templateName = templateOf(stack) ?: return false
+        val template = ShipTemplate.find(level, templateName) ?: run {
+            PathMessages.send(player, "That bottle is empty -- its ship is missing.", PathMessages.Kind.ERROR)
+            return false
+        }
+        val size = template.size
+
+        var surface = water.y
+        val probe = BlockPos.MutableBlockPos()
+        while (surface < level.maxY) {
+            probe.set(water.x, surface + 1, water.z)
+            if (level.getFluidState(probe).isEmpty) break
+            surface++
+        }
+
+        // Centred on the aim rather than cornered on it: a ship set down at sea should appear where the player
+        // was looking, not offset by its own beam.
+        val corner = BlockPos(water.x - size.x / 2, surface, water.z - size.z / 2)
+        return release(level, player, stack, corner)
+    }
+
+    /**
      * Let the ship in [stack] out, with its keel resting at [corner].
      *
      * Refuses before writing anything if the hull will not fit -- the bottle stays in hand and the player keeps
@@ -148,14 +181,6 @@ object ShipBottle {
             is PlacementCheck.Fits -> Unit
         }
 
-        if (ShipTemplate.place(level, templateName, corner) !is ShipTemplate.Placed) {
-            PathMessages.send(player, "The ship would not come out of the bottle.", PathMessages.Kind.ERROR)
-            return false
-        }
-
-        // Loose blocks are not a ship. Hand them to the wheel's own assemble, which is what sets up control,
-        // counts floaters, arms the world-freeze and musters the crew -- reimplementing any of that here would
-        // be a second copy destined to drift from the first.
         // Hand over the exact blocks rather than letting the wheel rediscover them. A released hull is usually
         // resting ON something, and the flood-fill cannot tell a deck from the roof it is sitting on -- stripped
         // logs and smooth sandstone are not terrain-tagged, so it walks into the building and the assembly dies
@@ -168,6 +193,23 @@ object ShipBottle {
             }
         }
 
+        // Remember the sea we are about to build into. Assembly relocates the hull to the shipyard and leaves
+        // air behind it, with neighbour updates suppressed for speed -- so nothing tells the surrounding water
+        // to flow back, and a ship launched into the ocean leaves a ship-shaped hole in it.
+        val flooded = HashMap<BlockPos, net.minecraft.world.level.block.state.BlockState>()
+        for (pos in placed) {
+            val existing = level.getBlockState(pos)
+            if (!existing.fluidState.isEmpty) flooded[pos] = existing
+        }
+
+        if (ShipTemplate.place(level, templateName, corner) !is ShipTemplate.Placed) {
+            PathMessages.send(player, "The ship would not come out of the bottle.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        // Loose blocks are not a ship. Hand them to the wheel's own assemble, which is what sets up control,
+        // counts floaters, arms the world-freeze and musters the crew -- reimplementing any of that here would
+        // be a second copy destined to drift from the first.
         val helm = helmIn(level, template, corner)
         val helmEntity = helm?.let { level.getBlockEntity(it) as? ShipHelmBlockEntity }
         val shipName = shipNameOf(stack) ?: "The ship"
@@ -184,9 +226,16 @@ object ShipBottle {
             PathMessages.send(player, "$shipName is afloat again.", PathMessages.Kind.GOOD)
         }
 
+        // Put the sea back. The hull has moved to the shipyard by now, so every one of these is air again, and
+        // UPDATE_ALL is deliberate -- these need the neighbour updates the relocation suppressed, or the water
+        // sits in a grid of disconnected source blocks instead of settling.
+        for ((pos, fluid) in flooded) {
+            if (level.getBlockState(pos).isAir) level.setBlock(pos, fluid, Block.UPDATE_ALL)
+        }
+
+        // One bottle, one ship. The empty does not come back: a reusable bottle would make a ship freely
+        // portable forever, and the whole point of a bottle is that using it spends something.
         stack.shrink(1)
-        val empty = ItemStack(EurekaItems.SHIP_BOTTLE.get())
-        if (!player.inventory.add(empty)) player.drop(empty, false)
 
         ShipTemplate.forget(level, templateName)
         return true

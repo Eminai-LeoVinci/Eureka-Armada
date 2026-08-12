@@ -4,11 +4,17 @@ import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import net.minecraft.world.entity.player.Player
+import net.minecraft.core.BlockPos
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.TooltipFlag
 import net.minecraft.world.item.context.UseOnContext
+import net.minecraft.world.level.ClipContext
+import net.minecraft.world.level.Level
+import net.minecraft.world.phys.HitResult
 import net.minecraft.world.item.component.TooltipDisplay
 import org.valkyrienskies.eureka.bottle.ShipBottle
 import java.util.function.Consumer
@@ -23,20 +29,39 @@ import java.util.function.Consumer
  */
 class BottledShipItem(properties: Properties) : Item(properties) {
 
-    override fun useOn(context: UseOnContext): InteractionResult {
-        val level = context.level as? ServerLevel ?: return InteractionResult.SUCCESS
-        val player = context.player as? ServerPlayer ?: return InteractionResult.PASS
-        val stack = context.itemInHand
+    // The ship stands ON the clicked face, not inside the block that was clicked.
+    override fun useOn(context: UseOnContext): InteractionResult =
+        letOut(context.level, context.player, context.hand, context.clickedPos.relative(context.clickedFace))
 
-        // The ship stands ON the clicked face, not inside the block that was clicked.
-        val corner = context.clickedPos.relative(context.clickedFace)
-        return if (ShipBottle.release(level, player, stack, corner)) {
-            InteractionResult.SUCCESS
-        } else {
-            // Refusals already explained themselves in chat; consuming the click stops the arm-swing
-            // suggesting something happened.
-            InteractionResult.CONSUME
+    /**
+     * Reached when the click hit no block at all -- which is what aiming at open sea usually means, since water
+     * is invisible to the ordinary raycast and the seabed is often out of range.
+     */
+    override fun use(level: Level, player: Player, hand: InteractionHand): InteractionResult =
+        letOut(level, player, hand, null)
+
+    private fun letOut(level: Level, player: Player?, hand: InteractionHand, onLand: BlockPos?): InteractionResult {
+        if (level.isClientSide) return InteractionResult.SUCCESS
+        val serverLevel = level as? ServerLevel ?: return InteractionResult.PASS
+        val serverPlayer = player as? ServerPlayer ?: return InteractionResult.PASS
+        val stack = serverPlayer.getItemInHand(hand)
+
+        // Water wins wherever it is in the way. The ordinary raycast passes straight through it, so a click
+        // aimed at the sea arrives here either as a hit on the seabed far below or as no hit at all -- and
+        // dropping a ship on the seabed is not what the player asked for. Re-casting with SOURCE_ONLY, the way
+        // buckets do, is what makes the surface clickable.
+        val wet = getPlayerPOVHitResult(level, serverPlayer, ClipContext.Fluid.SOURCE_ONLY)
+        val onWater = wet.type == HitResult.Type.BLOCK && !level.getFluidState(wet.blockPos).isEmpty
+
+        val released = when {
+            onWater -> ShipBottle.releaseOnWater(serverLevel, serverPlayer, stack, wet.blockPos)
+            onLand != null -> ShipBottle.release(serverLevel, serverPlayer, stack, onLand)
+            else -> return InteractionResult.PASS
         }
+
+        // Refusals already explained themselves in chat; consuming the click stops the arm-swing suggesting
+        // something happened.
+        return if (released) InteractionResult.SUCCESS else InteractionResult.CONSUME
     }
 
     override fun appendHoverText(

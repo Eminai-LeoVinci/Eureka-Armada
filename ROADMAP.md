@@ -144,9 +144,26 @@ Behaviour:
 - SHIFT+right-click to throw. On land: hovers where momentum stops, `PlacementCheck` runs, and
   either the ship assembles with its bottom keel centre at the hover point, or the bottle falls
   back retrievable with an "area too small" message.
-- On water: does not rise above the surface, idles with a fishing-bob, then after a few seconds
-  assembles **flush with the local water surface** — read the actual water level, never a
-  hardcoded y=64.
+- On water: assembles **flush with the local water surface** — the waterline is found by walking up
+  until the fluid stops, never assumed, because lakes sit wherever the terrain put them. Bobbing is
+  not built: a ship that floats bobs on its own.
+
+### The throw — revised sequence *(not yet built)*
+
+Capture is currently immediate on the sneak-right-click. The intended flow makes marking and taking
+two separate acts:
+
+1. Sneak + right-click a wheel with a Ship Bottle. The bottle is **marked** with the ship's name and
+   keeps its 45-degree sprite; a message in blue tells the player they can now throw it to take the
+   ship.
+2. Thrown, the bottle flies like an eye of ender **to the helm** — not to the hull's upper centre.
+   Aiming at the wheel is both cleaner to watch and the same landmark the player just clicked.
+3. It rises to about 5 blocks directly above the helm, and takes the ship there.
+4. The sprite changes to the bottled one, it hovers a further second, then free-falls for the player
+   to collect.
+
+The suck-into-the-bottle effect is deferred until every phase is complete — it is pure garnish and
+nothing depends on it.
 
 **The crew goes in the bottle with the ship.** Whoever was signed on via that helm musters back
 aboard when the ship is released and reassembles.
@@ -288,6 +305,16 @@ assigned to firefighting puts it out. The two features make each other worth hav
 rapidly if the server has not restricted it. Regardless of server settings, any fire on a ship
 burns only the block that was lit, and only if that block is flammable. It may be destroyed if
 left unattended, and it never propagates.
+
+**And it opens the Nether.** The same rule makes lava sailing a question of what you built from
+rather than a flat prohibition. Copper and iron do not burn, so a metal hull crosses a lava lake
+intact — at a cost in materials that is the price of the trip, and a real reason to build one. A
+wooden hull does not survive: fire takes the block it is on, consumes it, takes the next, and the
+ship is eaten keel-upward layer by layer without ever reaching the far shore.
+
+Nothing extra needs building for this. It falls out of "fire burns only what it is on" the moment
+lava is somewhere a ship can be — which the bottle already allows, since a released hull restores
+whatever fluid it displaced, lava included.
 
 This applies to **every** ignition source, not just incendiary rounds — flint and steel
 included. Otherwise a flint and steel becomes the cheap answer to any warship, and containing
