@@ -10,6 +10,8 @@ import net.minecraft.world.Clearable
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.phys.Vec3
+import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.block.ShipHelmBlock
@@ -44,25 +46,79 @@ object ShipBottle {
 
     private const val TEMPLATE_KEY = "vs_eureka:bottle_template"
     private const val SHIP_NAME_KEY = "vs_eureka:bottle_ship"
+    private const val MARKED_HELM_KEY = "vs_eureka:marked_helm"
 
     /** Templates written by a bottle are named for nothing else, so a player cannot collide with one by hand. */
     private fun templateNameFor(id: UUID) = "bottled/${id.toString().replace("-", "")}"
 
     /**
-     * Take [ship] into the empty bottle [stack] is holding.
+     * Mark [stack] for the ship this wheel steers, without taking it yet.
      *
-     * Order matters and is not negotiable: the template must be safely on disk before the hull is destroyed.
-     * A capture that fails after disassembly would delete somebody's ship in exchange for an empty bottle.
+     * Marking and taking are two acts on purpose. A bottle that swallowed a ship the instant you touched its
+     * wheel would give the player nothing to watch and no moment to change their mind; marked, it becomes a
+     * thing you then *throw*, and the throw is where the ship goes.
      */
-    fun fill(level: ServerLevel, player: ServerPlayer, helm: BlockPos, stack: ItemStack): Boolean {
-        val helmEntity = level.getBlockEntity(helm) as? ShipHelmBlockEntity ?: return false
+    fun mark(level: ServerLevel, player: ServerPlayer, helm: BlockPos, stack: ItemStack): Boolean {
+        val ship = level.getLoadedShipManagingPos(helm) as? LoadedServerShip ?: run {
+            PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
+            return false
+        }
+        val shipName = ship.slug ?: "unnamed ship"
+
+        val tag = CompoundTag()
+        tag.putString(SHIP_NAME_KEY, shipName)
+        tag.putLong(MARKED_HELM_KEY, helm.asLong())
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+
+        // GOOD, not PROMPT: the prompt channel is a single slot meant to be re-sent every tick while a key is
+        // held, and it expires a quarter second after its last refresh. This is said once and needs to survive
+        // long enough to walk away on.
+        PathMessages.send(player, "Marked '$shipName' -- throw the bottle to take it.", PathMessages.Kind.GOOD)
+        return true
+    }
+
+    /**
+     * Where a marked wheel is right now, in world space, or null if its ship is not loaded.
+     *
+     * Everything else here works in the wheel's own coordinates, because that is what a click on a ship block
+     * arrives as and what every ship lookup wants. A thrown bottle is the one thing that needs the other space:
+     * the wheel of an assembled ship sits in the shipyard, millions of blocks from where the hull is drawn, and
+     * a bottle aimed at the raw position would set off across the world and never arrive.
+     *
+     * Resolved fresh on every tick of the flight rather than once at the throw, which is also what lets the
+     * bottle run down a ship that is still under sail.
+     */
+    fun helmWorldPos(level: ServerLevel, helm: BlockPos): Vec3? {
+        val ship = level.getLoadedShipManagingPos(helm) ?: return null
+        val centre = ship.shipToWorld.transformPosition(Vector3d(helm.x + 0.5, helm.y + 0.5, helm.z + 0.5))
+        return Vec3(centre.x, centre.y, centre.z)
+    }
+
+    /** The wheel a marked bottle is pointed at, or null on an unmarked one. */
+    fun markedHelm(stack: ItemStack): BlockPos? {
+        val data = stack.get(DataComponents.CUSTOM_DATA) ?: return null
+        val tag = data.copyTag()
+        if (tag.getString(TEMPLATE_KEY).isPresent) return null // already full, not a mark
+        return tag.getLong(MARKED_HELM_KEY).orElse(null)?.let { BlockPos.of(it) }
+    }
+
+    /**
+     * Take the ship this wheel steers and hand back the bottle holding it, or null if it could not be taken.
+     *
+     * @return the Bottled Ship stack. The caller decides where it goes -- a thrown bottle drops it, and
+     * anything taking a ship by hand would put it straight in the inventory.
+     */
+    // Order is not negotiable: the template must be safely on disk before the hull is destroyed. A capture
+    // that failed after deletion would trade somebody's ship for an empty bottle.
+    fun take(level: ServerLevel, player: ServerPlayer, helm: BlockPos): ItemStack? {
+        val helmEntity = level.getBlockEntity(helm) as? ShipHelmBlockEntity ?: return null
 
         // A wheel sitting in the world steers nothing -- only an assembled hull can be bottled. Resolved here
         // rather than at the call site because VS2's ship lookups are Kotlin extensions that only resolve in
         // the common module.
         val ship = level.getLoadedShipManagingPos(helm) as? LoadedServerShip ?: run {
             PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
-            return false
+            return null
         }
         val shipName = ship.slug ?: "unnamed ship"
 
@@ -70,10 +126,10 @@ object ShipBottle {
         when (val outcome = ShipTemplate.capture(level, ship, templateName, keepShipName = true)) {
             is ShipTemplate.Failed -> {
                 PathMessages.send(player, outcome.message, PathMessages.Kind.ERROR)
-                return false
+                return null
             }
             is ShipTemplate.Captured -> Unit
-            else -> return false
+            else -> return null
         }
 
         // Empty every container before the hull goes, or their contents rain onto the ground as items -- the
@@ -112,11 +168,8 @@ object ShipBottle {
         tag.putString(SHIP_NAME_KEY, shipName)
         bottled.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
 
-        stack.shrink(1)
-        if (!player.inventory.add(bottled)) player.drop(bottled, false)
-
         PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD)
-        return true
+        return bottled
     }
 
     /**
@@ -150,6 +203,22 @@ object ShipBottle {
         // was looking, not offset by its own beam.
         val corner = BlockPos(water.x - size.x / 2, surface, water.z - size.z / 2)
         return release(level, player, stack, corner)
+    }
+
+    /**
+     * Let the ship out onto dry land, keel resting on [ground] and centred on it.
+     *
+     * Centred rather than cornered because the bottle was *thrown* there: a ship should appear around the spot
+     * it landed on, not hanging off one corner of it.
+     */
+    fun releaseOnGround(level: ServerLevel, player: ServerPlayer, stack: ItemStack, ground: BlockPos): Boolean {
+        val templateName = templateOf(stack) ?: return false
+        val template = ShipTemplate.find(level, templateName) ?: run {
+            PathMessages.send(player, "That bottle is empty -- its ship is missing.", PathMessages.Kind.ERROR)
+            return false
+        }
+        val size = template.size
+        return release(level, player, stack, BlockPos(ground.x - size.x / 2, ground.y, ground.z - size.z / 2))
     }
 
     /**
@@ -266,4 +335,14 @@ object ShipBottle {
 
     /** The block flag placement uses, kept here so release and the debug command cannot drift apart. */
     const val PLACE_FLAGS = Block.UPDATE_CLIENTS
+
+    /**
+     * How far a marked ship may be when the bottle is thrown.
+     *
+     * Checked at the throw and nowhere else. Once a bottle is in the air its chase accelerates without limit up
+     * to [ThrownShipBottle.MAX_CHASE], so the range is not a thing the ship can escape by running -- it is a
+     * statement about how far a captain can reach, and it wants to be answered before the bottle leaves the
+     * hand rather than after it has flown off over the horizon.
+     */
+    const val CAPTURE_RANGE = 100.0
 }

@@ -9,7 +9,7 @@ import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.bottle.ShipBottle
 
 /**
- * Sneak and right-click a ship's wheel with an empty Ship Bottle to take the ship.
+ * Sneak and right-click a ship's wheel with an empty Ship Bottle to mark it for capture.
  *
  * Crouching is what separates this from opening the helm menu, which is a standing right-click. It shares that
  * gesture with the Heart of the Sea offering, so this handler is registered FIRST and claims the click when the
@@ -34,10 +34,10 @@ object BottleRegistrationsFabric {
             val serverLevel = level as? ServerLevel ?: return@register InteractionResult.PASS
             val serverPlayer = player as? ServerPlayer ?: return@register InteractionResult.PASS
 
-            // Whether this wheel is part of an assembled ship, and everything that follows, is ShipBottle's
-            // business. VS2's ship lookups are Kotlin extensions that only resolve in the common module, so the
-            // decision lives there and this stays a hook.
-            ShipBottle.fill(serverLevel, serverPlayer, pos, stack)
+            // Marks the wheel; the ship does not move yet. Throwing the bottle is what takes it -- see
+            // ShipBottleItem. Whether this wheel steers an assembled ship at all is ShipBottle's business, since
+            // VS2's ship lookups are Kotlin extensions that only resolve in the common module.
+            ShipBottle.mark(serverLevel, serverPlayer, pos, stack)
 
             // Claimed either way: a refusal has already explained itself in chat, and passing the click on
             // would open the helm menu on top of the message.

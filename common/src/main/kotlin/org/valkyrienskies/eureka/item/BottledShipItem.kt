@@ -4,64 +4,65 @@ import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
-import net.minecraft.world.entity.player.Player
-import net.minecraft.core.BlockPos
+import net.minecraft.sounds.SoundEvents
+import net.minecraft.sounds.SoundSource
 import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
+import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.TooltipFlag
-import net.minecraft.world.item.context.UseOnContext
-import net.minecraft.world.level.ClipContext
-import net.minecraft.world.level.Level
-import net.minecraft.world.phys.HitResult
 import net.minecraft.world.item.component.TooltipDisplay
+import net.minecraft.world.item.context.UseOnContext
+import net.minecraft.world.level.Level
+import org.valkyrienskies.eureka.EurekaEntities
 import org.valkyrienskies.eureka.bottle.ShipBottle
+import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import java.util.function.Consumer
 
 /**
  * A ship in a bottle.
  *
- * Right-clicking a block lets it out with its keel on the face that was clicked. Eventually the bottle will be
- * thrown and fly like an eye of ender, and this direct placement becomes the last step of that arc rather than
- * the whole interaction -- but the arc is presentation, and everything that can actually go wrong (no room, a
- * missing template, a hull that will not assemble) goes wrong here.
+ * Thrown, not placed. It arcs out about twenty blocks, falls, and lets its ship out wherever it comes to rest
+ * -- afloat if that was water, keel on the ground if it was not. Throwing rather than placing is what lets you
+ * launch a ship from a jetty into water you could never have reached at arm's length, which is most water.
+ *
+ * The flight is [ThrownShipBottle]; everything that can actually go wrong (no room, a missing template, a hull
+ * that will not assemble) goes wrong at the landing, and a refusal sends the bottle back to the thrower with
+ * the ship still inside it.
  */
 class BottledShipItem(properties: Properties) : Item(properties) {
 
-    // The ship stands ON the clicked face, not inside the block that was clicked.
+    // Both paths throw. useOn is overridden rather than left to fall through so that a click which happens to
+    // land on a nearby block throws exactly like a click at open sky, instead of doing nothing.
     override fun useOn(context: UseOnContext): InteractionResult =
-        letOut(context.level, context.player, context.hand, context.clickedPos.relative(context.clickedFace))
+        hurl(context.level, context.player, context.hand)
 
-    /**
-     * Reached when the click hit no block at all -- which is what aiming at open sea usually means, since water
-     * is invisible to the ordinary raycast and the seabed is often out of range.
-     */
     override fun use(level: Level, player: Player, hand: InteractionHand): InteractionResult =
-        letOut(level, player, hand, null)
+        hurl(level, player, hand)
 
-    private fun letOut(level: Level, player: Player?, hand: InteractionHand, onLand: BlockPos?): InteractionResult {
+    private fun hurl(level: Level, player: Player?, hand: InteractionHand): InteractionResult {
+        if (player == null) return InteractionResult.PASS
         if (level.isClientSide) return InteractionResult.SUCCESS
         val serverLevel = level as? ServerLevel ?: return InteractionResult.PASS
         val serverPlayer = player as? ServerPlayer ?: return InteractionResult.PASS
         val stack = serverPlayer.getItemInHand(hand)
 
-        // Water wins wherever it is in the way. The ordinary raycast passes straight through it, so a click
-        // aimed at the sea arrives here either as a hit on the seabed far below or as no hit at all -- and
-        // dropping a ship on the seabed is not what the player asked for. Re-casting with SOURCE_ONLY, the way
-        // buckets do, is what makes the surface clickable.
-        val wet = getPlayerPOVHitResult(level, serverPlayer, ClipContext.Fluid.SOURCE_ONLY)
-        val onWater = wet.type == HitResult.Type.BLOCK && !level.getFluidState(wet.blockPos).isEmpty
+        // No ship in it means no template on disk -- a bottle from another world, or one whose generated
+        // structure was cleared. Nothing to throw.
+        if (ShipBottle.templateOf(stack) == null) return InteractionResult.CONSUME
 
-        val released = when {
-            onWater -> ShipBottle.releaseOnWater(serverLevel, serverPlayer, stack, wet.blockPos)
-            onLand != null -> ShipBottle.release(serverLevel, serverPlayer, stack, onLand)
-            else -> return InteractionResult.PASS
-        }
+        val bottle = ThrownShipBottle(EurekaEntities.THROWN_BOTTLE.get(), serverLevel)
+        bottle.launch(serverPlayer, stack, null)
+        serverLevel.addFreshEntity(bottle)
 
-        // Refusals already explained themselves in chat; consuming the click stops the arm-swing suggesting
-        // something happened.
-        return if (released) InteractionResult.SUCCESS else InteractionResult.CONSUME
+        serverLevel.playSound(
+            null, serverPlayer.x, serverPlayer.y, serverPlayer.z,
+            SoundEvents.ENDER_EYE_LAUNCH, SoundSource.PLAYERS, 0.5f, 0.4f
+        )
+
+        stack.shrink(1)
+        return InteractionResult.SUCCESS
     }
 
     override fun appendHoverText(

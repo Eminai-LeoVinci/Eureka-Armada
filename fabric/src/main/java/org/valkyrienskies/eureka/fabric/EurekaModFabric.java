@@ -19,6 +19,8 @@ import net.fabricmc.fabric.api.resource.ResourcePackActivationType;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.ModContainer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
+import net.minecraft.client.renderer.entity.EntityRenderers;
+import net.minecraft.client.renderer.entity.ThrownItemRenderer;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -26,6 +28,7 @@ import net.minecraft.resources.Identifier;
 import org.valkyrienskies.eureka.EurekaBlockEntities;
 import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
+import org.valkyrienskies.eureka.EurekaEntities;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
@@ -156,6 +159,15 @@ public class EurekaModFabric implements ModInitializer {
             BlockEntityRenderers.register(
                 EurekaBlockEntities.INSTANCE.getSHIP_HELM().get(),
                 ShipHelmBlockEntityRenderer::new
+            );
+
+            // A thrown Ship Bottle draws as the item it is carrying, which ThrownShipBottle decides tick by
+            // tick -- the sprite swaps from empty to full at the instant the ship goes in, and that swap is the
+            // whole visual payoff. ThrownItemRenderer asks the entity for its stack every frame, so nothing
+            // else has to be wired for that to happen.
+            EntityRenderers.register(
+                EurekaEntities.INSTANCE.getTHROWN_BOTTLE().get(),
+                ThrownItemRenderer::new
             );
 
             // Top-center piloted-ship speed overlay, toggled by the helm menu's "Display Speed" checkbox.

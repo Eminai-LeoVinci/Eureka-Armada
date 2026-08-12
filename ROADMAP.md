@@ -131,52 +131,89 @@ proves capture **and** restore end to end.
 - **First standalone items in the mod.** `EurekaItems.kt` registers only auto-generated
   `BlockItem`s today; the unused `private infix fun Item.byName` helper is there for exactly
   this. `textures/item/` does not exist yet.
-- **First custom entity:** the thrown bottle, modelled on `EyeOfEnder`. `EurekaEntities.kt` is
-  an empty-but-working registry whose builder DSL is already written, and
-  `registerRenderers()` is never called from `EurekaModFabric.Client` — wire it.
+- **First custom entity:** the thrown bottle, modelled on `EyeOfEnder`. Registered through
+  `EurekaEntities.kt`'s builder DSL; its renderer is registered from `EurekaModFabric.Client`
+  next to the helm's rather than through the DSL's `registerRenderer`, because naming a
+  client-only renderer in `EurekaEntities` drags it into an initialiser the dedicated server runs.
 
-Behaviour:
+**Status: complete.** Both items exist, both are thrown, and the round trip works in game.
 
-- `ship_bottle` (empty) → SHIFT+left-click a helm to mark that ship.
-- Throw → flies and hovers exactly as an eye of ender does → at the hover point the ship
-  aligns to world, disassembles, and vanishes → bottle drops, retrievable.
-- Now `bottled_ship`; hovering shows the contained ship's name.
-- SHIFT+right-click to throw. On land: hovers where momentum stops, `PlacementCheck` runs, and
-  either the ship assembles with its bottom keel centre at the hover point, or the bottle falls
-  back retrievable with an "area too small" message.
-- On water: assembles **flush with the local water surface** — the waterline is found by walking up
-  until the fluid stops, never assumed, because lakes sit wherever the terrain put them. Bobbing is
-  not built: a ship that floats bobs on its own.
+#### The two gestures
 
-### The throw — revised sequence *(not yet built)*
+Marking and taking are separate acts, and the split is the point: a bottle that swallowed the ship
+the instant you touched the wheel is over before the player sees it.
 
-Capture is currently immediate on the sneak-right-click. The intended flow makes marking and taking
-two separate acts:
+1. **Sneak** + right-click a wheel with a Ship Bottle — the bottle is **marked** with that ship.
+2. **Stand** and right-click — the bottle is thrown.
 
-1. Sneak + right-click a wheel with a Ship Bottle. The bottle is **marked** with the ship's name and
-   keeps its 45-degree sprite; a message in blue tells the player they can now throw it to take the
-   ship.
-2. Thrown, the bottle flies like an eye of ender **to the helm** — not to the hull's upper centre.
-   Aiming at the wheel is both cleaner to watch and the same landmark the player just clicked.
-3. It rises to about 5 blocks directly above the helm, and takes the ship there.
-4. The sprite changes to the bottled one, it hovers a further second, then free-falls for the player
-   to collect.
+The throw explicitly refuses while sneaking, and that is load-bearing rather than taste. Fabric's
+`UseBlockCallback` runs server-side but the client sees it pass and continues into its own item-use
+path, so one sneaking click on a wheel arrives as *two* interactions — the mark, then a use. Without
+the guard the bottle marks the wheel and immediately throws itself at it.
 
-The suck-into-the-bottle effect is deferred until every phase is complete — it is pure garnish and
-nothing depends on it.
+#### The flight
 
-**The crew goes in the bottle with the ship.** Whoever was signed on via that helm musters back
-aboard when the ship is released and reassembles.
+Both bottles are thrown, never placed: an ender pearl's arc at half power, about twenty blocks.
+Placement by right-clicking a block was the first cut and was wrong — most water a ship wants to be
+launched into is further away than arm's reach.
 
-This should be much cheaper than it sounds — do **not** capture crew as template entities.
-`CrewLedger` already persists berths (with `CrewSnapshot` copies of each villager) keyed to the
-helm, and `CrewMuster.muster` already runs on assembly and restores anyone missing. So bottling
-only needs to **skip the `CrewMuster.standDown` call** that disassembly normally makes, and
-carry the ledger key along with the template. Release reassembles, muster fires as usual, and
-the crew walks back on deck through machinery that already exists and is already tested.
+The bottle is fire-immune and lands *at* a fluid surface rather than on top of it, so the waterline
+runs through it. Losing a whole vessel to a throw that clipped a lava lake is not a punishment
+anyone would read as fair.
 
-Template entity capture is still needed in Phase 0 — but for item frames, armour stands and the
-like, not for crew.
+- **Ship Bottle (marked)** — lands wherever the arc puts it, floats there, then sets out for its
+  wheel and stations `RISE_ABOVE` (4) blocks above it. Takes the ship, holds a second, comes home.
+- **Bottled Ship** — lets its ship out where it stopped. On water or lava, afloat at the waterline
+  with the fluid left intact; on land, keel down and **centred on the impact**. `PlacementCheck`
+  runs first, and a refusal is spoken and reversible.
+
+**Nothing is ever dropped.** Whatever the outcome — ship caught, hull refused for want of room, wheel
+gone missing mid-flight, thrown off the edge of the world — the bottle flies back to whoever threw it
+and puts itself in their inventory, passing through anything in the way. A ship is too much to lose
+to a bad landing.
+
+#### Two things that were not obvious
+
+**The marked wheel is a shipyard position.** A click on a ship block arrives in the ship's own
+coordinates — which is exactly why `getLoadedShipManagingPos` and `getBlockEntity` work on it. Aimed
+at that position literally, the bottle sets off toward the shipyard some 28 million blocks away.
+`ShipBottle.helmWorldPos` converts through `shipToWorld`, re-asked every tick, which is also what
+lets the bottle run down a ship still under sail.
+
+**The client cannot reproduce the path.** It is steered by ship transforms, so unlike an arrow there
+is no physics to run alongside — the client snaps to each position packet and reads as ~10fps however
+well the game is running. Fixed with vanilla's `InterpolationHandler`, which is what boats use.
+
+#### Chase and range
+
+Speed winds up with distance and eases off at the ship's influence border; inside it the bottle takes
+the hull's own velocity as its own, exactly as a player standing on the deck is carried. A ship under
+sail cannot leave it behind.
+
+VS2's influence border is a **client** config (`VSClientConfig`) and the bottle is a server entity, so
+this uses the hull's world AABB inflated by 2 blocks — VS2's own per-face default. If the hand-off ever
+feels wrong against a real ship, `INFLUENCE_MARGIN` is the dial.
+
+Capture range is **100 blocks**, checked before the bottle leaves the hand and nowhere else. Once in
+the air the chase has no limit it can be outrun at, so the range is a statement about how far a captain
+can reach — and it wants answering before the bottle flies off over the horizon, not after.
+
+#### Crew
+
+`ShipBottle.take` calls `CrewMuster.standDown` before deleting the hull, and release reassembles
+through `helmEntity.assemble`, where `CrewMuster.muster` runs as it always does.
+
+Note this **contradicts** the original plan in A.4, which said to skip `standDown`. Skipping it would
+leave the crew as world-space villagers standing on a hull that is about to stop existing — they need
+snapshotting into the `CrewLedger`, which is precisely what standing them down does. **Untested:** a
+crewed ship has not been round-tripped through a bottle yet.
+
+#### Still open in Phase 1
+
+- No crafting recipe. Glass Bottle + Nautilus Shell was suggested and not decided.
+- Both sprites are recoloured glass bottles; real 16×16 art is the user's to do.
+- The suck-into-the-bottle effect stays deferred until every phase is complete — pure garnish, and
+  nothing depends on it.
 
 ### Phase 2 — Blueprints
 
