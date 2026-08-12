@@ -7,6 +7,8 @@ import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.decoration.BlockAttachedEntity
+import net.minecraft.world.entity.decoration.HangingEntity
 import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.Blocks
@@ -205,7 +207,27 @@ object ShipAssembler {
                 footprint.minX() - 1.0, footprint.minY() - 1.0, footprint.minZ() - 1.0,
                 footprint.maxX() + 1.0, footprint.maxY() + 1.0, footprint.maxZ() + 1.0
             )
-        ).filter { !it.isPassenger }
+        ).filter { !it.isPassenger && it !is BlockAttachedEntity }
+
+        // Fixtures -- item frames, paintings, leash knots -- are a separate problem from riders, and they were
+        // being lost. A rider stands on the deck and is therefore at a WORLD position, which is what the query
+        // above finds. Anything hanging on the hull was relocated INTO the shipyard when the ship assembled, so
+        // it is nowhere near that box: disassembly moved the blocks out from under it and left it behind,
+        // attached to a wall that no longer existed. Assembly learned to carry these in; nothing carried them
+        // back out.
+        //
+        // Their anchor blocks are recorded now, while the shipyard still exists, and replayed through the same
+        // transform the blocks take, below.
+        val fixtures = ship.shipAABB?.let { b ->
+            val box = AABB(
+                (b.minX() - 3).toDouble(), (b.minY() - 3).toDouble(), (b.minZ() - 3).toDouble(),
+                (b.maxX() + 4).toDouble(), (b.maxY() + 4).toDouble(), (b.maxZ() + 4).toDouble()
+            )
+            // getEntities, not getEntitiesOfClass: the riders query above uses it and reliably sees ship-space
+            // entities, and VS2 mixes into entity lookups -- the two calls do not necessarily agree.
+            level.getEntities(null as Entity?, box).filterIsInstance<BlockAttachedEntity>()
+        } ?: emptyList()
+        val fixtureAnchors = fixtures.associateWith { it.pos }
 
         val chunksToBeUpdated = mutableMapOf<ChunkPos, Pair<ChunkPos, ChunkPos>>()
 
@@ -262,6 +284,28 @@ object ShipAssembler {
         // We update the blocks after they're set to prevent blocks from breaking
         for (triple in toUpdate) {
             updateBlock(level, triple.first, triple.second, triple.third)
+        }
+
+        // The world blocks exist again, so the walls these hang on are back: move each fixture onto the world
+        // block its shipyard anchor became, using the same centre-of-block transform the blocks themselves took.
+        // Setting the anchor first matters -- setDirection recalculates position and bounding box FROM it, and a
+        // hanging entity whose facing no longer meets a wall fails survives() and pops off on the next tick.
+        val alloc2 = Vector3d()
+        for (entity in fixtures) {
+            if (entity.isRemoved) continue
+            val anchor = fixtureAnchors[entity] ?: continue
+            val moved = shipToWorld
+                .transformPosition(alloc2.set(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5))
+                .floor()
+            val worldAnchor = BlockPos(moved.x.toInt(), moved.y.toInt(), moved.z.toInt())
+
+            entity.pos = worldAnchor
+            if (entity is HangingEntity) {
+                // Rotation is snapped to 90* above, so a hull that turned takes its frames round with it.
+                entity.setDirection(rotation.rotate(entity.direction))
+            } else {
+                entity.setPos(worldAnchor.x + 0.5, worldAnchor.y + 0.5, worldAnchor.z + 0.5)
+            }
         }
 
         // The world blocks exist again: put the riders back where the structure carried them. A ship-space round
