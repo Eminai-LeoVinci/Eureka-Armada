@@ -74,7 +74,8 @@ object ShipTemplateCommand {
                 ctx.source.sendSuccess({
                     Component.literal(
                         "Captured '${ship.slug ?: "unnamed ship"}' as ${outcome.id} -- " +
-                            "${"%,d".format(outcome.blocks)} blocks, ${size.x}x${size.y}x${size.z}"
+                            "${"%,d".format(outcome.blocks)} blocks, " +
+                            "${"%,d".format(outcome.entities)} entities, ${size.x}x${size.y}x${size.z}"
                     ).withStyle(ChatFormatting.GREEN)
                 }, true)
                 1

@@ -3,12 +3,23 @@ package org.valkyrienskies.eureka.template
 import net.minecraft.core.BlockPos
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.util.ProblemReporter
+import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.entity.decoration.BlockAttachedEntity
+import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
+import net.minecraft.world.level.storage.TagValueOutput
+import net.minecraft.world.phys.AABB
+import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
 /**
@@ -32,13 +43,13 @@ import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
  * placement. Nothing here is bounded by it; [MAX_CAPTURE_CELLS] is our own sanity limit.
  *
  * ## What this does NOT capture yet
- * Deliberately, so that the round trip can be proven before anything is built on top of it:
- * - **Entities.** VS2's mixin explicitly clears `entityInfoList`. Item frames and armour stands need adding here.
- *   Crew do *not* -- `CrewLedger` already persists berths with snapshots and `CrewMuster` already re-musters on
- *   assembly, so a bottled ship keeps its crew by *skipping* the stand-down, not by capturing villagers.
  * - **Ship transform, scale, velocity, slug and VS attachments.** Those live on the `ServerShip`, not in the
  *   blocks; `ShipAssembler.assembleToShipFull` shows the restore path via `unsafeSetKinematics`.
  * - **A bill of materials.** Nothing in the codebase counts arbitrary blocks by item yet.
+ *
+ * Entities *are* captured -- see [captureEntities] -- but crew deliberately are not: `CrewLedger` already
+ * persists berths with snapshots and `CrewMuster` re-musters on assembly, so a bottled ship keeps its crew by
+ * skipping the stand-down rather than by serializing villagers.
  *
  * Placement here drops blocks into the world *unassembled*, which is what the shipwright wants and what worldgen
  * wants. Turning a placement into a live ship is [org.valkyrienskies.eureka.util.ShipAssembler]'s job, separately.
@@ -57,7 +68,7 @@ object ShipTemplate {
 
     sealed interface Outcome
     class Failed(val message: String) : Outcome
-    class Captured(val id: Identifier, val blocks: Int, val size: BlockPos) : Outcome
+    class Captured(val id: Identifier, val blocks: Int, val entities: Int, val size: BlockPos) : Outcome
     class Placed(val id: Identifier, val at: BlockPos, val size: BlockPos) : Outcome
 
     /**
@@ -66,7 +77,24 @@ object ShipTemplate {
      * The bounds come from the blocks actually found, not from `shipAABB`, so a hull that does not fill its own
      * bounding box does not carry a skirt of empty space around with it forever.
      */
-    fun capture(level: ServerLevel, ship: LoadedServerShip, name: String): Outcome {
+    /**
+     * @param keepShipName whether the captured helm should carry the ship's name with it.
+     *
+     * Off by default, because a template is a *design*: build five hulls from one blueprint with this on and you
+     * get five ships sharing a name, and a duplicate name is not cosmetic. `ShipArgument.getShip` returns a ship
+     * only when exactly one matches and throws `ERROR_MANY_SHIP_FOUND` otherwise, so every `/vs` command that
+     * takes a ship -- teleport and rename included -- stops working on all of them at once. Nothing enforces
+     * uniqueness at rename time, so nothing else will catch it.
+     *
+     * Ship-in-a-bottle is the case that wants this ON: that really is the same vessel, and it should come back
+     * under its own name.
+     */
+    fun capture(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        name: String,
+        keepShipName: Boolean = false
+    ): Outcome {
         val id = idFor(name) ?: return Failed("'$name' is not a usable template name.")
         val aabb = ship.shipAABB ?: return Failed("That ship has no blocks.")
 
@@ -124,6 +152,11 @@ object ShipTemplate {
             max
         )
 
+        // MUST follow the fill: vs$fillFromVoxelSet ends by clearing entityInfoList, so anything added before it
+        // would be silently dropped.
+        val entities = captureEntities(level, ship, template, min, max)
+        if (!keepShipName) stripShipName(template)
+
         if (!manager.save(id)) {
             // Don't leave a half-made template in the repository shadowing a real one.
             manager.remove(id)
@@ -131,8 +164,125 @@ object ShipTemplate {
         }
 
         val size = template.size
-        return Captured(id, blocks.size, BlockPos(size.x, size.y, size.z))
+        return Captured(id, blocks.size, entities, BlockPos(size.x, size.y, size.z))
     }
+
+    /**
+     * Add the ship's fixtures -- item frames, paintings, armour stands -- to [template].
+     *
+     * VS2's fill deliberately ends with `entityInfoList.clear()`, so a captured ship arrives with no entities at
+     * all and this puts them back. Everything downstream is vanilla: `save` already writes `entityInfoList` into
+     * the `.nbt`, and `placeInWorld` already recreates it, so nothing here needs a matching restore path.
+     *
+     * ## Two coordinate spaces, one query
+     * A ship's blocks live in the SHIPYARD, but a thing standing on its deck is at a WORLD position -- VS2 only
+     * renders it over the hull. Both kinds answer a shipyard-box query, and they do NOT agree about where they
+     * are:
+     * - **Shipyard-space**, e.g. an item frame, which assembly relocated in with the hull. Subtracting [min]
+     *   from its position gives a sensible offset directly.
+     * - **World-space**, e.g. an armour stand on the deck. Subtracting a shipyard [min] from a world position
+     *   produces garbage -- measured at ~28 million blocks on a real ship -- and the entity is then faithfully
+     *   recreated 28 million blocks from the target. It does not look "dropped"; it looks absent.
+     *
+     * So an offset that lands outside the captured volume is not an error to discard, it is the signal that this
+     * entity was reporting world coordinates: transform it through `worldToShip` and try again. Anything still
+     * outside after that genuinely was not aboard, and is skipped rather than flung into the void.
+     *
+     * ## What is deliberately not captured
+     * Players, passengers (a rider is already written inside its vehicle's tag, so capturing both duplicates it),
+     * and living things. Crew, livestock and pets are cargo rather than ship -- and crew in particular ride the
+     * [org.valkyrienskies.eureka.crew.CrewLedger], so a bottled ship keeps them by skipping the stand-down, never
+     * by serializing villagers. Armour stands are the deliberate exception: furniture that happens to extend
+     * `LivingEntity`.
+     */
+    private fun captureEntities(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        template: StructureTemplate,
+        min: BlockPos,
+        max: BlockPos
+    ): Int {
+        val box = AABB(
+            min.x.toDouble(), min.y.toDouble(), min.z.toDouble(),
+            (max.x + 1).toDouble(), (max.y + 1).toDouble(), (max.z + 1).toDouble()
+        )
+        val spanX = (max.x - min.x).toDouble()
+        val spanY = (max.y - min.y).toDouble()
+        val spanZ = (max.z - min.z).toDouble()
+
+        fun inside(v: Vec3) =
+            v.x >= -1.0 && v.x <= spanX + 1.0 &&
+                v.y >= -1.0 && v.y <= spanY + 1.0 &&
+                v.z >= -1.0 && v.z <= spanZ + 1.0
+
+        var captured = 0
+        val candidates = level.getEntitiesOfClass(Entity::class.java, box) {
+            it !is Player && !it.isPassenger && (it !is LivingEntity || it is ArmorStand)
+        }
+
+        for (entity in candidates) {
+            // Shipyard reading first; fall back to transforming a world position into the ship's frame.
+            var relative = Vec3(entity.x - min.x, entity.y - min.y, entity.z - min.z)
+            if (!inside(relative)) {
+                val inShip = ship.transform.worldToShip.transformPosition(Vector3d(entity.x, entity.y, entity.z))
+                relative = Vec3(inShip.x - min.x, inShip.y - min.y, inShip.z - min.z)
+            }
+            if (!inside(relative)) continue // not actually aboard
+
+            val tag = try {
+                val output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, entity.registryAccess())
+                // save(), not saveWithoutId(): placement rebuilds from the tag alone and needs the entity id in it.
+                // A false return means the entity declined to persist -- already removed, or a type that never saves.
+                if (!entity.save(output)) continue
+                output.buildResult()
+            } catch (ex: Exception) {
+                continue // one bad fixture must not cost us the whole ship
+            }
+
+            // Hanging things are positioned by the block they cling to, not by their own centre. Anchoring on the
+            // attachment point keeps an item frame on its wall instead of a block off it. Everything else anchors
+            // on its own position, clamped because placeEntities bounds-tests this and silently drops what is
+            // outside -- our bounds are tight to the solid blocks where vanilla's have author-drawn headroom, so
+            // anything standing on the topmost block would otherwise land exactly one index past the end.
+            val raw =
+                if (entity is BlockAttachedEntity) entity.pos.subtract(min) else BlockPos.containing(relative)
+            val anchor = BlockPos(
+                raw.x.coerceIn(0, max.x - min.x),
+                raw.y.coerceIn(0, max.y - min.y),
+                raw.z.coerceIn(0, max.z - min.z)
+            )
+
+            template.entityInfoList.add(StructureTemplate.StructureEntityInfo(relative, anchor, tag))
+            captured++
+        }
+        return captured
+    }
+
+    /**
+     * Forget, in every captured helm, which ship this used to be.
+     *
+     * The helm block entity stores the name as vanilla's own `CustomName` plus a remembered slug, and re-applies
+     * it through `renameShip` a few ticks after the hull next assembles -- so a copied helm renames its new ship
+     * to the old one's name without anyone asking. Note the flag is written only when *false*, so an absent key
+     * reads back as "keep the name": clearing the name is not enough, the refusal has to be written in.
+     */
+    private fun stripShipName(template: StructureTemplate) {
+        for (palette in template.palettes) {
+            for (info in palette.blocks()) {
+                if (info.state.block !is ShipHelmBlock) continue
+                val tag = info.nbt ?: continue
+                tag.remove("CustomName")
+                tag.remove(REMEMBERED_SHIP_KEY)
+                tag.remove(SHIP_SLUG_KEY)
+                tag.putBoolean(KEEP_NAME_KEY, false)
+            }
+        }
+    }
+
+    /** Mirrors the private constants in ShipHelmBlockEntity; the tags are written by that class, not this one. */
+    private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
+    private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
+    private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
 
     /**
      * Place a saved template into the world with its corner at [at], as loose blocks -- no ship is created.
@@ -142,10 +292,12 @@ object ShipTemplate {
      */
     fun place(level: ServerLevel, name: String, at: BlockPos): Outcome {
         val id = idFor(name) ?: return Failed("'$name' is not a usable template name.")
-        val template = level.server.structureManager.get(id).orElse(null)
-            ?: return Failed("No template named '$name'.")
+        val found = level.server.structureManager.get(id)
+        if (found.isEmpty) return Failed("No template named '$name'.")
+        val template = found.get()
 
-        val settings = StructurePlaceSettings()
+        // Explicit rather than relying on the default: entities are half the point of a captured ship.
+        val settings = StructurePlaceSettings().setIgnoreEntities(false)
         if (!template.placeInWorld(level, at, at, settings, level.random, Block.UPDATE_CLIENTS)) {
             return Failed("'$name' could not be placed there.")
         }
