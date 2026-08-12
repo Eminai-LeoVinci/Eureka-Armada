@@ -510,6 +510,19 @@ use rather than silently renaming.
 Note this is *separate* from the template name strip, which is already shipped and prevents the
 common case: a captured template carries no name, so copies never collide.
 
+**`VSSchematicEvents` are still not fired.** VS2 declares `onCopy`,
+`onPasteBeforeBlocksAreLoaded`, `onPasteAfterBlocksAreLoaded` and `pasteSurvivalCost` and never fires
+any of them; we don't either. The contract hands a mod a `MutableMap<String, CompoundTag>` at copy
+and gives it back at paste — but copy and paste are separated by a *file*, and
+`StructureTemplate.load()` drops any key it doesn't recognise, so honouring it means taking over
+both ends of serialization: build the tag by hand, write via `NbtIo` to
+`createAndValidatePathToGeneratedStructure`, and read the file separately on load to recover the
+extra data. That is a parallel save/load path living next to `StructureTemplateManager`.
+
+Firing `onCopy` and discarding what a mod writes would be worse than not firing — it reports data
+as saved when it isn't. Nothing consumes these today (`@ApiStatus.Experimental`, `//TODO finish` in
+VS2), so this waits until something real needs it.
+
 **Armour stands glide about a block on disassembly.** Cosmetic. Armour stands go through the
 rider pass, which calls `teleportTo` -- an instant server-side snap -- but clients interpolate
 position for non-player entities, so a correction renders as a slide. The distance is the

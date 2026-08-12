@@ -893,8 +893,16 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         }
     }
 
+    /**
+     * Turn this wheel's hull into a ship.
+     *
+     * @param knownBlocks the exact blocks to assemble, when the caller already knows them. Left null the hull
+     * is discovered by flood-filling out from the wheel, which is right for a player pressing Assemble on
+     * something they built. It is wrong for anything that placed the hull itself and can simply say what it
+     * put down -- see the note at the branch below.
+     */
     // Needs to get called server-side
-    fun assemble(player: Player) {
+    fun assemble(player: Player, knownBlocks: Set<BlockPos>? = null) {
         val level = level as ServerLevel
 
         // Check the block state before assembling to avoid creating an empty ship
@@ -941,38 +949,57 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // (the assemble_terrain tag) exactly when the patch they belong to is small enough to be a build
         // rather than the landscape -- see TerrainPocketClassifier for how that inference works and where
         // it can be wrong. Verdicts are cached in the classifier for the duration of this one assembly.
-        val terrain = ShipAssembler.TerrainPocketClassifier(
-            level, EurekaConfig.SERVER.terrainPocketMaxBlocks
-        ) { state ->
-            !state.isAir && state.`is`(ASSEMBLE_TERRAIN) && !state.`is`(ASSEMBLE_BLACKLIST) &&
-                !EurekaConfig.SERVER.blockBlacklist.contains(BuiltInRegistries.BLOCK.getKey(state.block).toString())
-        }
-        val blockPositions = ShipAssembler.collectBlockPositions(
-            level,
-            blockPos
-        ) { pos, it ->
-            val allowed = when {
-                it.isAir -> false
-                EurekaConfig.SERVER.blockBlacklist.contains(BuiltInRegistries.BLOCK.getKey(it.block).toString()) -> false
-                it.`is`(ASSEMBLE_BLACKLIST) -> false
-                it.`is`(ASSEMBLE_TERRAIN) -> terrain.isBoundedPocket(pos)
-                else -> true
-            }
-            if (allowed) {
-                blockCount++
-                when (it.block) {
-                    is ShipHelmBlock -> helmCount++
-                    is BalloonBlock -> balloonCount++
-                    // Floater buoyancy scales with 15 - redstone power, matching FloaterBlock.onPlace.
-                    is FloaterBlock -> floaterCount += 15 - it.getValue(BlockStateProperties.POWER)
-                    is EngineBlock -> engineCount++
-                    is AnchorBlock -> {
-                        anchorCount++
-                        if (it.getValue(BlockStateProperties.POWERED)) activeAnchorCount++
-                    }
+        // What a ship is made of, counted the same way however the block set was arrived at. This used to be a
+        // side effect of the flood-fill predicate, which welded "which blocks are the ship" to "what are they".
+        fun tally(state: BlockState) {
+            blockCount++
+            when (state.block) {
+                is ShipHelmBlock -> helmCount++
+                is BalloonBlock -> balloonCount++
+                // Floater buoyancy scales with 15 - redstone power, matching FloaterBlock.onPlace.
+                is FloaterBlock -> floaterCount += 15 - state.getValue(BlockStateProperties.POWER)
+                is EngineBlock -> engineCount++
+                is AnchorBlock -> {
+                    anchorCount++
+                    if (state.getValue(BlockStateProperties.POWERED)) activeAnchorCount++
                 }
             }
-            return@collectBlockPositions allowed
+        }
+
+        val blockPositions = if (knownBlocks != null) {
+            // The caller already knows exactly which blocks are the ship -- a bottle letting out the hull it
+            // just wrote down, for instance. Rediscovering them by flood-fill would be worse than redundant:
+            // set a ship down on a player-built roof and the flood walks straight into it, because stripped
+            // logs and smooth sandstone are no more "terrain" than the hull is, and the assembly then dies on
+            // maxShipBlocks having swallowed somebody's building.
+            for (pos in knownBlocks) tally(level.getBlockState(pos))
+            knownBlocks
+        } else {
+            // What assembles: everything a player could have placed. Air never; the config blockBlacklist and
+            // the assemble_blacklist tag never (fluids, portals, world-guard blocks); and terrain-type blocks
+            // (the assemble_terrain tag) exactly when the patch they belong to is small enough to be a build
+            // rather than the landscape -- see TerrainPocketClassifier for how that inference works and where
+            // it can be wrong. Verdicts are cached in the classifier for the duration of this one assembly.
+            val terrain = ShipAssembler.TerrainPocketClassifier(
+                level, EurekaConfig.SERVER.terrainPocketMaxBlocks
+            ) { state ->
+                !state.isAir && state.`is`(ASSEMBLE_TERRAIN) && !state.`is`(ASSEMBLE_BLACKLIST) &&
+                    !EurekaConfig.SERVER.blockBlacklist.contains(BuiltInRegistries.BLOCK.getKey(state.block).toString())
+            }
+            ShipAssembler.collectBlockPositions(
+                level,
+                blockPos
+            ) { pos, it ->
+                val allowed = when {
+                    it.isAir -> false
+                    EurekaConfig.SERVER.blockBlacklist.contains(BuiltInRegistries.BLOCK.getKey(it.block).toString()) -> false
+                    it.`is`(ASSEMBLE_BLACKLIST) -> false
+                    it.`is`(ASSEMBLE_TERRAIN) -> terrain.isBoundedPocket(pos)
+                    else -> true
+                }
+                if (allowed) tally(it)
+                return@collectBlockPositions allowed
+            }
         }
 
         if (blockPositions == null) {

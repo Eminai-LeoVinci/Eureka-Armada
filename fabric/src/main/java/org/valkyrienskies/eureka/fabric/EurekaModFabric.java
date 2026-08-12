@@ -57,6 +57,12 @@ public class EurekaModFabric implements ModInitializer {
 
         EurekaMod.init();
 
+        // Sneak + right-click a wheel with an empty Ship Bottle to take the ship. Registered BEFORE the crew
+        // hooks on purpose: both want crouch+right-click on a helm, and whichever registers first gets to
+        // decide. This one only claims the click when the hand holds a bottle, so the Heart of the Sea
+        // offering still sees everything else.
+        BottleRegistrationsFabric.INSTANCE.register();
+
         // The Crewman's job site and its trades. Must follow EurekaMod.init(): the POI walks each helm block's
         // state definition, and its ticket count is read from the config that init() loads.
         CrewRegistrationsFabric.register();

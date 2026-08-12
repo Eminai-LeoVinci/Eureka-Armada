@@ -315,6 +315,17 @@ object ShipTemplate {
         return level.server.structureManager.get(id).orElse(null)
     }
 
+    /**
+     * Delete a saved template.
+     *
+     * A bottle's template is single-use: once the ship is out, the file describes a vessel that exists again
+     * for real, and leaving it behind would let the same hull be duplicated by anyone who knew its name.
+     */
+    fun forget(level: ServerLevel, name: String) {
+        val id = idFor(name) ?: return
+        level.server.structureManager.remove(id)
+    }
+
     /** Every template this mod can see, ours only -- the manager also lists vanilla's and other mods'. */
     fun list(level: ServerLevel): List<Identifier> =
         level.server.structureManager.listTemplates().toList().filter { it.namespace == EurekaMod.MOD_ID }
