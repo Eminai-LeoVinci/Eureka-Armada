@@ -21,6 +21,7 @@ object EurekaMod {
         EurekaItems.register()
         EurekaScreens.register()
         EurekaEntities.register()
+        EurekaRecipes.register()
         EurekaWeights.register()
 
         // The Crewman profession. Pure vanilla registry work, so it belongs here rather than in the loader

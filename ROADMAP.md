@@ -210,22 +210,63 @@ crewed ship has not been round-tripped through a bottle yet.
 
 #### Still open in Phase 1
 
-- No crafting recipe. Glass Bottle + Nautilus Shell was suggested and not decided.
 - Both sprites are recoloured glass bottles; real 16×16 art is the user's to do.
 - The suck-into-the-bottle effect stays deferred until every phase is complete — pure garnish, and
   nothing depends on it.
 
 ### Phase 2 — Blueprints
 
-- `blueprint` item — 1 paper + 1 lapis lazuli, blue re-tint of the paper texture.
-- SHIFT+left-click a helm → capture a read-only template + manifest of whatever ship that helm
-  is mounted to.
-- Blueprint screen shows: **material list** (the important part — it is what you carry to the
-  shipwright), dimensions H/W/L, ship name, weight, top speed.
-- Code-drawn, following `client/crew/CrewManifestScreen.kt` conventions: plain `Screen`,
-  `guiGraphics.fill` panels, hand hit-testing rather than widget soup, shared
-  `gui/shiphelm/ShipHelmButton.kt`.
-- Copyable like books — copy the component; the template UUID is shared and immutable.
+**Status: complete.**
+
+- `blueprint` item, shapeless paper + lapis. Cheap on purpose — a page costs nothing to draft and
+  is worth nothing until a shipwright reads it; the price of a ship is the list inside.
+- **Sneak + right-click** a wheel with a *blank* page to draft it, through the same helm hook the
+  bottle marks with, told apart by the item in hand. A page that is already drafted is refused —
+  re-drafting would silently discard the ship it describes.
+- The page shows ship name, dimensions, block/item/kind counts, mass, recommended floaters and
+  balloons, vessel category, and estimated top speed, over a scrollable material list.
+- Copyable exactly as a written book is: one drafted page plus any number of blanks gives that
+  many copies and returns the original. A stack of pages in one slot is refused, since "how many
+  copies" would be ambiguous and a single craft could eat the stack.
+
+#### A blueprint is the opposite of a bottle
+
+They share a primitive and almost nothing else, and the difference is one flag. Capture runs with
+`keepShipName = false` here and `true` there: bottling *moves* a ship, so exactly one vessel exists
+and it should come back under its own name; drafting *reads* one, and five hulls off a page must not
+all answer to the same name — a duplicate breaks every `/vs` command for both ships, since
+`ShipArgument` resolves a name only when exactly one matches. The source name stays on the page as a
+*label*, so it reads "a blueprint of the Sea Wolf" without anything built from it inheriting that.
+
+#### The manifest rides on the item
+
+Blocks stay in the `.nbt`; the manifest — a few dozen counts and five numbers — travels in the item
+component. So a page opens instantly from any inventory slot with no server round trip, and keeps
+reading after the ship it describes has sunk. This is the one place [ShipManifest]'s
+derived-never-stored rule is bent, and it is safe only because a template is immutable once written:
+there is nothing for the snapshot to drift against. That same immutability is what lets every copy of
+a page share one template rather than duplicating megabytes on disk.
+
+#### Top speed is not computed twice
+
+`EurekaShipControl.estimateTopSpeed()` was split into a static taking engine count and mass, and the
+instance method now calls it. A hull that does not exist yet is quoted the same figure a built one
+reads on its helm; two implementations would eventually disagree and the page would be the one
+quietly lying. Category comes from the ship's own `ControlProfile.classify`, so an airship is rated
+against airship settings. `ShipManifest` counts engines, floaters and balloons off block **states**
+rather than the item census, so a coloured balloon counts without the manifest knowing how many dyes
+exist.
+
+#### The one recipe that is not in the config
+
+Copying is a datapack recipe of a custom type (`vs_eureka:blueprint_copy`), not a
+`RecipeOverrides` entry, because its output is whatever page went into the grid and it accepts any
+number of blanks — neither expressible as nine slots and a result id. Same shape vanilla uses for
+book cloning. `EurekaRecipes` exists for this and should stay near-empty.
+
+#### Still open in Phase 2
+
+- The page sprite is vanilla paper recoloured blue and mirrored; real art pending.
 
 ### Phase 3 — Shipwright
 

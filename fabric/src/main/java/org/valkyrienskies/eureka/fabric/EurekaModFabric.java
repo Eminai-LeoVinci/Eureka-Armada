@@ -34,6 +34,8 @@ import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
+import org.valkyrienskies.eureka.blueprint.BlueprintPages;
+import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
@@ -130,6 +132,14 @@ public class EurekaModFabric implements ModInitializer {
         @Override
         public void onInitializeClient() {
             EurekaMod.initClient();
+
+            // Reading a blueprint is a purely client-side affair -- the page travels whole in the item's own
+            // component -- but the item lives in :common, which cannot name a Screen. Same indirection as
+            // PathMessages: common declares the hook, the client entrypoint fills it in.
+            BlueprintPages.setOpener(page -> {
+                BlueprintScreen.Companion.open(page);
+                return kotlin.Unit.INSTANCE;
+            });
 
             // Armada: receive bond snapshots so the client knows which ships share an armada (used by the
             // ship-mounted camera so the formation doesn't shove the view). Child ships are real physics bodies

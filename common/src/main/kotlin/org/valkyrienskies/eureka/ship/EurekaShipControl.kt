@@ -1867,20 +1867,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         val engineCount = if (pooledEngines >= 0) pooledEngines else engines
         val mass = (if (pooledMass > 0.0) pooledMass else ship?.inertiaData?.mass)
             ?: return cfg.baseSpeed
-        val scaledMass = mass * cfg.speedMassScale
-        var speed = cfg.linearCasualSpeed / 3.0 * cfg.baseSpeed // oldSpeed -> 1
-        val fullPower = engineCount * cfg.enginePowerLinear.toDouble()
-        if (fullPower > 0.0 && scaledMass > 0.0) {
-            var extra = fullPower
-            val boost = max(
-                (extra - cfg.enginePowerLinear * cfg.engineBoostOffset) * cfg.engineBoost,
-                0.0
-            )
-            extra += boost + boost * boost * cfg.engineBoostExponentialPower
-            extra /= scaledMass
-            speed += smoothingATanMax(cfg.maxSpeedFromEngines, extra) // * oldSpeed (=1)
-        }
-        return max(cfg.baseSpeed, speed)
+        return estimateTopSpeed(cfg, engineCount, mass)
     }
 
     companion object {
@@ -1892,6 +1879,34 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
          * position somebody could theoretically stand at.
          */
         const val NO_CREW_STATION: Long = Long.MIN_VALUE
+
+        /**
+         * Estimated forward top speed (m/s) for a vessel of [mass] kg carrying [engineCount] engines, read off
+         * the [cfg] settings block for its category.
+         *
+         * Split out from the instance method so a ship that does not exist yet can be quoted the same figure a
+         * built one reads on its helm -- a blueprint is priced and rated before there is a hull to measure. Two
+         * implementations of this would be two answers to "how fast is it", and the page would be the one
+         * quietly lying.
+         */
+        @JvmStatic
+        fun estimateTopSpeed(cfg: EurekaConfig.Server, engineCount: Int, mass: Double): Double {
+            val scaledMass = mass * cfg.speedMassScale
+            var speed = cfg.linearCasualSpeed / 3.0 * cfg.baseSpeed // oldSpeed -> 1
+            val fullPower = engineCount * cfg.enginePowerLinear.toDouble()
+            if (fullPower > 0.0 && scaledMass > 0.0) {
+                var extra = fullPower
+                val boost = max(
+                    (extra - cfg.enginePowerLinear * cfg.engineBoostOffset) * cfg.engineBoost,
+                    0.0
+                )
+                extra += boost + boost * boost * cfg.engineBoostExponentialPower
+                extra /= scaledMass
+                val smoothing = 1 / (cfg.maxSpeedFromEngines * 0.638)
+                speed += atan(extra * smoothing) / smoothing // * oldSpeed (=1)
+            }
+            return max(cfg.baseSpeed, speed)
+        }
 
         fun getOrCreate(ship: LoadedServerShip): EurekaShipControl {
             return ship.getAttachment<EurekaShipControl>()

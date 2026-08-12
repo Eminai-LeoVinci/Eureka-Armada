@@ -5,6 +5,7 @@ import net.minecraft.resources.Identifier
 import net.minecraft.resources.ResourceKey
 import net.minecraft.world.item.CreativeModeTab
 import net.minecraft.world.item.Item
+import org.valkyrienskies.eureka.item.BlueprintItem
 import org.valkyrienskies.eureka.item.BottledShipItem
 import org.valkyrienskies.eureka.item.ShipBottleItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
@@ -27,6 +28,14 @@ object EurekaItems {
 
     /** The same bottle with a ship in it. Right-click a block to let it out. */
     val BOTTLED_SHIP: RegistrySupplier<Item> = ITEMS.register("bottled_ship") { BottledShipItem(itemProps()) }
+
+    /**
+     * A ship written down. Sneak and right-click a wheel with a blank one to draft it; right-click a drafted
+     * one to read it.
+     *
+     * Unlike a bottle, drafting leaves the ship alone -- a blueprint is a reading, not a removal.
+     */
+    val BLUEPRINT: RegistrySupplier<Item> = ITEMS.register("blueprint") { BlueprintItem(itemProps()) }
 
     fun register() {
         // Declared above so they land before the block items; the creative tab walks this register in order.
