@@ -6,6 +6,7 @@
     "MixinAnvilFreeHelmRename",
     "MixinEntitySubAir",
     "MixinPoiCompetitorScan",
+    "MixinShipFireContainment",
     "MixinVSCoreTeleport",
     "MixinVillagerCrewTenure",
     "MixinYieldJobSite"

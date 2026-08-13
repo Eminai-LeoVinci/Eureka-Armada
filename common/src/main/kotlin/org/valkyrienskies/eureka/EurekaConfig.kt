@@ -1004,6 +1004,34 @@ object EurekaConfig {
         // endregion
 
         @JsonSchema(
+            description = "Whether fire on an assembled ship behaves like fire anywhere else. Off (the " +
+                "default), a fire aboard a ship burns away only the block it is actually attached to and " +
+                "then goes out -- it never lights a neighbour and never leaves a new fire behind, so an " +
+                "incendiary round costs you hull rather than the whole vessel. Turn it on for vanilla " +
+                "fire, and expect a wooden ship to burn to the waterline. Ships only; fire ashore is " +
+                "never touched. Default false."
+        )
+        var shipFireSpreads = false
+
+        // How long a contained fire takes to eat through what it caught on. Each fire rolls its own
+        // duration once, uniformly between these two, so a burning ship reads as a scatter of holes
+        // opening at different moments rather than a row of them going at once. Ignored entirely when
+        // shipFireSpreads is on, since vanilla then owns the timing.
+
+        @JsonSchema(
+            description = "Fewest seconds a fire on a ship takes to burn through the block it is attached " +
+                "to. Default 3.0."
+        )
+        var shipFireBurnSecondsMin = 3.0
+
+        @JsonSchema(
+            description = "Most seconds a fire on a ship takes to burn through the block it is attached to. " +
+                "Raise both of these to make a hull fire something a crew can answer, lower them to make an " +
+                "incendiary round bite immediately. Default 20.0."
+        )
+        var shipFireBurnSecondsMax = 20.0
+
+        @JsonSchema(
             description = "How many sets of ship plans a player can keep with shipwrights before buying more. " +
                 "Plans are held per player and readable at every bench in the world, not per bench. Default 3."
         )
