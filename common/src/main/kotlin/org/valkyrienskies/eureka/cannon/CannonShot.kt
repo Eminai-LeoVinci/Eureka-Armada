@@ -187,7 +187,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, 24, 1.0, 1.0, 1.0, 0.03)
 
         if (blockHit != null) {
+            // Destruction first, then fire. The order is the rule: an incendiary round lights what is left
+            // standing, so burning can never be an extra helping of damage. See CannonDamage.kindle.
             CannonDamage.punch(level, blockHit, load.roll(level.random))
+            CannonDamage.kindle(level, blockHit, load.incendiaryBlocks)
         }
         discard()
     }

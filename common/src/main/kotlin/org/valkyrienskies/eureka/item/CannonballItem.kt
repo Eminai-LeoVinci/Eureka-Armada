@@ -40,10 +40,17 @@ class CannonballItem(val ball: Cannonball, val charge: CannonCharge, properties:
             Component.translatable("item.vs_eureka.cannonball.damage", load.minBlocks, load.maxBlocks)
                 .withStyle(ChatFormatting.GRAY)
         )
-        if (charge != CannonCharge.PLAIN) {
-            adder.accept(
+        when (charge) {
+            CannonCharge.PLAIN -> Unit
+            CannonCharge.EXPLOSIVE -> adder.accept(
                 Component.translatable("item.vs_eureka.cannonball.charge", load.chargeBonus)
                     .withStyle(ChatFormatting.DARK_AQUA)
+            )
+            // An incendiary round's damage line is identical to a plain one's, so without this the tooltip
+            // would give a player no reason at all to have paid for the blaze powder.
+            CannonCharge.INCENDIARY -> adder.accept(
+                Component.translatable("item.vs_eureka.cannonball.incendiary", load.incendiaryBlocks)
+                    .withStyle(ChatFormatting.GOLD)
             )
         }
     }

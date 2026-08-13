@@ -3,6 +3,8 @@ package org.valkyrienskies.eureka.cannon
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.level.block.BaseFireBlock
+import net.minecraft.world.level.block.Block
 
 /**
  * Taking a measured bite out of whatever the shot hit.
@@ -62,6 +64,47 @@ object CannonDamage {
 
         for (pos in taken) {
             level.destroyBlock(pos, false)
+        }
+    }
+
+    /**
+     * Set [count] fires among whatever is still standing around [origin].
+     *
+     * ## Called after [punch], and that ordering is the whole design
+     * There is no bookkeeping here about which blocks survived, because by the time this runs the destroyed
+     * ones are already air -- "the survivors" is simply what the world now contains. Running it the other way
+     * round would let a round light a block and then break it, turning fire into a second helping of damage
+     * rather than a different kind of harm.
+     *
+     * ## Fire goes in the air beside a block, not into it
+     * Minecraft has no "this block is burning" state: a fire is its own block standing next to something that
+     * will carry it. So this looks for empty space where a fire could actually survive, which is vanilla's own
+     * test and already accounts for what the neighbouring block is made of -- a stone hull gives a round
+     * almost nothing to catch, and a timber one gives it plenty.
+     */
+    fun kindle(level: ServerLevel, origin: BlockPos, count: Int) {
+        if (count <= 0) return
+
+        var lit = 0
+        val seen = HashSet<BlockPos>()
+        val queue = ArrayDeque<BlockPos>()
+
+        queue.add(origin)
+        seen.add(origin)
+
+        while (queue.isNotEmpty() && lit < count) {
+            val pos = queue.removeFirst()
+
+            if (level.getBlockState(pos).isAir && BaseFireBlock.canBePlacedAt(level, pos, Direction.UP)) {
+                level.setBlock(pos, BaseFireBlock.getState(level, pos), Block.UPDATE_ALL)
+                lit++
+            }
+
+            if (seen.size > SEARCH_LIMIT) break
+            for (face in Direction.entries) {
+                val next = pos.relative(face)
+                if (seen.add(next)) queue.add(next)
+            }
         }
     }
 

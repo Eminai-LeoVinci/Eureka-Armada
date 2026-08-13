@@ -78,7 +78,18 @@ enum class CannonCharge(
      * explosive netherite round wildly better than an explosive copper one, when the charge is the same
      * amount of gunpowder either way.
      */
-    EXPLOSIVE("explosive_", 2, doubleArrayOf(0.60, 0.30));
+    EXPLOSIVE("explosive_", 2, doubleArrayOf(0.60, 0.30)),
+
+    /**
+     * Blaze powder: no extra damage at all, and that is the point.
+     *
+     * An incendiary round sets surviving blocks alight *after* destruction has been resolved, so the fire is
+     * never a damage bonus in disguise -- it can only ever take hold on what the ball did not already break.
+     * Given a free rung on the ladder as well it would just be a worse explosive round with a light show;
+     * given none, it is a different weapon. How many blocks it lights is a property of the *metal*, since a
+     * heavier ball carries more of the stuff -- see [Cannonball.incendiary].
+     */
+    INCENDIARY("incendiary_", 0, doubleArrayOf());
 }
 
 /** A round as it actually exists: a metal, and whatever is packed behind it. */
@@ -92,6 +103,9 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
 
     /** How many blocks the charge is worth at most, for a tooltip that has to justify the extra cost. */
     val chargeBonus: Int get() = charge.bonusGuaranteed + charge.bonusChances.size
+
+    /** How many surviving blocks this round sets alight, or 0 if it starts no fires. */
+    val incendiaryBlocks: Int get() = if (charge == CannonCharge.INCENDIARY) ball.incendiary else 0
 
     /**
      * Roll this round's damage.
