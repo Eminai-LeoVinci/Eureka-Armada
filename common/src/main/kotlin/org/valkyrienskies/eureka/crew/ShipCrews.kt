@@ -179,6 +179,13 @@ object ShipCrews {
      * tag was only ever needed to catch villagers who were not crew yet.
      */
     private fun becomeCrew(level: ServerLevel, villager: Villager) {
+        // Only the unemployed are given the job. Signing on is a fact recorded in the LEDGER; a profession is
+        // what somebody does for a living, and the two are not the same thing. Overwriting it would mean
+        // recruiting a shipwright quietly destroyed a shipwright -- and there is no way back, because the
+        // helm is no longer an acquirable job site for them to re-take.
+        //
+        // So a tradesman keeps their trade and sails anyway. The crew is the roster, not the hat.
+        if (!villager.villagerData.profession().`is`(VillagerProfession.NONE)) return
         setProfession(level, villager, CrewProfession.PROFESSION_KEY)
     }
 
