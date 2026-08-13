@@ -205,8 +205,8 @@ through `helmEntity.assemble`, where `CrewMuster.muster` runs as it always does.
 
 Note this **contradicts** the original plan in A.4, which said to skip `standDown`. Skipping it would
 leave the crew as world-space villagers standing on a hull that is about to stop existing — they need
-snapshotting into the `CrewLedger`, which is precisely what standing them down does. **Untested:** a
-crewed ship has not been round-tripped through a bottle yet.
+snapshotting into the `CrewLedger`, which is precisely what standing them down does. **Confirmed in
+game:** a crewed ship bottled and released brings its crew back aboard.
 
 #### Still open in Phase 1
 
@@ -267,6 +267,19 @@ book cloning. `EurekaRecipes` exists for this and should stay near-empty.
 #### Still open in Phase 2
 
 - The page sprite is vanilla paper recoloured blue and mirrored; real art pending.
+
+#### Art resolution: the mod is 32×32
+
+Settled while evaluating generated sprites. The Ship Bottle art is genuinely 32×32 with hard alpha
+and a 25-colour palette, and it does **not** survive a reduction to 16 — the bottle's outline
+disappears entirely, because the detail being paid for only exists at 32. So 32×32 is the standard
+for every item in the mod, and the blueprint placeholder should be upscaled to match (16→32
+nearest-neighbour is lossless).
+
+Two things any future item art must hold to, whatever produces it: **hard alpha** (0 or 255, never
+in between, because Minecraft extrudes the sprite into the in-hand model and soft edges become
+fringe on it), and **matched silhouettes** for any pair that swaps in place — the empty bottle and
+the full one are the same bottle, and the mid-flight swap only reads if the outline does not jump.
 
 ### Phase 3 — Shipwright
 
@@ -634,6 +647,33 @@ position for non-player entities, so a correction renders as a slide. The distan
 rotation snap: disassembly rounds the hull's heading to the nearest 90 degrees and moves riders
 by the delta, so a harder alignment swing means a longer glide. Nothing is lost or duplicated.
 
+## 6c. Strip before the public build
+
+Everything here exists to develop and test with, and stays in while we are still testing. None of
+it ships. Kept as one register so nothing has to be remembered — grep `DEV ONLY` and this list.
+
+**Armada commands**
+
+| Command | What it is | Why it must go |
+|---|---|---|
+| `/vs template save\|load\|list\|info\|check` | The Phase 0 proving ground | A creative ship duplicator in a survival mod. The single most important one to remove. |
+| `/armada sealed` + `ArmadaSubExperiment.kt` | Submarine hull-sealing diagnostic | Already marked TEMPORARY in the file; delete the file with the command. |
+| `/armada debug` | Armada bond recompute readout | Diagnostic output only. |
+| `/vs cruise-cancel-debug <bool>` | Cruise-cancel tracing | Single-player only by construction; no gameplay use. |
+| `/vs pocket-occluder`, `-debug`, `-status` | Sub-air occluder toggles | Existed to A/B the occluder without relaunching; the setting should be config, not a command. |
+
+**VS2 commands** (separate tree — `/vs ship-shadows`, `/vs ship-emissive`): client render toggles
+from the renderer work. Same call, made in the VS2 repo rather than here.
+
+**Also**
+
+- Any `PathMessages` line that names an internal value rather than telling the player something.
+- `/vs template`'s permission gate is `COMMANDS_GAMEMASTER`, which is *not* a substitute for
+  removal — an op on a server is still a player.
+
+The decision is **remove**, not gate. A command that is dangerous in survival does not become safe
+because it needs a permission level.
+
 ## 7. Open questions
 
 1. **A pirate ship can self-disassemble with a player standing on it.** The abandon sequence is
@@ -642,9 +682,11 @@ by the delta, so a harder alignment swing means a longer glide. Nothing is lost 
    over there swinging a sword. The timer then runs to completion underneath you, and
    disassembly with a player aboard is the deck fall-through case. **Self-disassembly must be
    blocked while any player is aboard.**
-2. **Repair threshold.** The harbor-bounds half is settled (partial overlap suffices). Still
-   open: what percentage of non-air blocks must match, and whether it is measured per
-   block-type or as a total count.
+2. ~~**Repair threshold.**~~ **Settled: 70%.** A ship must match at least 70% of the blueprint's
+   non-air blocks for the shipwright to accept it as the same vessel. Measured as a **total
+   count**, not per block-type: a hull that lost its whole rigging is still the same ship, and a
+   per-type rule would reject it for being 0% wool. Harbor bounds were already settled — partial
+   overlap suffices.
 3. **Does a cannon's group come from its facing or its position?** A cannon sitting on the port
    rail but pointed forward could be `L2` or `F1`. Facing is the more useful answer for fixed
    guns — you want the label to tell a gunner where the shot goes — but the note describes the
