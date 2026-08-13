@@ -45,7 +45,39 @@ object ShipwrightMenu {
     }
 
     /**
-     * A captain's whole shelf as the screen sees it.
+     * One assembled ship the shipwright can see, and where its repair stands.
+     *
+     * [plansName] is the dropdown's current answer -- pre-filled by the shipwright's own guess, and
+     * overridable. Everything from [match] down is null or empty until plans are chosen, because until then
+     * there is nothing to compare against.
+     */
+    class Vessel(
+        val slug: String,
+        val width: Int,
+        val height: Int,
+        val length: Int,
+        val blocks: Int,
+        val mass: Double,
+        /** 0..1 across every engine aboard, or -1 when the hull has no engines to average. */
+        val fuel: Float,
+        /** True when this hull is a child in an armada whose parent is the one in range. */
+        val child: Boolean,
+        val plansName: String?,
+        /** 0..1 of the chosen plans already in place. Meaningless without [plansName]. */
+        val match: Float,
+        /** Why a repair is refused, or null. */
+        val refusal: String?,
+        val repairs: List<Material>
+    ) {
+        val given: Int get() = repairs.sumOf { minOf(it.needed, it.given) }
+        val needed: Int get() = repairs.sumOf { it.needed }
+        val sound: Boolean get() = plansName != null && refusal == null && repairs.isEmpty()
+        val paid: Boolean get() = repairs.isNotEmpty() && repairs.all { it.outstanding <= 0 }
+        val progress: Float get() = if (needed <= 0) 1.0f else given.toFloat() / needed.toFloat()
+    }
+
+    /**
+     * A captain's whole shelf as the screen sees it, plus the ships in front of the bench.
      *
      * [hasFreeBottle] is why the Bottle button can be greyed rather than merely refusing when pressed: the
      * shipwright will not hand over a bottled ship without an unassigned Ship Bottle to put it in, and a button
@@ -55,11 +87,17 @@ object ShipwrightMenu {
         val villager: Int,
         val slots: Int,
         val hasFreeBottle: Boolean,
-        val rows: List<Row>
+        val rows: List<Row>,
+        val vessels: List<Vessel> = emptyList()
     )
 
-    /** What the screen asks the server to do. Ordinal-encoded on the wire, so do not reorder casually. */
-    enum class Action { PAY, BUILD, BOTTLE, DELETE }
+    /**
+     * What the screen asks the server to do. Ordinal-encoded on the wire, so do not reorder casually.
+     *
+     * The first four act on a set of plans and carry its ship name; the last three act on a hull in the water
+     * and carry its slug, with [SELECT] carrying the chosen plans as well.
+     */
+    enum class Action { PAY, BUILD, BOTTLE, DELETE, SELECT, PAY_REPAIR, REPAIR }
 
     /**
      * Installed by the loader's client entrypoint, for the same reason [org.valkyrienskies.eureka.blueprint

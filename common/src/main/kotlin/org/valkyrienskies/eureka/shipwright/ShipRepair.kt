@@ -1,0 +1,247 @@
+package org.valkyrienskies.eureka.shipwright
+
+import net.minecraft.core.BlockPos
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.item.Item
+import net.minecraft.world.item.Items
+import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
+import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.template.ShipTemplate
+import org.valkyrienskies.mod.common.dimensionId
+import org.valkyrienskies.mod.common.shipObjectWorld
+
+/**
+ * Putting a damaged ship back the way its plans say it should be.
+ *
+ * ## Repair is a comparison, not a rebuild
+ * The ship stays exactly where it is and keeps being the ship it was -- its id, its name, its crew, its
+ * cargo. All that happens is that blocks the plans describe and the hull no longer has get written back. A
+ * captain who has been through a fight wants their ship *mended*, not replaced by an identical one with a
+ * different id and an empty hold.
+ *
+ * ## Which hull, and is it really that hull
+ * Three questions have to agree before a repair is allowed, and they are asked in cheapening order so a
+ * mismatch costs as little as possible:
+ *
+ *  1. **Dimensions.** A hull that is not the same size as the plans is not that ship, and this is one integer
+ *     comparison.
+ *  2. **Name.** The plans are filed under a ship's name, and that is the identity the whole shelf is keyed on.
+ *  3. **Shape.** At least [MATCH_THRESHOLD] of the plans' non-air blocks must already be in place, counted as a
+ *     total rather than per block-type. A ship stripped of its entire rigging is still that ship; a per-type
+ *     rule would reject it for being nought percent wool.
+ *
+ * The threshold is what stops a shipwright quietly turning one vessel into another. Below it, the honest answer
+ * is that this is not the ship on the page -- and the player would rather be told that than watch their hull be
+ * overwritten by somebody else's.
+ *
+ * ## Where the blocks are
+ * A template captured from a ship is anchored at that ship's `shipAABB` minimum, so template position `p` is
+ * shipyard position `min + p`. That is the whole of the coordinate maths, and it is why a repair can compare
+ * block for block without transforming anything: both sides are in the ship's own space.
+ */
+object ShipRepair {
+
+    /** How much of a hull must still match its plans before a shipwright accepts it as the same ship. */
+    const val MATCH_THRESHOLD = 0.70f
+
+    /**
+     * How far from the bench a shipwright can see a ship, and work on it.
+     *
+     * Wide enough that a captain can moor a whole armada off a harbor and have all of it listed at once, which
+     * is the point -- a repair yard that could only see one hull at a time would make bringing a fleet in
+     * pointless.
+     */
+    const val REACH = 100.0
+
+    /**
+     * What a shipwright makes of a hull compared with a set of plans.
+     *
+     * [missing] is the repair bill: every block the plans call for that the hull does not currently have,
+     * counted in the items a player would have to carry. It is empty on a ship in perfect repair, which is the
+     * same thing as saying there is nothing to do.
+     */
+    class Assessment(
+        val sizeMatches: Boolean,
+        val nameMatches: Boolean,
+        /** 0..1 of the plans' non-air blocks already correct. */
+        val match: Float,
+        val missing: Map<Item, Int>,
+        /** Shipyard positions that need writing, with the state to write. Empty unless [accepted]. */
+        val repairs: List<Pair<BlockPos, BlockState>>
+    ) {
+        val accepted: Boolean get() = sizeMatches && nameMatches && match >= MATCH_THRESHOLD
+        val sound: Boolean get() = accepted && missing.isEmpty()
+
+        /** Why a shipwright turned this away, or null if it did not. */
+        val refusal: String?
+            get() = when {
+                !sizeMatches -> "That hull is not the size these plans describe."
+                !nameMatches -> "These plans are for a different ship."
+                match < MATCH_THRESHOLD ->
+                    "Too little of that hull matches these plans -- ${(match * 100).toInt()}% of it, and a " +
+                        "shipwright needs ${(MATCH_THRESHOLD * 100).toInt()}%. This is not the same ship."
+                else -> null
+            }
+    }
+
+    /** A hull's tight block bounds: the corner its plans are anchored at, and how big it actually is. */
+    class Bounds(val min: BlockPos, val width: Int, val height: Int, val length: Int, val blocks: Int)
+
+    /**
+     * The box a hull's **solid blocks** occupy, which is not the same thing as its `shipAABB`.
+     *
+     * `shipAABB` is the ship's voxel volume and is routinely larger than the hull inside it. A template, by
+     * contrast, is built from the blocks actually found -- see [ShipTemplate.capture], which computes its own
+     * min and max while walking them. Comparing one against the other is comparing two different measurements
+     * of the same ship, and it reports every hull as the wrong size by however much slack its AABB carries.
+     *
+     * This is also the anchor. Template position `p` is world position `min + p` where `min` is **this** min,
+     * not the AABB's -- they coincide often enough that getting it wrong still looks like it works.
+     */
+    fun bounds(level: ServerLevel, ship: LoadedServerShip): Bounds? {
+        val aabb = ship.shipAABB ?: return null
+
+        var minX = Int.MAX_VALUE; var minY = Int.MAX_VALUE; var minZ = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE; var maxY = Int.MIN_VALUE; var maxZ = Int.MIN_VALUE
+        var blocks = 0
+
+        val cursor = BlockPos.MutableBlockPos()
+        for (x in aabb.minX()..aabb.maxX()) {
+            for (y in aabb.minY()..aabb.maxY()) {
+                for (z in aabb.minZ()..aabb.maxZ()) {
+                    cursor.set(x, y, z)
+                    if (!level.hasChunkAt(cursor)) continue
+                    if (level.getBlockState(cursor).isAir) continue
+                    blocks++
+                    if (x < minX) minX = x; if (x > maxX) maxX = x
+                    if (y < minY) minY = y; if (y > maxY) maxY = y
+                    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
+                }
+            }
+        }
+        if (blocks == 0) return null
+        return Bounds(
+            BlockPos(minX, minY, minZ),
+            maxX - minX + 1, maxY - minY + 1, maxZ - minZ + 1,
+            blocks
+        )
+    }
+
+    /**
+     * The nearest assembled ship to [at] within [REACH], or null.
+     *
+     * Nearest rather than first found, because a busy harbor has several and the one being asked about is the
+     * one in front of the shipwright.
+     */
+    fun nearby(level: ServerLevel, at: BlockPos): LoadedServerShip? {
+        val dimension = level.dimensionId
+        var best: LoadedServerShip? = null
+        var bestDistance = REACH * REACH
+
+        for (ship in level.shipObjectWorld.loadedShips) {
+            if (ship.chunkClaimDimension != dimension) continue
+            if (ship.shipAABB == null) continue
+
+            val position = ship.transform.position
+            val dx = position.x() - (at.x + 0.5)
+            val dy = position.y() - (at.y + 0.5)
+            val dz = position.z() - (at.z + 0.5)
+            val distance = dx * dx + dy * dy + dz * dz
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = ship
+            }
+        }
+        return best
+    }
+
+    /**
+     * Compare [ship] against the plans named [template], writing nothing.
+     *
+     * Walks the template once. Blocks that already match cost nothing; blocks that do not are counted into the
+     * bill and remembered so a paid repair does not have to work any of it out again.
+     */
+    fun assess(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        plans: ShipwrightLedger.Plans
+    ): Assessment? {
+        val template: StructureTemplate = ShipTemplate.find(level, plans.template) ?: return null
+        val hull = bounds(level, ship) ?: return null
+
+        val size = template.size
+        val sizeMatches = size.x == hull.width && size.y == hull.height && size.z == hull.length
+        val nameMatches = ship.slug == plans.shipName
+
+        var wanted = 0
+        var correct = 0
+        val missing = LinkedHashMap<Item, Int>()
+        val repairs = ArrayList<Pair<BlockPos, BlockState>>()
+
+        val cursor = BlockPos.MutableBlockPos()
+        for (palette in template.palettes) {
+            for (info in palette.blocks()) {
+                if (info.state.isAir) continue
+                wanted++
+
+                cursor.set(
+                    hull.min.x + info.pos.x,
+                    hull.min.y + info.pos.y,
+                    hull.min.z + info.pos.z
+                )
+                // Compared by BLOCK, not by full state. A door left open or a stair turned round is wear, not
+                // damage, and charging a player a fresh door for having opened one would be absurd.
+                if (level.getBlockState(cursor).block == info.state.block) {
+                    correct++
+                    continue
+                }
+
+                repairs.add(cursor.immutable() to info.state)
+                val item = itemFor(info.state)
+                if (item != null) missing[item] = (missing[item] ?: 0) + 1
+            }
+        }
+
+        val match = if (wanted == 0) 1.0f else correct.toFloat() / wanted.toFloat()
+        return Assessment(sizeMatches, nameMatches, match, missing, repairs)
+    }
+
+    /**
+     * Write the repairs back into the hull.
+     *
+     * `UPDATE_CLIENTS` and nothing more, matching how a ship's blocks are written everywhere else in the mod:
+     * these are shipyard positions, and asking for neighbour updates across a hull being rebuilt block by block
+     * is how you get a cascade of falling gravel and popped-off torches inside somebody's ship.
+     */
+    fun apply(level: ServerLevel, assessment: Assessment) {
+        for ((pos, state) in assessment.repairs) {
+            // Cooled on the way in. A replacement engine is a NEW engine with an empty block entity, and
+            // writing back the heat the old one died with gives a glowing gauge over an empty firebox --
+            // which only corrects itself once somebody adds fuel and the next tick overwrites the state.
+            // Bottled and blueprinted ships deliberately do not do this; see ShipTemplate.cooled.
+            level.setBlock(pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
+        }
+    }
+
+    /**
+     * What one block costs to replace, mirroring [org.valkyrienskies.eureka.template.BillOfMaterials].
+     *
+     * The upper half of a door and the head of a bed are the same purchase as their partner, so only one end is
+     * charged for -- and a block with no item form costs nothing rather than appearing on a bill as "air".
+     */
+    private fun itemFor(state: BlockState): Item? {
+        if (state.isAir) return null
+        if (state.hasProperty(DOUBLE_HALF) && state.getValue(DOUBLE_HALF) == UPPER) return null
+        if (state.hasProperty(BED_PART) && state.getValue(BED_PART) == HEAD) return null
+        val item = state.block.asItem()
+        return if (item == Items.AIR) null else item
+    }
+
+    private val DOUBLE_HALF =
+        net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF
+    private val UPPER = net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER
+    private val BED_PART = net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART
+    private val HEAD = net.minecraft.world.level.block.state.properties.BedPart.HEAD
+}

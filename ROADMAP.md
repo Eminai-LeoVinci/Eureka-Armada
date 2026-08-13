@@ -354,13 +354,70 @@ first use — and plans are meant to last forever.
 
 #### Still open in Phase 3
 
-- **Repair / restore.** Not started. The ship needs only to be **partially** within the harbor's
-  dimensions. Name must match, dimensions must match, and **70%** of non-air blocks must match,
-  counted as a total rather than per block-type (§7.2) — otherwise the shipwright rejects it as not
-  the same ship.
+- ~~Repair / restore.~~ **Built and working.** Spec and findings below.
 - **Spawn eggs** for Shipwright and Crewman; no `SpawnEggItem` exists in the mod today.
 - The bench borrows vanilla's cartography table textures, and the Shipwright villager is the
   Crewman's outfit shifted warm. Both are placeholders.
+
+#### Repair — spec
+
+The shipwright's book grows a **second area**. One is the plans on the shelf, as now; the other is
+**the ships in front of it**.
+
+**Ships in range** are listed exactly as plans and crew are — every assembled hull within
+[ShipRepair.REACH] (100 blocks) of the bench, not merely the nearest, so a captain can bring a whole
+armada in and see all of it at once. Clicking one opens its card: everything known about that hull,
+**including fuel %**.
+
+**Armadas travel together.** If an armada's *parent* is in range then all of its children are
+repairable, whether or not each child is individually within 100 blocks. A formation is one thing
+and being told half of it is out of reach would be nonsense.
+
+**Choosing the plans.** The card carries a dropdown of the captain's filed blueprints, and Repair
+stays uninteractable until one is chosen — a repair is an instruction to make this hull match that
+page, and guessing at it is not something to do silently.
+
+**Auto-selection, with the obvious trap avoided.** The shipwright pre-selects a blueprint by
+comparing each hull against the shelf. Match on **dimensions and helm variant** (birch, dark oak…),
+then rank the survivors by the 70% shape comparison and pre-select the best scorer.
+
+> ⚠ Do **not** gate auto-selection on block count. A damaged hull has fewer blocks than its plans by
+> definition — that is what damage *is* — so an equality test would auto-select only for ships in
+> perfect repair and silently fail on every ship anyone actually brings to a shipwright. Block count
+> is a tiebreaker at most.
+
+Auto-selection is a convenience and changes nothing else: the 70% check still runs, and the player
+can always override the dropdown.
+
+**Paying for a repair** works like paying for a build — the bill is the difference between the plans
+and the hull, materials are taken in instalments with a progress bar, and a repair with everything
+already in the player's inventory completes in one press. It is a **separate pot** from that ship's
+build bill; the two must not draw on each other.
+
+#### Three things repair got wrong first, all worth remembering
+
+**A template's size is not a `shipAABB`.** `ShipTemplate.capture` measures the *solid blocks*;
+`shipAABB` measures the *volume they sit in*, and it is routinely larger — one per axis on a test
+hull. Comparing them reported every ship as the wrong size, and it also meant the wrong anchor for
+block-by-block comparison. `ShipRepair.bounds` is the tight box, and it is what both the size check
+and the anchor must use. The tell was a card reading "100% matches" directly above "not the size
+these plans describe" — two numbers from two different rulers.
+
+**Re-quote unconditionally, not just when no bill exists.** A finished repair leaves a bill whose
+cost is empty, so "quote only if there is no bill" finds that empty bill forever and reports a ship
+as sound however much of it is later shot off. Materials already paid survive the re-quote, so the
+unconditional version costs nothing.
+
+Reassessing when the **book is opened** is deliberate, rather than hooking block updates. A hook
+would fire for every block placed or broken on every ship in the world to answer a question nobody
+asks until they open the book.
+
+**A repaired engine must be written cold.** `HEAT` is a blockstate property; fuel lives on the block
+entity. A replacement engine is a *new* block entity with an empty firebox, so writing back the heat
+the old one died with gives a glowing gauge over nothing until somebody adds fuel and the next tick
+corrects it. `ShipTemplate.cooled` does this **for repair only** — a bottled ship captures its
+engines' NBT *before* the hull is cleared, so its coal is genuinely still there and it should come
+back hot and fuelled.
 
 ### Phase 4 — Cannons
 

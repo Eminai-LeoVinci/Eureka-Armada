@@ -69,9 +69,78 @@ class ShipwrightLedger : SavedData() {
             }
     }
 
-    /** One captain's shelf. */
+    /**
+     * A repair in progress on one assembled ship.
+     *
+     * Deliberately a **separate pot** from that ship's build bill. They answer different questions -- "what
+     * does this hull cost to make" against "what does this hull need to be whole again" -- and letting them
+     * draw on each other would mean materials brought for a repair silently paying down a build, or worse.
+     *
+     * Keyed by the ship's slug rather than the plans' name, because the thing being repaired is a particular
+     * hull. Two ships built from one page are two repairs.
+     *
+     * [plansName] is the dropdown's answer, kept here so a choice survives closing the screen.
+     */
+    class RepairBill(
+        val shipSlug: String,
+        val plansName: String,
+        val cost: Map<Item, Int>,
+        val delivered: MutableMap<Item, Int> = HashMap()
+    ) {
+        fun outstanding(item: Item): Int = maxOf(0, (cost[item] ?: 0) - (delivered[item] ?: 0))
+        fun outstanding(): Map<Item, Int> = cost.keys.associateWith { outstanding(it) }.filterValues { it > 0 }
+        val ready: Boolean get() = outstanding().isEmpty()
+
+        val progress: Float
+            get() {
+                val total = cost.values.sum()
+                if (total <= 0) return 1.0f
+                return cost.keys.sumOf { minOf(cost[it] ?: 0, delivered[it] ?: 0) }.toFloat() / total.toFloat()
+            }
+    }
+
+    /** One captain's shelf, and whatever they currently have in for repair. */
     class Library(var slots: Int) {
         val plans = LinkedHashMap<String, Plans>()
+        val repairs = LinkedHashMap<String, RepairBill>()
+    }
+
+    fun repairFor(player: UUID, shipSlug: String): RepairBill? = libraries[player]?.repairs?.get(shipSlug)
+
+    /**
+     * Start or restate a repair on [shipSlug] against [plansName], costing [cost].
+     *
+     * Materials already handed over survive a re-quote **against the same plans** -- a hull that took more
+     * damage while its captain was away fetching timber should not lose the timber they already brought. A
+     * different set of plans is a different job and starts clean.
+     */
+    fun quoteRepair(player: UUID, shipSlug: String, plansName: String, cost: Map<Item, Int>): RepairBill {
+        val library = libraryOf(player)
+        val existing = library.repairs[shipSlug]
+        val bill = RepairBill(shipSlug, plansName, cost)
+        if (existing != null && existing.plansName == plansName) {
+            for ((item, count) in existing.delivered) {
+                // Never carry over more than the new quote asks for; the surplus would read as a credit that
+                // silently vanishes on the next re-quote.
+                bill.delivered[item] = minOf(count, cost[item] ?: 0)
+            }
+        }
+        library.repairs[shipSlug] = bill
+        setDirty()
+        return bill
+    }
+
+    fun deliverRepair(bill: RepairBill, item: Item, count: Int): Int {
+        val taken = minOf(count, bill.outstanding(item))
+        if (taken <= 0) return 0
+        bill.delivered[item] = (bill.delivered[item] ?: 0) + taken
+        setDirty()
+        return taken
+    }
+
+    /** Called once a repair has been written into the hull. */
+    fun closeRepair(player: UUID, shipSlug: String) {
+        if (libraryOf(player).repairs.remove(shipSlug) != null) setDirty()
     }
 
     private val libraries = HashMap<UUID, Library>()
@@ -150,6 +219,17 @@ class ShipwrightLedger : SavedData() {
                 shelf.add(row)
             }
             entry.put(PLANS_KEY, shelf)
+
+            val jobs = ListTag()
+            for (bill in library.repairs.values) {
+                val row = CompoundTag()
+                row.putString(SHIP_SLUG_KEY, bill.shipSlug)
+                row.putString(PLANS_NAME_KEY, bill.plansName)
+                row.put(COST_KEY, writeTally(bill.cost))
+                row.put(DELIVERED_KEY, writeTally(bill.delivered))
+                jobs.add(row)
+            }
+            entry.put(REPAIRS_KEY, jobs)
             list.add(entry)
         }
         tag.put(LIBRARIES_KEY, list)
@@ -174,6 +254,9 @@ class ShipwrightLedger : SavedData() {
         private const val OWNER_KEY = "owner"
         private const val SLOTS_KEY = "slots"
         private const val PLANS_KEY = "plans"
+        private const val REPAIRS_KEY = "repairs"
+        private const val SHIP_SLUG_KEY = "ship_slug"
+        private const val PLANS_NAME_KEY = "plans_name"
         private const val SHIP_NAME_KEY = "ship_name"
         private const val TEMPLATE_KEY = "template"
         private const val COST_KEY = "cost"
@@ -218,6 +301,18 @@ class ShipwrightLedger : SavedData() {
                     val plans = Plans(shipName, template, readTally(row, COST_KEY))
                     plans.delivered.putAll(readTally(row, DELIVERED_KEY))
                     library.plans[shipName] = plans
+                }
+
+                val jobs = entry.getList(REPAIRS_KEY).orElse(ListTag())
+                for (i in 0 until jobs.size) {
+                    val row = jobs.getCompound(i).orElse(null) ?: continue
+                    val slug = row.getString(SHIP_SLUG_KEY).orElse("")
+                    val plansName = row.getString(PLANS_NAME_KEY).orElse("")
+                    if (slug.isEmpty() || plansName.isEmpty()) continue
+
+                    val bill = RepairBill(slug, plansName, readTally(row, COST_KEY))
+                    bill.delivered.putAll(readTally(row, DELIVERED_KEY))
+                    library.repairs[slug] = bill
                 }
                 ledger.libraries[owner] = library
             }

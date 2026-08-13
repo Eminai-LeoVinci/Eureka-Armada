@@ -177,7 +177,13 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
      * the helm "tank %" definition, and is monotonic as fuel burns (no per-item sawtooth), so the aggregated
      * "Engine Power" readout drifts down smoothly instead of fluctuating. 0 when the engine is completely dry.
      */
-    private fun fuelFraction(): Double {
+    /**
+     * How full this engine is, 0..1, counting both the charge already burning and the items still in the slot.
+     *
+     * Public because a shipwright quotes a whole ship's fuel by averaging its engines, and the helm's own
+     * readout must not be the only thing that can answer "how much has it got left".
+     */
+    fun fuelFraction(): Double {
         // Burn-ticks per item for whatever fuel this engine holds; falls back to the last-consumed value once
         // the slot has emptied into the burning buffer.
         val burnPerItem = if (!fuel.isEmpty) getScaledFuel() else lastFuelValue

@@ -12,6 +12,7 @@ import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
 import net.minecraft.world.level.storage.TagValueOutput
@@ -19,6 +20,7 @@ import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.ShipHelmBlock
@@ -327,6 +329,26 @@ object ShipTemplate {
         val id = idFor(name) ?: return
         level.server.structureManager.remove(id)
     }
+
+    /**
+     * The same state with any stored heat taken out of it.
+     *
+     * An engine's HEAT is a blockstate property -- it drives the glow and the running look -- while its fuel
+     * lives on the block entity. A template captured from a ship under way therefore remembers hot engines,
+     * and writing one back gives a brand-new, empty engine that *looks* like it is at full power. The needle
+     * only corrects itself when somebody puts fuel in and the next tick rewrites the state.
+     *
+     * Used by **repair only**, deliberately, and the difference is real rather than taste. A bottled ship
+     * carries its engines' block-entity NBT with it -- capture records the coal before the hull is cleared --
+     * so it comes back both hot and fuelled, and cooling it would be a lie in the other direction. A repaired
+     * block is a genuinely new block that has never burned anything.
+     */
+    fun cooled(state: BlockState): BlockState =
+        if (state.hasProperty(EurekaProperties.HEAT) && state.getValue(EurekaProperties.HEAT) > 0) {
+            state.setValue(EurekaProperties.HEAT, 0)
+        } else {
+            state
+        }
 
     /**
      * Write a second, independent copy of [from] under the name [to].

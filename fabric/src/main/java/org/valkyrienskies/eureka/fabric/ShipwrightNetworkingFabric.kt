@@ -86,6 +86,7 @@ object ShipwrightNetworkingFabric {
             val villagerId = buf.readVarInt()
             val action = ShipwrightMenu.Action.entries.getOrNull(buf.readVarInt()) ?: return@registerGlobalReceiver
             val shipName = buf.readUtf()
+            val argument = buf.readUtf()
 
             val player = context.player()
             val level = player.level() as? ServerLevel ?: return@registerGlobalReceiver
@@ -96,7 +97,7 @@ object ShipwrightNetworkingFabric {
                 if (!ShipwrightTalk.isShipwright(villager)) return@execute
                 if (villager.distanceToSqr(player) > REACH_SQR) return@execute
 
-                ShipwrightTalk.act(level, player, villager, action, shipName)
+                ShipwrightTalk.act(level, player, villager, action, shipName, argument)
             }
         }
     }
@@ -111,11 +112,12 @@ object ShipwrightNetworkingFabric {
 
     /** Called from the screen. */
     @Environment(EnvType.CLIENT)
-    fun send(villager: Int, action: ShipwrightMenu.Action, shipName: String) {
+    fun send(villager: Int, action: ShipwrightMenu.Action, shipName: String, argument: String = "") {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeVarInt(villager)
         buf.writeVarInt(action.ordinal)
         buf.writeUtf(shipName)
+        buf.writeUtf(argument)
         ClientPlayNetworking.send(ActionPayload(toArray(buf)))
     }
 
@@ -136,6 +138,27 @@ object ShipwrightNetworkingFabric {
             buf.writeUtf(row.profile)
             buf.writeVarInt(row.materials.size)
             for (material in row.materials) {
+                buf.writeUtf(BuiltInRegistries.ITEM.getKey(material.item).toString())
+                buf.writeVarInt(material.needed)
+                buf.writeVarInt(material.given)
+            }
+        }
+
+        buf.writeVarInt(shelf.vessels.size)
+        for (vessel in shelf.vessels) {
+            buf.writeUtf(vessel.slug)
+            buf.writeVarInt(vessel.width)
+            buf.writeVarInt(vessel.height)
+            buf.writeVarInt(vessel.length)
+            buf.writeVarInt(vessel.blocks)
+            buf.writeDouble(vessel.mass)
+            buf.writeFloat(vessel.fuel)
+            buf.writeBoolean(vessel.child)
+            buf.writeUtf(vessel.plansName ?: "")
+            buf.writeFloat(vessel.match)
+            buf.writeUtf(vessel.refusal ?: "")
+            buf.writeVarInt(vessel.repairs.size)
+            for (material in vessel.repairs) {
                 buf.writeUtf(BuiltInRegistries.ITEM.getKey(material.item).toString())
                 buf.writeVarInt(material.needed)
                 buf.writeVarInt(material.given)
@@ -172,7 +195,32 @@ object ShipwrightNetworkingFabric {
                 materials.sumOf { it.needed }, mass, topSpeed, profile, materials
             )
         }
-        return ShipwrightMenu.Shelf(villager, slots, hasFreeBottle, rows)
+        val vessels = List(buf.readVarInt()) {
+            val slug = buf.readUtf()
+            val width = buf.readVarInt()
+            val height = buf.readVarInt()
+            val length = buf.readVarInt()
+            val blocks = buf.readVarInt()
+            val mass = buf.readDouble()
+            val fuel = buf.readFloat()
+            val child = buf.readBoolean()
+            val plansName = buf.readUtf().takeIf { it.isNotEmpty() }
+            val match = buf.readFloat()
+            val refusal = buf.readUtf().takeIf { it.isNotEmpty() }
+            val repairs = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) {
+                val id = buf.readUtf()
+                val needed = buf.readVarInt()
+                val given = buf.readVarInt()
+                val item: Item? = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)
+                if (item != null) repairs.add(ShipwrightMenu.Material(item, needed, given))
+            }
+            ShipwrightMenu.Vessel(
+                slug, width, height, length, blocks, mass, fuel, child, plansName, match, refusal, repairs
+            )
+        }
+
+        return ShipwrightMenu.Shelf(villager, slots, hasFreeBottle, rows, vessels)
     }
 
     private fun toArray(buf: FriendlyByteBuf): ByteArray {

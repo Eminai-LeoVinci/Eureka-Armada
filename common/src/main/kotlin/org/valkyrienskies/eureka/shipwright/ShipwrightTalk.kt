@@ -59,14 +59,81 @@ object ShipwrightTalk {
         sender?.invoke(player, shelf)
     }
 
-    fun shelfFor(level: ServerLevel, player: ServerPlayer, villager: Villager): ShipwrightMenu.Shelf =
-        ShipwrightMenu.snapshot(
+    fun shelfFor(level: ServerLevel, player: ServerPlayer, villager: Villager): ShipwrightMenu.Shelf {
+        val shelf = ShipwrightMenu.snapshot(
             ledger = ShipwrightLedger.get(level.server),
             owner = player.uuid,
             villager = villager.id,
             hasFreeBottle = Shipwright.freeBottle(player) != null,
             detail = { template -> detailOf(level, template) }
         )
+        return ShipwrightMenu.Shelf(
+            shelf.villager, shelf.slots, shelf.hasFreeBottle, shelf.rows,
+            vesselsFor(level, player, villager)
+        )
+    }
+
+    /**
+     * Every hull the shipwright can see, with its repair state.
+     *
+     * The dropdown's answer is remembered on the repair bill; when there is none yet the shipwright guesses,
+     * quotes against its guess, and the player sees a pre-filled dropdown they can change.
+     */
+    private fun vesselsFor(
+        level: ServerLevel,
+        player: ServerPlayer,
+        villager: Villager
+    ): List<ShipwrightMenu.Vessel> {
+        val ledger = ShipwrightLedger.get(level.server)
+        val bench = yard(villager)
+
+        return ShipwrightYard.visible(level, bench).mapNotNull { (ship, isChild) ->
+            // Tight block bounds, the same measure a template uses -- see ShipRepair.bounds.
+            val hull = ShipRepair.bounds(level, ship) ?: return@mapNotNull null
+            val slug = ship.slug ?: return@mapNotNull null
+
+            // The captain's choice if they have made one, otherwise the shipwright's guess.
+            val chosen = ledger.repairFor(player.uuid, slug)?.plansName
+                ?: ShipwrightYard.guessPlans(level, player.uuid, ship)?.shipName
+
+            val plans = chosen?.let { ledger.plansFor(player.uuid, it) }
+            val assessment = plans?.let { ShipRepair.assess(level, ship, it) }
+
+            // Re-quoted on EVERY look, not only when no bill exists yet.
+            //
+            // This is what keeps a hull's damage current, and it has to be unconditional: a finished repair
+            // leaves a bill behind whose cost is empty, so "quote only if there is no bill" would find that
+            // empty bill forever and report a ship as sound however much of it was later blown off. Materials
+            // already handed over survive the re-quote -- see ShipwrightLedger.quoteRepair.
+            //
+            // Doing it here rather than off a block-update hook is deliberate. A hook would fire for every
+            // block placed or broken on every ship in the world, to answer a question nobody is asking until
+            // they open this book. Reassessing when the book opens gives the same answer at the only moment it
+            // can be seen.
+            val bill = if (plans != null && assessment != null) {
+                ledger.quoteRepair(player.uuid, slug, plans.shipName, assessment.missing)
+            } else {
+                null
+            }
+
+            ShipwrightMenu.Vessel(
+                slug = slug,
+                width = hull.width,
+                height = hull.height,
+                length = hull.length,
+                blocks = hull.blocks,
+                mass = ship.inertiaData.mass,
+                fuel = ShipwrightYard.fuelOf(level, ship),
+                child = isChild,
+                plansName = chosen,
+                match = assessment?.match ?: 0f,
+                refusal = assessment?.refusal,
+                repairs = bill?.cost?.map { (item, needed) ->
+                    ShipwrightMenu.Material(item, needed, bill.delivered[item] ?: 0)
+                } ?: emptyList()
+            )
+        }
+    }
 
     /**
      * The size, weight and speed of a template, recomputed rather than stored.
@@ -99,9 +166,22 @@ object ShipwrightTalk {
         player: ServerPlayer,
         villager: Villager,
         action: ShipwrightMenu.Action,
-        shipName: String
+        shipName: String,
+        argument: String = ""
     ) {
         val ledger = ShipwrightLedger.get(level.server)
+
+        // The yard actions name a HULL rather than a set of plans, so they resolve differently and are handled
+        // before the shelf lookup below would fail on a slug it has never heard of.
+        if (action == ShipwrightMenu.Action.SELECT ||
+            action == ShipwrightMenu.Action.PAY_REPAIR ||
+            action == ShipwrightMenu.Action.REPAIR
+        ) {
+            yardAction(level, player, villager, action, shipName, argument)
+            openShelf(level, player, villager)
+            return
+        }
+
         val plans = ledger.plansFor(player.uuid, shipName)
 
         if (plans == null) {
@@ -135,9 +215,108 @@ object ShipwrightTalk {
                     Shipwright.bottle(level, player, plans)
                 }
             }
+            // Handled above, before the shelf lookup -- these name a hull, not a set of plans.
+            else -> Unit
         }
 
         openShelf(level, player, villager)
+    }
+
+    /**
+     * The three actions that act on a hull in the water rather than on a page.
+     *
+     * [slug] names the ship; for [ShipwrightMenu.Action.SELECT], [argument] names the plans chosen in the
+     * dropdown.
+     */
+    private fun yardAction(
+        level: ServerLevel,
+        player: ServerPlayer,
+        villager: Villager,
+        action: ShipwrightMenu.Action,
+        slug: String,
+        argument: String
+    ) {
+        val bench = yard(villager)
+        // Re-resolved from what the shipwright can see rather than trusting the slug on the wire, so a client
+        // cannot ask about a hull on the other side of the world.
+        val ship = ShipwrightYard.visible(level, bench).firstOrNull { it.first.slug == slug }?.first ?: run {
+            PathMessages.send(player, "That ship is no longer in the yard.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val ledger = ShipwrightLedger.get(level.server)
+        val chosen = when (action) {
+            ShipwrightMenu.Action.SELECT -> argument
+            else -> ledger.repairFor(player.uuid, slug)?.plansName
+        }
+        val plans = chosen?.let { ledger.plansFor(player.uuid, it) } ?: run {
+            PathMessages.send(player, "Choose which plans to mend it against.", PathMessages.Kind.WARN)
+            return
+        }
+
+        when (action) {
+            ShipwrightMenu.Action.SELECT -> {
+                val assessment = ShipRepair.assess(level, ship, plans)
+                if (assessment == null) {
+                    PathMessages.send(player, "The plans for that ship are missing.", PathMessages.Kind.ERROR)
+                    return
+                }
+                // Quoted even when refused, so the card can show the player exactly why rather than only that
+                // the button is dead.
+                ledger.quoteRepair(player.uuid, slug, plans.shipName, assessment.missing)
+                assessment.refusal?.let { PathMessages.send(player, it, PathMessages.Kind.WARN) }
+            }
+
+            ShipwrightMenu.Action.PAY_REPAIR -> {
+                val bill = ledger.repairFor(player.uuid, slug) ?: return
+                payRepair(level, player, bill)
+            }
+
+            ShipwrightMenu.Action.REPAIR -> ShipwrightYard.repair(level, player, ship, plans)
+
+            else -> Unit
+        }
+    }
+
+    /**
+     * Take everything the repair still needs out of [player]'s inventory.
+     *
+     * The same rules as paying for a build: all at once, never more than is owed, and creative settles the
+     * whole bill outright.
+     */
+    private fun payRepair(level: ServerLevel, player: ServerPlayer, bill: ShipwrightLedger.RepairBill) {
+        val ledger = ShipwrightLedger.get(level.server)
+
+        if (player.abilities.instabuild) {
+            for ((item, owed) in bill.outstanding()) ledger.deliverRepair(bill, item, owed)
+            PathMessages.send(player, "The shipwright has all it needs.", PathMessages.Kind.GOOD)
+            return
+        }
+
+        var taken = 0
+        for (slot in 0 until player.inventory.containerSize) {
+            val stack = player.inventory.getItem(slot)
+            if (stack.isEmpty) continue
+            val wanted = bill.outstanding(stack.item)
+            if (wanted <= 0) continue
+
+            val accepted = ledger.deliverRepair(bill, stack.item, minOf(wanted, stack.count))
+            if (accepted <= 0) continue
+            stack.shrink(accepted)
+            taken += accepted
+        }
+
+        if (taken == 0) {
+            PathMessages.send(player, "Nothing on you that it needs.", PathMessages.Kind.WARN)
+        } else if (bill.ready) {
+            PathMessages.send(player, "The shipwright has all it needs.", PathMessages.Kind.GOOD)
+        } else {
+            PathMessages.send(
+                player,
+                "Handed over $taken items -- ${(bill.progress * 100).toInt()}% of the repair.",
+                PathMessages.Kind.GOOD
+            )
+        }
     }
 
     /**
