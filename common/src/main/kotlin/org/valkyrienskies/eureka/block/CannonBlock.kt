@@ -4,24 +4,32 @@ import com.mojang.serialization.MapCodec
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.Containers
+import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
+import net.minecraft.world.level.block.BaseEntityBlock
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.Mirror
+import net.minecraft.world.level.block.RenderShape
 import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.block.SoundType
+import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.state.StateDefinition
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.material.MapColor
 import net.minecraft.world.level.pathfinder.PathComputationType
+import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
+import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
 import org.valkyrienskies.mod.common.blockProps
@@ -57,7 +65,7 @@ import org.valkyrienskies.mod.common.blockProps
  * *not* the `.opposite` that the helm and engine use. Those two want their faces turned toward you; a gun
  * wants to fire away from you.
  */
-class CannonBlock : Block(
+class CannonBlock : BaseEntityBlock(
     blockProps().mapColor(MapColor.METAL)
         .requiresCorrectToolForDrops()
         .strength(4.0F)
@@ -178,6 +186,43 @@ class CannonBlock : Block(
     }
 
     override fun isPathfindable(state: BlockState, type: PathComputationType): Boolean = false
+
+    /** Only the breech end carries the magazine; see [CannonBlockEntity]. */
+    override fun newBlockEntity(pos: BlockPos, state: BlockState): BlockEntity? =
+        if (state.getValue(CANNON_PART) == CannonPart.REAR) CannonBlockEntity(pos, state) else null
+
+    override fun getRenderShape(state: BlockState): RenderShape = RenderShape.MODEL
+
+    /**
+     * Open the magazine, from either half of the gun.
+     *
+     * The front block has no block entity of its own, so it walks back to the rear rather than doing nothing
+     * -- a player clicking the barrel is asking about the same gun as one clicking the trail, and a menu that
+     * opens from one end and not the other would read as a bug every time.
+     */
+    override fun useWithoutItem(
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hit: BlockHitResult
+    ): InteractionResult {
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val rear = pos.relative(state.getValue(HORIZONTAL_FACING).opposite, state.getValue(CANNON_PART).ordinal)
+        val magazine = level.getBlockEntity(rear) as? CannonBlockEntity ?: return InteractionResult.PASS
+
+        player.openMenu(magazine)
+        return InteractionResult.CONSUME
+    }
+
+    /** Spill the powder and shot when the gun is broken, like any other container. */
+    override fun playerWillDestroy(level: Level, pos: BlockPos, state: BlockState, player: Player): BlockState {
+        if (!level.isClientSide && state.getValue(CANNON_PART) == CannonPart.REAR) {
+            (level.getBlockEntity(pos) as? CannonBlockEntity)?.let { Containers.dropContents(level, pos, it) }
+        }
+        return super.playerWillDestroy(level, pos, state, player)
+    }
 
     override fun codec(): MapCodec<CannonBlock> = CODEC
 

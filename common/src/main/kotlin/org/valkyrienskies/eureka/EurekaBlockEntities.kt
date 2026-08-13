@@ -8,6 +8,7 @@ import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.state.BlockState
+import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.registry.DeferredRegister
@@ -30,6 +31,10 @@ object EurekaBlockEntities {
     ) withBE ::ShipHelmBlockEntity byName "ship_helm"
 
     val ENGINE = EurekaBlocks.ENGINE withBE ::EngineBlockEntity byName "engine"
+
+    // Only the rear half of a cannon ever builds one -- CannonBlock.newBlockEntity returns null for the
+    // front -- but the type still has to name the block, which is the same block for both halves.
+    val CANNON = EurekaBlocks.CANNON withBE ::CannonBlockEntity byName "cannon"
 
     fun register() {
         BLOCKENTITIES.applyAll()

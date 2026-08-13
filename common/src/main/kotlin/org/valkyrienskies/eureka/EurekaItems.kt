@@ -7,6 +7,8 @@ import net.minecraft.world.item.CreativeModeTab
 import net.minecraft.world.item.Item
 import org.valkyrienskies.eureka.item.BlueprintItem
 import org.valkyrienskies.eureka.item.BottledShipItem
+import org.valkyrienskies.eureka.item.Cannonball
+import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.item.ShipBottleItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.eureka.registry.RegistrySupplier
@@ -36,6 +38,16 @@ object EurekaItems {
      * Unlike a bottle, drafting leaves the ship alone -- a blueprint is a reading, not a removal.
      */
     val BLUEPRINT: RegistrySupplier<Item> = ITEMS.register("blueprint") { BlueprintItem(itemProps()) }
+
+    /**
+     * The four grades of shot, in the order a captain meets them.
+     *
+     * Stacked to 16 like snowballs rather than 64 -- see [org.valkyrienskies.eureka.item.CannonballItem].
+     * Steel is deliberately missing: it needs a steel ingot to be made from, and there is not one yet.
+     */
+    val CANNONBALLS: Map<Cannonball, RegistrySupplier<Item>> = Cannonball.entries.associateWith { ball ->
+        ITEMS.register(ball.itemName) { CannonballItem(ball, itemProps().stacksTo(16)) }
+    }
 
     fun register() {
         // Declared above so they land before the block items; the creative tab walks this register in order.
