@@ -1,0 +1,7 @@
+{
+  "_comment": "Deliberate placeholder. A held cannon wants its own model and skin; until those exist the checker makes it obvious this is unfinished rather than subtly wrong.",
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "vs_eureka:item/cannon_placeholder"
+  }
+}

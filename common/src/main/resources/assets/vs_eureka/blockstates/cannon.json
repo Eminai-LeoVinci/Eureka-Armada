@@ -1,0 +1,15 @@
+{
+  "variants": {
+    "facing=north,part=rear":  { "model": "vs_eureka:block/cannon_rear" },
+    "facing=north,part=front": { "model": "vs_eureka:block/cannon_front" },
+
+    "facing=east,part=rear":   { "model": "vs_eureka:block/cannon_rear",  "y": 90 },
+    "facing=east,part=front":  { "model": "vs_eureka:block/cannon_front", "y": 90 },
+
+    "facing=south,part=rear":  { "model": "vs_eureka:block/cannon_rear",  "y": 180 },
+    "facing=south,part=front": { "model": "vs_eureka:block/cannon_front", "y": 180 },
+
+    "facing=west,part=rear":   { "model": "vs_eureka:block/cannon_rear",  "y": 270 },
+    "facing=west,part=front":  { "model": "vs_eureka:block/cannon_front", "y": 270 }
+  }
+}

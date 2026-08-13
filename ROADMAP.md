@@ -424,9 +424,26 @@ back hot and fuelled.
 Independent of the template foundation, moved ahead of pirates so combat exists before the
 threat does — which also means pirate hulls can be authored with guns already aboard.
 
-**The block.** Two-block footprint like a bed. Container GUI templated on the Engine —
+**The block.** **Two**-block footprint, laid rear-to-front with the bed gesture: the rear lands
+on the block you click and the gun runs away from you. Container GUI templated on the Engine —
 `EngineBlock` / `EngineBlockEntity` / `gui/engine/EngineScreenMenu` / `EngineScreen`, using
 `GuiUtil.inventorySlots` and `KtContainerData` for synced numbers.
+
+> **This was three blocks first, and the reversal is the useful part.** At the model's original
+> 44 x 21 x 22 — 2.75 blocks long — two blocks left 0.75 of a block hanging outside the
+> footprint, at the two places that most need to be clear: ahead of the muzzle for the shot and
+> the gunport, behind the trail for the crew. Since the trigger is a right-click **on the
+> cannon**, geometry outside its own blocks is also geometry a player can see but not click.
+> Three was right for that gun.
+>
+> Then the wagon was pitched back 22.5° and its trail shortened to suit, and the barrel trimmed
+> to match, bringing the gun to **34u**. At that length two blocks overhang by 1u each end while
+> three waste 6u each end — which would have forced guns 3 blocks apart on a broadside and left
+> both end blocks visibly empty. The footprint follows the model, not the other way round.
+>
+> Scaling the model to fit was rejected throughout: it costs a quarter of the gun's size to fix
+> an axis that was never the problem. The gun is 1.31 wide and 1.375 tall regardless, so it
+> overhangs sideways and upward whatever the footprint; only the length axis was ever in play.
 
 > ⚠ **Pass explicit atlas dimensions on every `blit`.** Documented at `EngineScreen.kt:18-25`:
 > the engine atlas is 512×512, and implicit-256 blits (cancelled out by a 2× pose scale) broke
@@ -464,12 +481,37 @@ corner (ancient debris for netherite) + 4 of the charge in the remaining slots.
   from the survivors, so burning never adds free damage. Copper 2, iron 3, steel 4, gold 5,
   netherite 6.
 
-**Aiming: fixed, always.** Cannons do not track. The *ship* is responsible for angling the
-shot, which makes fights about positioning and turns the existing pursuit code into a combat
-AI almost for free.
+**Aiming: cannons never track**, but the barrel elevates by hand. Sneak + right-click cycles it
+through five fixed positions — **−45°, −22.5°, level, +22.5°, +45°** — wrapping from the top
+back to the bottom. Every one of those is an angle vanilla's element rotation already permits,
+so all five come out of the converter from the single source model; **no per-angle art is
+needed.** The barrel pivots on its trunnions, at `(±4, 16, 1.9)`.
 
-**Trigger.** A button placed on the cannon, toward the back. Start with a player-placed button
-— easiest, and it defers the question of whether the model needs an overhaul to carry one.
+The geometry works out unusually kindly. Full depression lands the muzzle at **y = −0.62** —
+resting on the floor rather than driven through it — and full elevation reaches **y = 33.3**,
+about 1.1 blocks above the block's ceiling, which is legal because vanilla only range-checks
+`from`/`to` and those do not move. The muzzle also draws *back* at both extremes, from z −20.1
+level to roughly −13, so level is the worst case for footprint and a 2-block gun stays a
+2-block gun at every elevation.
+
+This is not tracking, so the design intent survives: the *ship* still does the aiming that
+matters and fights are still about positioning. Elevation is a range control, coarse enough
+(22.5° steps) that it cannot substitute for manoeuvring — and it turns the existing pursuit
+code into a combat AI almost for free either way.
+
+> The fuse forced this to wait for art. `cannon_wick` began as two crossed planes carrying ±45°
+> Y rotations, and Java allows exactly **one** rotation per element — so there was nowhere to
+> put the pitch, and the fuse would have floated ~7 units off the breech at full elevation. It
+> was re-modelled as a single axis-aligned cube in `NewCannonUpdate3`, which is why the model
+> has 97 elements rather than 98.
+
+**Trigger.** Hold a torch of any kind — torch, soul torch, copper torch — and **sneak + right-click
+a cannon** within reach. It fires.
+
+Chosen over the player-placed button it replaced because it is both more true to the thing and
+kinder to the art: a gunner touching a linstock to the touch-hole is what firing a muzzle-loader
+actually looks like, and the model needs no overhaul to carry a button it never had. It also
+makes the gesture legible without any UI — you are holding fire, and you are putting it on the gun.
 
 **Crew duties — the crew system's first real jobs.** A crew member can be assigned to *fire
 the cannons* or to *put out fires*, and assignment is exclusive: one task per crew member, only
@@ -528,10 +570,36 @@ become ordinary cannons that need feeding. Same block, same GUI, same capture-in
 behaviour; only the supply changes hands.
 
 **Other new ground.** First sounds in the mod — there is no `Registries.SOUND_EVENT` register
-and no `sounds.json`. The model source is a `.bbmodel` (Blockbench-native, the good case) at
-`MC Models or NBT's\Minecraft - Old Cannon`; if it uses arbitrary rotations — vanilla JSON
-allows only 0/±22.5/±45 on one axis per element — it needs a `BlockEntityRenderer`, for which
-`ShipHelmBlockEntityRenderer` is the in-repo precedent.
+and no `sounds.json`.
+
+**The model converted to plain vanilla JSON — no `BlockEntityRenderer` needed.** Source is
+`MC Models or NBT's\New Cannon\NewCannonUpdate3.bbmodel`: 97 cubes, of which only the four wheel
+spokes are rotated, at exactly ±45° on a single axis — the one rotation vanilla allows. It is
+`box_uv`, but Blockbench already stores the resolved per-face UVs (including the 180° flip on
+`up` and the mirror on `down`), so they pass straight through scaled by 16/128. The converter
+that splits it across the two parts is throwaway and lives in the scratchpad, not the repo —
+re-derive it from `cannon_*.json` if the art is ever revised.
+
+> ⚠ **The texture is embedded in the `.bbmodel`, and the loose PNG beside it is stale.** Pull it
+> out of the file's base64 `source`, never from `NewCannon_texture.png`.
+
+> ⚠ **Blockbench saves this model with a stripped outliner** — group nodes carry `uuid`,
+> `isOpen` and `children` and nothing else, so there are no group names, rotations or origins to
+> read. The wagon is therefore identified by its position in the tree, guarded by a cube-count
+> signature (13/2/1/37/4/4/18/18) that throws rather than tilting the wrong group if the model
+> is ever restructured. The cart is authored **flat** and pre-compensated for the 22.5° the
+> converter applies; do not "fix" it in the source.
+
+Two things that will bite anyone redoing this:
+
+- **Java block-model elements may run −16..32 in their own block's frame.** That is the whole
+  reason a 44-unit gun can be cut into three 16-unit blocks without splitting a single cube: a
+  cube is assigned to the block its centre falls in and is simply allowed to poke into its
+  neighbours.
+- **Per-block model rotation is equivalent to rotating the whole assembly.** Rotating each
+  part's model about its *own* centre, while the game moves the parts to their rotated
+  positions, composes to exactly the same result — so the blockstate needs nothing but a `y`
+  on each of the twelve variants.
 
 Cannon block-entity contents are captured automatically by `vs$fillFromVoxelSet`, so a bottled
 or blueprinted ship keeps its guns loaded with no extra work.

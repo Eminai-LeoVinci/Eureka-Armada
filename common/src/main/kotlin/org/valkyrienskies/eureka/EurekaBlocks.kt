@@ -21,6 +21,10 @@ object EurekaBlocks {
 
     val ANCHOR = BLOCKS.register("anchor", ::AnchorBlock)
     val ENGINE = BLOCKS.register("engine", ::EngineBlock)
+
+    // Three blocks long, laid rear-to-front like a bed -- see CannonBlock for why three.
+    val CANNON = BLOCKS.register("cannon", ::CannonBlock)
+
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
 
