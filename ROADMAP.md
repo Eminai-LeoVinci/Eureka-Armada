@@ -565,7 +565,7 @@ This applies to **every** ignition source, not just incendiary rounds — flint 
 included. Otherwise a flint and steel becomes the cheap answer to any warship, and containing
 all ship fire uniformly makes limited durability solve that problem on its own.
 
-**Firing.** One shot per cannon every 8 seconds. Note this is *per cannon* — a six-gun
+**Firing.** One shot per cannon every 4 seconds. Note this is *per cannon* — a six-gun
 broadside is effectively a shot every 1.3 s, so gun count, not fire rate, is what actually sets
 the difficulty of a pirate encounter. A per-ship stagger or global cooldown is likely needed on
 top.

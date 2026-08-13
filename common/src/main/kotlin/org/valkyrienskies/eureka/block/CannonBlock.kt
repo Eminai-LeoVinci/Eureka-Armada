@@ -3,7 +3,10 @@ package org.valkyrienskies.eureka.block
 import com.mojang.serialization.MapCodec
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
+import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.sounds.SoundEvents
+import net.minecraft.sounds.SoundSource
 import net.minecraft.world.Containers
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.LivingEntity
@@ -28,7 +31,9 @@ import net.minecraft.world.level.pathfinder.PathComputationType
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
+import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
@@ -80,11 +85,12 @@ class CannonBlock : BaseEntityBlock(
             stateDefinition.any()
                 .setValue(HORIZONTAL_FACING, Direction.NORTH)
                 .setValue(CANNON_PART, CannonPart.REAR)
+                .setValue(ELEVATION, EurekaProperties.ELEVATION_LEVEL)
         )
     }
 
     override fun createBlockStateDefinition(builder: StateDefinition.Builder<Block, BlockState>) {
-        builder.add(HORIZONTAL_FACING).add(CANNON_PART)
+        builder.add(HORIZONTAL_FACING).add(CANNON_PART).add(ELEVATION)
     }
 
     /**
@@ -194,11 +200,15 @@ class CannonBlock : BaseEntityBlock(
     override fun getRenderShape(state: BlockState): RenderShape = RenderShape.MODEL
 
     /**
-     * Open the magazine, from either half of the gun.
+     * Empty-handed: crouching lays the barrel, standing opens the magazine.
      *
-     * The front block has no block entity of its own, so it walks back to the rear rather than doing nothing
-     * -- a player clicking the barrel is asking about the same gun as one clicking the trail, and a menu that
-     * opens from one end and not the other would read as a bug every time.
+     * The two gestures are told apart by the crouch alone, which leaves the ordinary click doing the
+     * ordinary container thing. Firing is the third case and cannot live here at all -- vanilla never calls a
+     * block when a crouching player has a full hand -- so it is caught in `CannonRegistrationsFabric`.
+     *
+     * Either half of the gun answers. The front block has no block entity of its own, so it walks back to the
+     * rear rather than doing nothing: a player clicking the barrel means the same gun as one clicking the
+     * trail, and a menu that opened from one end only would read as a bug every time.
      */
     override fun useWithoutItem(
         state: BlockState,
@@ -209,11 +219,47 @@ class CannonBlock : BaseEntityBlock(
     ): InteractionResult {
         if (level.isClientSide) return InteractionResult.SUCCESS
 
-        val rear = pos.relative(state.getValue(HORIZONTAL_FACING).opposite, state.getValue(CANNON_PART).ordinal)
-        val magazine = level.getBlockEntity(rear) as? CannonBlockEntity ?: return InteractionResult.PASS
+        val facing = state.getValue(HORIZONTAL_FACING)
+        val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
 
+        if (player.isSecondaryUseActive) {
+            elevate(level, rear, facing, state.getValue(ELEVATION), player)
+            return InteractionResult.CONSUME
+        }
+
+        val magazine = level.getBlockEntity(rear) as? CannonBlockEntity ?: return InteractionResult.PASS
         player.openMenu(magazine)
         return InteractionResult.CONSUME
+    }
+
+    /**
+     * Lay the barrel one step, wrapping from the top back to the bottom.
+     *
+     * Both halves are written, because the elevation is a fact about the gun rather than about a block and
+     * the two models have to agree -- a barrel that elevated in the front block while the breech stayed level
+     * would tear the gun in half visually.
+     */
+    private fun elevate(level: Level, rear: BlockPos, facing: Direction, from: Int, player: Player) {
+        val next = (from + 1) % (ELEVATION.possibleValues.size)
+
+        for (part in CannonPart.entries) {
+            val pos = rear.relative(facing, part.ordinal)
+            val there = level.getBlockState(pos)
+            if (there.block !== this) continue
+            // UPDATE_CLIENTS only: this is a cosmetic re-pose, and asking for neighbour updates would rattle
+            // whatever is resting against the gun every time somebody adjusted the aim.
+            level.setBlock(pos, there.setValue(ELEVATION, next), Block.UPDATE_CLIENTS)
+        }
+
+        val degrees = EurekaProperties.elevationDegrees(next)
+        player.displayClientMessage(
+            Component.translatable(
+                "info.vs_eureka.cannon_elevation",
+                if (degrees > 0) "+%.1f".format(degrees) else "%.1f".format(degrees)
+            ),
+            true
+        )
+        level.playSound(null, rear, SoundEvents.LANTERN_PLACE, SoundSource.BLOCKS, 0.7f, 1.4f)
     }
 
     /** Spill the powder and shot when the gun is broken, like any other container. */

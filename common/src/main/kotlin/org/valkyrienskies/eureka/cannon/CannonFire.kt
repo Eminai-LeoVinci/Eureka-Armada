@@ -10,7 +10,9 @@ import net.minecraft.sounds.SoundSource
 import net.minecraft.world.item.Items
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
+import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
@@ -38,13 +40,15 @@ object CannonFire {
     const val COOLDOWN_TICKS = 80L
 
     /**
-     * Where the bore sits relative to the rear block's centre, in blocks.
+     * The bore, measured off the model, relative to the rear block's centre and in blocks.
      *
-     * Straight off the model: the muzzle is 17 units ahead of the rear block's centre along the facing, and
-     * the bore's axis is a shade over one block up.
+     * The trunnions are the pivot, so the muzzle is not at a fixed offset -- it swings on an arc as the gun
+     * is laid. Deriving it from the pivot and the barrel's length means the flash always leaves the actual
+     * mouth of the bore, at every elevation, without a lookup table to keep in step with the models.
      */
-    private const val MUZZLE_FORWARD = 1.0625
-    private const val MUZZLE_HEIGHT = 0.53
+    private const val TRUNNION_FORWARD = -0.3125
+    private const val TRUNNION_HEIGHT = 0.53
+    private const val BORE_LENGTH = 1.375
 
     /** Why a gun would not fire, or null if it did. */
     fun fire(level: ServerLevel, clicked: BlockPos, player: ServerPlayer?): Component? {
@@ -67,14 +71,23 @@ object CannonFire {
         if (magazine.powder.isEmpty) return Component.translatable("info.vs_eureka.cannon_no_powder")
         val ball = CannonShot.ballOf(magazine.shot) ?: return Component.translatable("info.vs_eureka.cannon_no_shot")
 
-        // Bore geometry, in whatever space the block lives in.
+        // Bore geometry, in whatever space the block lives in. The shot leaves along the barrel, so the
+        // elevation the player set is the elevation it flies at -- the model and the trajectory are driven
+        // by the same number rather than merely looking like they agree.
+        val pitch = Math.toRadians(EurekaProperties.elevationDegrees(state.getValue(ELEVATION)))
+        val alongBore = Math.cos(pitch)
+        val upBore = Math.sin(pitch)
+
+        val forward = TRUNNION_FORWARD + BORE_LENGTH * alongBore
+        val height = TRUNNION_HEIGHT + BORE_LENGTH * upBore
+
         val shipyardMuzzle = Vector3d(
-            rear.x + 0.5 + facing.stepX * MUZZLE_FORWARD,
-            rear.y + 0.5 + MUZZLE_HEIGHT,
-            rear.z + 0.5 + facing.stepZ * MUZZLE_FORWARD
+            rear.x + 0.5 + facing.stepX * forward,
+            rear.y + 0.5 + height,
+            rear.z + 0.5 + facing.stepZ * forward
         )
         val shipyardAhead = Vector3d(shipyardMuzzle).add(
-            facing.stepX.toDouble(), 0.0, facing.stepZ.toDouble()
+            facing.stepX * alongBore, upBore, facing.stepZ * alongBore
         )
 
         // ...and the same two points in world space. On solid ground the transform is the identity, so this
@@ -93,7 +106,9 @@ object CannonFire {
         magazine.readyAt = level.gameTime + COOLDOWN_TICKS
         magazine.setChanged()
 
-        CannonShot.spawn(level, from, direction, ball, shown, player)
+        // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left.
+        val gun = CannonPart.entries.map { rear.relative(facing, it.ordinal) }.toTypedArray()
+        CannonShot.spawn(level, from, direction, ball, shown, player, gun)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)

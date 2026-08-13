@@ -56,6 +56,21 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      */
     var firedBy: Entity? = null
 
+    /**
+     * The blocks of the gun that fired this, which the shot passes straight through.
+     *
+     * A muzzle is not a point outside the gun -- it is a hole *in* it -- so at some elevations the shot
+     * begins its first step inside its own barrel's collision box and detonates against the cannon that
+     * fired it. Depressed 22.5 degrees was the case that showed it: the bore sits four thousandths of a
+     * block above the front half's hitbox, close enough that the first step clips it. At full depression the
+     * muzzle drops below that box and the same shot leaves cleanly, which is exactly the kind of margin that
+     * should not be deciding whether a gun destroys itself.
+     *
+     * Only *this* gun is exempt, not cannons in general. Silencing an enemy's guns by shooting them is worth
+     * having, so the exemption has to be about the shot's own origin rather than about the block type.
+     */
+    private var gun: Array<BlockPos> = emptyArray()
+
     private var age = 0
 
     /** A cannonball is not a thing you can attack. */
@@ -114,7 +129,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         val hit = level().clip(
             ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this)
         )
-        if (hit.type != HitResult.Type.MISS) {
+        // The gun's own blocks are compared in the same space the hit reports -- shipyard for a hull, world
+        // for the ground -- because CannonFire records them from the same block positions the clip walks.
+        if (hit.type != HitResult.Type.MISS && !gun.contains(hit.blockPos)) {
             // location: world space, for the flash. blockPos: shipyard space, for the damage.
             burst(hit.location, hit.blockPos)
             return
@@ -183,7 +200,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.ITEM_STACK)
 
         /** Blocks per tick. Fast enough to read as a gun rather than a catapult, slow enough to watch. */
-        private const val SPEED = 2.5
+        private const val SPEED = 2.0
         private const val GRAVITY = 0.05
         private const val DRAG = 0.99
         private const val MAX_TICKS = 200
@@ -197,10 +214,12 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             direction: Vec3,
             ball: Cannonball,
             shownAs: ItemStack,
-            firedBy: Entity? = null
+            firedBy: Entity? = null,
+            gun: Array<BlockPos> = emptyArray()
         ): CannonShot {
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
+            shot.gun = gun
             shot.launch(from, direction, ball, shownAs)
             level.addFreshEntity(shot)
             return shot
