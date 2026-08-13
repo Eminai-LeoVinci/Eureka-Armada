@@ -5,9 +5,11 @@ import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.ServerPlayer
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.world.Containers
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.player.Player
@@ -35,6 +37,7 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
 import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.cannon.CannonFire
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
 import org.valkyrienskies.mod.common.blockProps
@@ -200,11 +203,41 @@ class CannonBlock : BaseEntityBlock(
     override fun getRenderShape(state: BlockState): RenderShape = RenderShape.MODEL
 
     /**
-     * Empty-handed: crouching lays the barrel, standing opens the magazine.
+     * Strike a spark on the gun and it goes off.
      *
-     * The two gestures are told apart by the crouch alone, which leaves the ordinary click doing the
-     * ordinary container thing. Firing is the third case and cannot live here at all -- vanilla never calls a
-     * block when a crouching player has a full hand -- so it is caught in `CannonRegistrationsFabric`.
+     * Flint and steel fires a cannon from any stance -- no crouch, no modifier, just the tool against the gun.
+     * The crouching case cannot arrive here, because vanilla never calls a block when a crouching player has a
+     * full hand; `CannonRegistrationsFabric` catches that one and fires it identically, which also stops the
+     * flint doing what it would otherwise do and setting the gun alight.
+     */
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        // An empty hand belongs to useWithoutItem -- the magazine, or the elevation if crouching.
+        //
+        // It has to be TRY_WITH_EMPTY_HAND and not PASS. Only TRY_WITH_EMPTY_HAND continues to
+        // useWithoutItem; PASS ends the interaction there and the block is never asked again. Returning PASS
+        // here is what silently killed both empty-hand gestures at once -- a right-click on a cannon simply
+        // did nothing, with no error to show for it.
+        if (stack.isEmpty) return InteractionResult.TRY_WITH_EMPTY_HAND
+
+        // Anything else in hand does whatever it normally does, so a block can still be placed against a gun
+        // rather than every click being swallowed by it.
+        if (!CannonFire.isIgniter(stack.item)) return InteractionResult.PASS
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        CannonFire.strike(level as ServerLevel, pos, player as? ServerPlayer, stack, hand)
+        return InteractionResult.CONSUME
+    }
+
+    /**
+     * Empty-handed: crouching lays the barrel, standing opens the magazine.
      *
      * Either half of the gun answers. The front block has no block entity of its own, so it walks back to the
      * rear rather than doing nothing: a player clicking the barrel means the same gun as one clicking the
@@ -239,6 +272,13 @@ class CannonBlock : BaseEntityBlock(
      * the two models have to agree -- a barrel that elevated in the front block while the breech stayed level
      * would tear the gun in half visually.
      */
+    /** Lay the barrel from anywhere on the gun. Public so the crouch-with-flint hook can reach it. */
+    fun elevateFrom(level: Level, clicked: BlockPos, state: BlockState, player: Player) {
+        val facing = state.getValue(HORIZONTAL_FACING)
+        val rear = clicked.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+        elevate(level, rear, facing, state.getValue(ELEVATION), player)
+    }
+
     private fun elevate(level: Level, rear: BlockPos, facing: Direction, from: Int, player: Player) {
         val next = (from + 1) % (ELEVATION.possibleValues.size)
 

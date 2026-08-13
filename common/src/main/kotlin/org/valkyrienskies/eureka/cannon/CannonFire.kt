@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.item.Items
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
@@ -130,6 +131,31 @@ object CannonFire {
 
         player?.let { level.gameEvent(it, net.minecraft.world.level.gameevent.GameEvent.EXPLODE, from) }
         return null
+    }
+
+    /**
+     * The whole gesture: fire the gun, explain if it will not, and spend the flint only on a shot that
+     * actually happened.
+     *
+     * Shared because the same gesture arrives by two routes -- standing, it reaches the block's `useItemOn`
+     * the ordinary way; crouching, vanilla skips the block entirely and a Fabric hook has to catch it. Both
+     * must behave identically, so both call this.
+     */
+    fun strike(
+        level: ServerLevel,
+        clicked: BlockPos,
+        player: ServerPlayer?,
+        stack: ItemStack,
+        hand: InteractionHand
+    ) {
+        val refusal = fire(level, clicked, player)
+        if (refusal != null) {
+            // Asking a gun whether it is loaded should be free; charging durability for a refusal would
+            // punish a player for checking.
+            player?.displayClientMessage(refusal, true)
+        } else if (player != null && !player.hasInfiniteMaterials()) {
+            stack.hurtAndBreak(1, player, hand)
+        }
     }
 
     /**

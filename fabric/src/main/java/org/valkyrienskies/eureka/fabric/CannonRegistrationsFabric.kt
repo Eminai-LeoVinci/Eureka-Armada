@@ -8,16 +8,18 @@ import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.cannon.CannonFire
 
 /**
- * Sneak and right-click a cannon with flint and steel to fire it.
+ * The one cannon gesture the block itself can never see: **crouching with flint and steel in hand**.
  *
- * ## Why this cannot live on the block
- * Vanilla does not call a block's `useItemOn` **at all** when the player is crouching with something in hand
- * -- it goes straight to using the item, which for flint and steel means setting the gun alight. That is the
- * same trap the Heart of the Sea gesture hit (see `ShipHelmBlock.useItemOn`), and the same answer: catch it
- * here, before the item ever gets its turn.
+ * Vanilla does not call a block's `useItemOn` at all when a crouching player has a full hand -- it goes
+ * straight to using the item, which for flint and steel means setting the gun alight. A cannon is iron and oak
+ * and does not burn, and a fire block on the barrel would be in the way of the next shot besides.
  *
- * Claiming the click is therefore not tidiness, it is the feature: a cannon is iron and oak and does not burn,
- * so the spark has to light the charge and leave no fire block sitting on the barrel.
+ * So this claims that one combination and **fires the gun**, exactly as a standing click would. Flint and
+ * steel means fire whatever your stance -- making it elevate instead would be a second, invisible rule keyed
+ * on a crouch nobody was told about.
+ *
+ * Everything else passes straight through, deliberately: crouch-placing a block against a gun has to keep
+ * working, so only the igniter is intercepted.
  */
 object CannonRegistrationsFabric {
 
@@ -31,16 +33,7 @@ object CannonRegistrationsFabric {
             if (level.getBlockState(hit.blockPos).block !is CannonBlock) return@register InteractionResult.PASS
 
             val serverLevel = level as? ServerLevel ?: return@register InteractionResult.PASS
-            val serverPlayer = player as? ServerPlayer
-
-            val refusal = CannonFire.fire(serverLevel, hit.blockPos, serverPlayer)
-            if (refusal != null) {
-                // A gun that will not fire says why, and costs nothing to ask. Spending durability on a
-                // refusal would punish a player for checking whether a cannon was loaded.
-                serverPlayer?.displayClientMessage(refusal, true)
-            } else if (serverPlayer != null && !serverPlayer.hasInfiniteMaterials()) {
-                stack.hurtAndBreak(1, serverPlayer, hand)
-            }
+            CannonFire.strike(serverLevel, hit.blockPos, player as? ServerPlayer, stack, hand)
 
             // Claimed either way, so the flint never gets its turn and no fire is placed on the gun.
             InteractionResult.SUCCESS
