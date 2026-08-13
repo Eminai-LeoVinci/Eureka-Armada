@@ -162,7 +162,15 @@ class CannonBlock : BaseEntityBlock(
                 if (there.getValue(CANNON_PART) != part) continue
                 if (there.getValue(HORIZONTAL_FACING) != facing) continue
 
-                level.setBlock(other, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL)
+                // SUPPRESS_DROPS because the half that was actually broken has already dropped the gun, and
+                // KNOWN_SHAPE because this also runs during bulk work -- assembling, bottling, a ship being
+                // deleted -- where a neighbour update knocks whatever was resting against the gun loose and
+                // drops that too.
+                level.setBlock(
+                    other,
+                    Blocks.AIR.defaultBlockState(),
+                    Block.UPDATE_CLIENTS or Block.UPDATE_KNOWN_SHAPE or Block.UPDATE_SUPPRESS_DROPS
+                )
             }
         } finally {
             dismantling = false

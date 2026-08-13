@@ -7,9 +7,11 @@ import net.minecraft.nbt.CompoundTag
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.Clearable
+import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
@@ -145,6 +147,26 @@ object ShipBottle {
                         (level.getBlockEntity(cursor) as? Clearable)?.clearContent()
                     }
                 }
+            }
+        }
+
+        // The same for anything hanging on the hull. Item frames and paintings are ENTITIES, so deleting the
+        // ship's blocks does not delete them -- it pulls the wall out from behind them, and on the next tick
+        // each one notices it has nothing to hang on, breaks, and drops itself plus whatever it held. They are
+        // already safe in the template (captureEntities takes them), so that is pure duplication: the frames
+        // come back with the ship and a copy of every one is left floating where it used to be.
+        //
+        // discard() rather than kill()/remove-with-drops: the original is being replaced by the captured copy,
+        // not destroyed, so it should leave nothing behind at all.
+        ship.worldAABB.let { hull ->
+            // A little slack, because a frame hangs on the OUTSIDE face of the block it is attached to and so
+            // sits fractionally beyond the hull's own box.
+            val box = AABB(
+                hull.minX() - 1.0, hull.minY() - 1.0, hull.minZ() - 1.0,
+                hull.maxX() + 1.0, hull.maxY() + 1.0, hull.maxZ() + 1.0
+            )
+            for (hanging in level.getEntitiesOfClass(BlockAttachedEntity::class.java, box)) {
+                hanging.discard()
             }
         }
 
