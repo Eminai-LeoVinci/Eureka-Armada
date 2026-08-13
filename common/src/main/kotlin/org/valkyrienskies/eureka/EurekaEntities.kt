@@ -10,6 +10,7 @@ import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.MobCategory
 import net.minecraft.world.level.Level
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
+import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.eureka.registry.RegistrySupplier
 
@@ -52,6 +53,23 @@ object EurekaEntities {
             // not a punishment anyone would read as fair.
             .fireImmune()
             .byName("thrown_ship_bottle")
+
+    /**
+     * A cannonball in flight.
+     *
+     * Tracked to 16 chunks and updated every tick for the same reason the bottle is: its path is stepped
+     * server-side against ship transforms the client cannot reproduce, so there is nothing to dead-reckon
+     * between updates. A shot is also over in a second or two, which makes any stutter the whole of what you
+     * see of it.
+     */
+    val CANNON_SHOT: RegistrySupplier<EntityType<CannonShot>> =
+        (::CannonShot category MobCategory.MISC)
+            .sized(0.3f, 0.3f)
+            .clientTrackingRange(16)
+            .updateInterval(1)
+            // Iron does not mind lava, and neither should a shot that flies over a lake of it.
+            .fireImmune()
+            .byName("cannon_shot")
 
     fun register() {
         ENTITIES.applyAll()

@@ -46,6 +46,19 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     var powder: ItemStack = ItemStack.EMPTY
     var shot: ItemStack = ItemStack.EMPTY
 
+    /**
+     * The game tick this gun can next be fired on.
+     *
+     * An absolute deadline rather than a countdown, so it needs no ticker: a gun nobody visits costs nothing,
+     * and a chunk that unloads mid-reload comes back with the wait already correctly elapsed rather than
+     * restarting it.
+     *
+     * Stored as "when it is ready" rather than "when it last fired" because the latter needs a sentinel for
+     * a gun that has never fired, and `gameTime - Long.MIN_VALUE` overflows to a negative wait -- which reads
+     * in game as a cannon reloading for 2147483647 seconds. A fresh gun is simply ready at tick 0.
+     */
+    var readyAt: Long = 0L
+
     /** Both barrels of the question: a gun with powder and no ball is as useless as the reverse. */
     val loaded: Boolean get() = !powder.isEmpty && !shot.isEmpty
 
@@ -65,16 +78,31 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         super.saveAdditional(output)
         if (!powder.isEmpty) output.store("Powder", ItemStack.CODEC, powder)
         if (!shot.isEmpty) output.store("Shot", ItemStack.CODEC, shot)
+        output.putLong("ReadyAt", readyAt)
     }
 
     override fun loadAdditional(input: ValueInput) {
         super.loadAdditional(input)
         powder = input.read("Powder", ItemStack.CODEC).orElse(ItemStack.EMPTY)
         shot = input.read("Shot", ItemStack.CODEC).orElse(ItemStack.EMPTY)
+        readyAt = input.getLongOr("ReadyAt", 0L)
     }
 
     // region Container
     override fun getContainerSize(): Int = 2
+
+    /**
+     * The magazine holds 64 rounds even though shot only stacks to 16 in a player's hands.
+     *
+     * Those two limits answer different questions. Sixteen is about what a gunner can *carry* -- it is the
+     * reason a magazine is a supply problem worth solving. Sixty-four is about what the gun *holds*, and a
+     * cannon that had to be topped up every sixteen shots would make resupply the whole of the gameplay
+     * rather than a constraint on it.
+     *
+     * Taking rounds back out is safe: every player-side slot still reports the item's own 16, so a stack of
+     * 64 shift-clicked out lands as four stacks of 16 rather than one illegal pile.
+     */
+    override fun getMaxStackSize(): Int = MAGAZINE_CAPACITY
 
     override fun isEmpty(): Boolean = powder.isEmpty && shot.isEmpty
 
@@ -135,5 +163,8 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     companion object {
         const val POWDER = 0
         const val SHOT = 1
+
+        /** Rounds a gun can hold, regardless of how few a player can carry in one slot. */
+        const val MAGAZINE_CAPACITY = 64
     }
 }

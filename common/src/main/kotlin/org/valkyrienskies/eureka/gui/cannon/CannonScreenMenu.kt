@@ -31,6 +31,12 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
         })
         addSlot(object : Slot(container, CannonBlockEntity.SHOT, SHOT_X, SLOT_Y) {
             override fun mayPlace(stack: ItemStack): Boolean = stack.item is CannonballItem
+
+            // Slot.getMaxStackSize(stack) is min(slot limit, item limit) by default, so shot would cap at
+            // its carry limit of 16 no matter what the container said. The gun's capacity is a fact about
+            // the gun, so it overrides here -- and only here, which is what keeps every player-side slot
+            // honest about the item's own 16.
+            override fun getMaxStackSize(stack: ItemStack): Int = CannonBlockEntity.MAGAZINE_CAPACITY
         })
 
         inventorySlots(::addSlot, playerInv)

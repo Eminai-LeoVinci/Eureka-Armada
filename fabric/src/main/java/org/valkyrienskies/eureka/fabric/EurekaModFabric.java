@@ -74,6 +74,11 @@ public class EurekaModFabric implements ModInitializer {
         // state definition, and its ticket count is read from the config that init() loads.
         CrewRegistrationsFabric.register();
 
+        // Sneak + right-click a cannon with a torch to fire it. Does not compete with the two above -- they
+        // want a helm, this wants a cannon -- but it has to exist for the same reason they do: vanilla skips
+        // the block entirely when a crouching player has a full hand.
+        CannonRegistrationsFabric.INSTANCE.register();
+
         // "/vs get-ship-weight <ship> <floater|balloon>" + "/vs eureka-assembler <floater|balloon> <bool>"
         // -- SERVER commands; Brigadier merges these "vs" literals into VS2's root, and VS2's
         // vs_command_passthrough mixin lets the client send them.
@@ -192,6 +197,13 @@ public class EurekaModFabric implements ModInitializer {
             // else has to be wired for that to happen.
             EntityRenderers.register(
                 EurekaEntities.INSTANCE.getTHROWN_BOTTLE().get(),
+                ThrownItemRenderer::new
+            );
+
+            // A cannonball flies as whichever grade of shot was loaded, so copper and netherite are told
+            // apart in the air. Same mechanism as the bottle: the entity reports its own stack each frame.
+            EntityRenderers.register(
+                EurekaEntities.INSTANCE.getCANNON_SHOT().get(),
                 ThrownItemRenderer::new
             );
 

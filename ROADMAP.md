@@ -505,13 +505,21 @@ code into a combat AI almost for free either way.
 > was re-modelled as a single axis-aligned cube in `NewCannonUpdate3`, which is why the model
 > has 97 elements rather than 98.
 
-**Trigger.** Hold a torch of any kind — torch, soul torch, copper torch — and **sneak + right-click
-a cannon** within reach. It fires.
+**Trigger.** Hold **flint and steel** and **sneak + right-click a cannon** within reach. It fires,
+and the flint takes one point of durability — but only on a shot that actually goes off, so
+checking whether a gun is loaded costs nothing.
 
-Chosen over the player-placed button it replaced because it is both more true to the thing and
-kinder to the art: a gunner touching a linstock to the touch-hole is what firing a muzzle-loader
-actually looks like, and the model needs no overhaul to carry a button it never had. It also
-makes the gesture legible without any UI — you are holding fire, and you are putting it on the gun.
+Chosen over the player-placed button it replaced because it is both truer to the thing and kinder
+to the art: striking a spark at the touch-hole is what firing a muzzle-loader looks like, and the
+model needs no overhaul to carry a button it never had. It also makes the gesture legible with no
+UI at all.
+
+> ⚠ **The handler must claim the click, and that is the feature rather than tidiness.** Vanilla
+> does not call a block's `useItemOn` at all when a crouching player has a full hand — it goes
+> straight to using the item, which for flint and steel means setting the gun alight. A cannon is
+> iron and oak and does not burn, so the spark has to light the charge and leave **no fire block**
+> on the barrel. Same trap the Heart of the Sea gesture hit; same answer, in
+> `CannonRegistrationsFabric`.
 
 **Crew duties — the crew system's first real jobs.** A crew member can be assigned to *fire
 the cannons* or to *put out fires*, and assignment is exclusive: one task per crew member, only

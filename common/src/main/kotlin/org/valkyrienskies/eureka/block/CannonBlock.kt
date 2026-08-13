@@ -48,9 +48,9 @@ import org.valkyrienskies.mod.common.blockProps
  * and three blocks waste six -- so guns could not sit closer than three blocks apart on a broadside, and
  * both end blocks looked empty. Two is now the better fit in both directions.
  *
- * It matters more than tidiness, because a cannon is **fired by right-clicking it with a torch**. Geometry
- * that hangs outside its own blocks is geometry you can see but not click, so a player aiming at the muzzle
- * would punch straight through it. One unit is small enough not to matter; twelve was not.
+ * It matters more than tidiness, because a cannon is **fired by right-clicking it**. Geometry that hangs
+ * outside its own blocks is geometry you can see but not click, so a player aiming at the muzzle would punch
+ * straight through it. One unit is small enough not to matter; twelve was not.
  *
  * The gun is 1.31 wide and 1.375 tall whatever we do, so it overhangs sideways and upward regardless. The
  * footprint only ever bought the length axis, which is the one that carries the interaction.
@@ -88,10 +88,10 @@ class CannonBlock : BaseEntityBlock(
     }
 
     /**
-     * Claim all three blocks, or none.
+     * Claim both blocks, or neither.
      *
      * Returning null refuses the placement outright, which is what leaves the item in the player's hand
-     * instead of dropping a one-third cannon into a space too small for it.
+     * instead of dropping half a cannon into a space too small for it.
      */
     override fun getStateForPlacement(ctx: BlockPlaceContext): BlockState? {
         val facing = ctx.horizontalDirection
@@ -108,7 +108,7 @@ class CannonBlock : BaseEntityBlock(
             .setValue(CANNON_PART, CannonPart.REAR)
     }
 
-    /** Vanilla places only the block that was clicked; the other two thirds are ours to fill in. */
+    /** Vanilla places only the block that was clicked; the other half is ours to fill in. */
     override fun setPlacedBy(level: Level, pos: BlockPos, state: BlockState, placer: LivingEntity?, stack: ItemStack) {
         super.setPlacedBy(level, pos, state, placer, stack)
         if (level.isClientSide) return
@@ -125,10 +125,10 @@ class CannonBlock : BaseEntityBlock(
     }
 
     /**
-     * Break any third and the whole gun goes.
+     * Break either half and the whole gun goes.
      *
-     * The block that was actually broken has already dropped its own loot by the time this runs, and the two
-     * we clear here go via `setBlock` to air, which never drops. That is what makes breaking any part yield
+     * The block that was actually broken has already dropped its own loot by the time this runs, and anything
+     * we clear here goes via `setBlock` to air, which never drops. That is what makes breaking either half yield
      * exactly one cannon -- including when the cause was an explosion or a piston rather than a player.
      */
     override fun affectNeighborsAfterRemoval(state: BlockState, level: ServerLevel, pos: BlockPos, isMoving: Boolean) {
