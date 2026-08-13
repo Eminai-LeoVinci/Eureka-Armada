@@ -9,7 +9,7 @@ import org.valkyrienskies.eureka.registry.RegistrySupplier
 /**
  * Recipe types the mod defines in code.
  *
- * Almost nothing belongs here. Ordinary recipes are authored in `config/vs_eureka_recipes.json` through VS2's
+ * Almost nothing belongs here. Ordinary recipes are authored in `config/vs_eureka_armada_recipes.json` through VS2's
  * `RecipeOverrides`, which is what makes them retunable without a rebuild. A recipe only lands in this file
  * when it cannot be written as fixed ingredients and a fixed result -- so far, only copying a blueprint, whose
  * output is whatever page went into the grid.

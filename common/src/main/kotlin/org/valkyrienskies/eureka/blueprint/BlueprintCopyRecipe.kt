@@ -31,7 +31,7 @@ import org.valkyrienskies.eureka.EurekaRecipes
  * thing here. A shipwright consuming one page cannot alter what the others describe.
  *
  * ## Why this is a special recipe rather than a config one
- * Every other recipe in the mod lives in `config/vs_eureka_recipes.json`, which speaks in fixed ingredients and
+ * Every other recipe in the mod lives in `config/vs_eureka_armada_recipes.json`, which speaks in fixed ingredients and
  * a fixed result. This one has neither: its output is whatever page went in, and it takes as many blanks as you
  * care to give it. That cannot be expressed as nine slots and a result id, so it is a datapack recipe of a
  * custom type -- the same shape vanilla uses for book cloning.
