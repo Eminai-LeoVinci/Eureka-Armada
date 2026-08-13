@@ -7,15 +7,19 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
+import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
 import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 
@@ -36,8 +40,9 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties.HOR
  */
 object CannonFire {
 
-    /** One shot per gun per four seconds. Broadside weight comes from gun count, not from fire rate. */
-    const val COOLDOWN_TICKS = 80L
+    /** One shot per gun per reload. Broadside weight comes from gun count, not from fire rate. */
+    private val cooldownTicks: Long
+        get() = (EurekaConfig.SERVER.cannonReloadSeconds * 20.0).toLong().coerceAtLeast(1L)
 
     /**
      * The bore, measured off the model, relative to the rear block's centre and in blocks.
@@ -64,12 +69,12 @@ object CannonFire {
         // Anything beyond a full cooldown means the world clock moved rather than the gun being genuinely
         // hot -- a restored backup, most likely -- so let it fire instead of locking the gun out for a week.
         val remaining = magazine.readyAt - level.gameTime
-        if (remaining in 1..COOLDOWN_TICKS) {
+        if (remaining in 1..cooldownTicks) {
             return Component.translatable("info.vs_eureka.cannon_cooling", (remaining / 20.0 + 0.5).toInt().coerceAtLeast(1))
         }
 
         if (magazine.powder.isEmpty) return Component.translatable("info.vs_eureka.cannon_no_powder")
-        val ball = CannonShot.ballOf(magazine.shot) ?: return Component.translatable("info.vs_eureka.cannon_no_shot")
+        val load = CannonShot.loadOf(magazine.shot) ?: return Component.translatable("info.vs_eureka.cannon_no_shot")
 
         // Bore geometry, in whatever space the block lives in. The shot leaves along the barrel, so the
         // elevation the player set is the elevation it flies at -- the model and the trajectory are driven
@@ -100,15 +105,18 @@ object CannonFire {
         val direction = Vec3(ahead.x - muzzle.x, ahead.y - muzzle.y, ahead.z - muzzle.z)
         if (direction.lengthSqr() < 1.0e-6) return Component.translatable("info.vs_eureka.cannon_broken")
 
-        val shown = magazine.shot.copy()
+        // The shot flies as the PLAIN ball of its metal. A charge is inside the shell, so an explosive round
+        // in the air is still just an iron ball -- and the gunpowder pip on the item sprite is a label for
+        // the player's inventory, not something you would see going past you.
+        val shown = ItemStack(EurekaItems.cannonball(load.ball, CannonCharge.PLAIN))
         magazine.powder.shrink(1)
         magazine.shot.shrink(1)
-        magazine.readyAt = level.gameTime + COOLDOWN_TICKS
+        magazine.readyAt = level.gameTime + cooldownTicks
         magazine.setChanged()
 
         // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left.
         val gun = CannonPart.entries.map { rear.relative(facing, it.ordinal) }.toTypedArray()
-        CannonShot.spawn(level, from, direction, ball, shown, player, gun)
+        CannonShot.spawn(level, from, direction, load, shown, player, gun)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)

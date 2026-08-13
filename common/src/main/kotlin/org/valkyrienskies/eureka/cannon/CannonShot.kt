@@ -20,8 +20,11 @@ import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaEntities
+import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.item.Cannonball
+import org.valkyrienskies.eureka.item.Load
 import org.valkyrienskies.eureka.item.CannonballItem
 
 /**
@@ -45,8 +48,12 @@ import org.valkyrienskies.eureka.item.CannonballItem
  */
 class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, level), ItemSupplier {
 
-    /** What this round is made of. Only meaningful on the server; the client just needs the sprite. */
-    var ball: Cannonball = Cannonball.IRON
+    /**
+     * What this round is and what is packed behind it. Only meaningful on the server; the client just needs
+     * the sprite, and the sprite it gets is the **plain** ball of that metal -- a charge is a thing inside
+     * the shell, so a round in the air looks like the metal it is made of whatever it is carrying.
+     */
+    var load: Load = Load(Cannonball.IRON, CannonCharge.PLAIN)
 
     /**
      * Who fired it, so a shot does not immediately hit the gunner leaning over the barrel.
@@ -82,11 +89,11 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
     override fun getItem(): ItemStack = entityData.get(SHOWN)
 
-    fun launch(from: Vec3, direction: Vec3, ball: Cannonball, shownAs: ItemStack) {
-        this.ball = ball
+    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack) {
+        this.load = load
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         setPos(from.x, from.y, from.z)
-        deltaMovement = direction.normalize().scale(SPEED)
+        deltaMovement = direction.normalize().scale(EurekaConfig.SERVER.cannonShotSpeed)
     }
 
     override fun tick() {
@@ -106,7 +113,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // the shot on impact and the client simply stops seeing it.
         if (level().isClientSide) {
             setPos(to.x, to.y, to.z)
-            deltaMovement = deltaMovement.scale(DRAG).subtract(0.0, GRAVITY, 0.0)
+            deltaMovement = deltaMovement.scale(EurekaConfig.SERVER.cannonShotDrag)
+            .subtract(0.0, EurekaConfig.SERVER.cannonShotGravity, 0.0)
             smoke()
             return
         }
@@ -121,7 +129,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         val struck = level().getEntities(this, AABB(from, to).inflate(0.5))
             .firstOrNull { it.isPickable && it !== firedBy }
         if (struck != null) {
-            struck.hurt(damageSources().explosion(this, firedBy), ball.maxBlocks.toFloat())
+            struck.hurt(damageSources().explosion(this, firedBy), load.maxBlocks.toFloat())
             burst(struck.position(), null)
             return
         }
@@ -138,7 +146,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         }
 
         setPos(to.x, to.y, to.z)
-        deltaMovement = deltaMovement.scale(DRAG).subtract(0.0, GRAVITY, 0.0)
+        deltaMovement = deltaMovement.scale(EurekaConfig.SERVER.cannonShotDrag)
+            .subtract(0.0, EurekaConfig.SERVER.cannonShotGravity, 0.0)
         smoke()
     }
 
@@ -164,7 +173,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // and there is no scale on it. EXPLOSION_EMITTER is the big TNT-style bloom; the ring of plain
         // EXPLOSION puffs around it is what makes the whole thing read as wide. Heavier shot throws more of
         // them, so a netherite hit looks like the hole it is about to make.
-        val bursts = 2 + ball.ordinal
+        val bursts = 2 + load.ball.ordinal
         level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, where.x, where.y, where.z, 1, 0.0, 0.0, 0.0, 0.0)
         for (i in 0 until bursts) {
             level.sendParticles(
@@ -178,20 +187,24 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, 24, 1.0, 1.0, 1.0, 0.03)
 
         if (blockHit != null) {
-            CannonDamage.punch(level, blockHit, ball.roll(level.random))
+            CannonDamage.punch(level, blockHit, load.roll(level.random))
         }
         discard()
     }
 
     override fun readAdditionalSaveData(input: ValueInput) {
         age = input.getIntOr("Age", 0)
-        ball = Cannonball.entries.getOrNull(input.getIntOr("Ball", Cannonball.IRON.ordinal)) ?: Cannonball.IRON
+        load = Load(
+            Cannonball.entries.getOrNull(input.getIntOr("Ball", Cannonball.IRON.ordinal)) ?: Cannonball.IRON,
+            CannonCharge.entries.getOrNull(input.getIntOr("Charge", 0)) ?: CannonCharge.PLAIN
+        )
         entityData.set(SHOWN, input.read("Shown", ItemStack.CODEC).orElse(ItemStack.EMPTY))
     }
 
     override fun addAdditionalSaveData(output: ValueOutput) {
         output.putInt("Age", age)
-        output.putInt("Ball", ball.ordinal)
+        output.putInt("Ball", load.ball.ordinal)
+        output.putInt("Charge", load.charge.ordinal)
         if (!item.isEmpty) output.store("Shown", ItemStack.CODEC, item)
     }
 
@@ -199,10 +212,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         private val SHOWN: EntityDataAccessor<ItemStack> =
             SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.ITEM_STACK)
 
-        /** Blocks per tick. Fast enough to read as a gun rather than a catapult, slow enough to watch. */
-        private const val SPEED = 2.0
-        private const val GRAVITY = 0.05
-        private const val DRAG = 0.99
+        // Speed, gravity and drag live on EurekaConfig.SERVER so an arc can be dialled in against a real ship
+        // with a /reload rather than a rebuild. Only the lifetime cap stays here -- it is a safety net rather
+        // than a tuning knob, and a config value that could strand shots in the sky forever is not one worth
+        // exposing.
         private const val MAX_TICKS = 200
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
@@ -212,7 +225,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             level: ServerLevel,
             from: Vec3,
             direction: Vec3,
-            ball: Cannonball,
+            load: Load,
             shownAs: ItemStack,
             firedBy: Entity? = null,
             gun: Array<BlockPos> = emptyArray()
@@ -220,12 +233,12 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
             shot.gun = gun
-            shot.launch(from, direction, ball, shownAs)
+            shot.launch(from, direction, load, shownAs)
             level.addFreshEntity(shot)
             return shot
         }
 
-        /** The sprite a loaded round should fly as, given whatever is in the shot slot. */
-        fun ballOf(stack: ItemStack): Cannonball? = (stack.item as? CannonballItem)?.ball
+        /** What a stack in the shot slot actually is, or null if it is not shot at all. */
+        fun loadOf(stack: ItemStack): Load? = (stack.item as? CannonballItem)?.load
     }
 }

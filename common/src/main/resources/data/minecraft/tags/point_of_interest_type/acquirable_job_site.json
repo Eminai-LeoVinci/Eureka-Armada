@@ -1,7 +1,7 @@
 {
+  "_comment": "The ship helm is deliberately ABSENT. Being in this tag is what makes an unemployed villager hunt for a workstation, and a helm carries 32 tickets, so it is the most claimable job site for miles -- it was quietly hiring every villager who lost their own bench, shipwrights included. A Crewman is now made by signing the articles (Sneak+C), and ShipCrews sets the profession there. A villager who is already a Crewman still finds helms, because the profession's own acquirableJobSite predicate matches the helm POI directly.",
   "replace": false,
   "values": [
-    "vs_eureka:ship_helm",
     "vs_eureka:shipwrights_bench"
   ]
 }

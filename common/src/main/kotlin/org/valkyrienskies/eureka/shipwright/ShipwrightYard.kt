@@ -4,6 +4,7 @@ import java.util.UUID
 import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
@@ -11,6 +12,7 @@ import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.dimensionId
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
 
 /**
@@ -24,24 +26,42 @@ object ShipwrightYard {
     /**
      * Every ship a shipwright at [bench] can work on.
      *
-     * Two lookups, not one. Proximity finds the hulls moored nearby; then **every armada whose parent is in
-     * range contributes its children**, whether or not each child is individually within reach. A formation
-     * arrives as one thing and being told half of it is too far away would be nonsense -- the children are
-     * welded to a parent that is right there.
+     * Three lookups, not one:
+     *
+     *  1. **The ship the bench is standing on**, if it is aboard one. A yard can careen the hull it is built
+     *     into, and a shipwright who could mend every ship in the harbour except the one under their feet
+     *     would be a strange craftsman.
+     *  2. **Proximity**, for the hulls moored nearby.
+     *  3. **Armadas**, where every parent in range contributes its children whether or not each child is
+     *     individually within reach. A formation arrives as one thing, and being told half of it is too far
+     *     away would be nonsense when the children are welded to a parent that is right there.
      */
     fun visible(level: ServerLevel, bench: BlockPos): List<Pair<LoadedServerShip, Boolean>> {
         val dimension = level.dimensionId
         val reach = ShipRepair.REACH * ShipRepair.REACH
         val found = LinkedHashMap<Long, Pair<LoadedServerShip, Boolean>>()
 
+        // A bench aboard a ship has a SHIPYARD position, and ships report their transform in WORLD space.
+        // Comparing the two directly is comparing coordinate systems that sit millions of blocks apart, so
+        // every hull reads as impossibly distant and the Yard tab comes up empty on a ship that is right
+        // there. Lift the bench into world space first; on solid ground the transform is the identity.
+        val host = level.getLoadedShipManagingPos(bench)
+        val here = Vector3d(bench.x + 0.5, bench.y + 0.5, bench.z + 0.5)
+        val benchWorld = host?.shipToWorld?.transformPosition(Vector3d(here)) ?: here
+
+        // The hull underfoot, listed regardless of distance: a big ship's centre can easily be further from
+        // its own bench than the reach allows, and "too far from itself" is not a sentence that should
+        // ever be true.
+        if (host != null && host.shipAABB != null) found[host.id] = host to false
+
         for (ship in level.shipObjectWorld.loadedShips) {
             if (ship.chunkClaimDimension != dimension) continue
             if (ship.shipAABB == null) continue
 
             val position = ship.transform.position
-            val dx = position.x() - (bench.x + 0.5)
-            val dy = position.y() - (bench.y + 0.5)
-            val dz = position.z() - (bench.z + 0.5)
+            val dx = position.x() - benchWorld.x
+            val dy = position.y() - benchWorld.y
+            val dz = position.z() - benchWorld.z
             if (dx * dx + dy * dy + dz * dz > reach) continue
 
             found[ship.id] = ship to false

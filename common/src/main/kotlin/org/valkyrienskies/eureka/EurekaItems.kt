@@ -8,6 +8,8 @@ import net.minecraft.world.item.Item
 import org.valkyrienskies.eureka.item.BlueprintItem
 import org.valkyrienskies.eureka.item.BottledShipItem
 import org.valkyrienskies.eureka.item.Cannonball
+import org.valkyrienskies.eureka.item.CannonCharge
+import org.valkyrienskies.eureka.item.Load
 import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.item.ShipBottleItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
@@ -40,14 +42,25 @@ object EurekaItems {
     val BLUEPRINT: RegistrySupplier<Item> = ITEMS.register("blueprint") { BlueprintItem(itemProps()) }
 
     /**
-     * The four grades of shot, in the order a captain meets them.
+     * Every round: each metal, plain and charged.
      *
-     * Stacked to 16 like snowballs rather than 64 -- see [org.valkyrienskies.eureka.item.CannonballItem].
-     * Steel is deliberately missing: it needs a steel ingot to be made from, and there is not one yet.
+     * Registered charge-major so the creative tab lists all five plain rounds together and then all five
+     * explosive ones, which is how a player thinks about them -- pick a metal, then decide whether it is
+     * worth the powder.
      */
-    val CANNONBALLS: Map<Cannonball, RegistrySupplier<Item>> = Cannonball.entries.associateWith { ball ->
-        ITEMS.register(ball.itemName) { CannonballItem(ball, itemProps().stacksTo(16)) }
+    val CANNONBALLS: Map<Pair<Cannonball, CannonCharge>, RegistrySupplier<Item>> = buildMap {
+        for (charge in CannonCharge.entries) {
+            for (ball in Cannonball.entries) {
+                val load = Load(ball, charge)
+                put(ball to charge, ITEMS.register(load.itemName) {
+                    CannonballItem(ball, charge, itemProps().stacksTo(16))
+                })
+            }
+        }
     }
+
+    /** The item for one metal-and-charge combination. */
+    fun cannonball(ball: Cannonball, charge: CannonCharge): Item = CANNONBALLS.getValue(ball to charge).get()
 
     fun register() {
         // Declared above so they land before the block items; the creative tab walks this register in order.

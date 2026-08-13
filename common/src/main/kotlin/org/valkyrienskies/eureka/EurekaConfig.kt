@@ -971,6 +971,38 @@ object EurekaConfig {
         )
         var crewSlotsMax = 32
 
+        // region Cannons
+        // The three numbers that decide a shot's arc, exposed so it can be dialled in against a real ship
+        // without a rebuild. They interact: speed sets the range, gravity sets how much the shot curves on
+        // the way, and drag decides how quickly it stops being fast enough for gravity not to matter.
+
+        @JsonSchema(
+            description = "How far a cannonball travels each tick, in blocks. Sets the range and how flat the " +
+                "shot looks; raising it makes a cannon read more like a rifle and less like a mortar. Default 1.5."
+        )
+        var cannonShotSpeed = 1.5
+
+        @JsonSchema(
+            description = "Blocks per tick squared the shot falls. The main control over the ARC: raise it to " +
+                "lob, lower it toward a straight line. Default 0.1."
+        )
+        var cannonShotGravity = 0.1
+
+        @JsonSchema(
+            description = "Fraction of its speed a shot keeps each tick. Below 1.0 it slows in flight, which " +
+                "shortens the range and steepens the tail of the arc rather than changing its start. 1.0 is no " +
+                "drag at all. Default 0.9."
+        )
+        var cannonShotDrag = 0.9
+
+        @JsonSchema(
+            description = "Seconds a cannon takes to reload. This is PER GUN -- a six-gun broadside fires six " +
+                "times in this window -- so gun count, not this number, is what sets a ship's weight of fire. " +
+                "Default 4.0."
+        )
+        var cannonReloadSeconds = 4.0
+        // endregion
+
         @JsonSchema(
             description = "How many sets of ship plans a player can keep with shipwrights before buying more. " +
                 "Plans are held per player and readable at every bench in the world, not per bench. Default 3."
