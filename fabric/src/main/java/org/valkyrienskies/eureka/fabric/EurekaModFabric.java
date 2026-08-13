@@ -36,6 +36,8 @@ import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
+import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
+import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
@@ -90,6 +92,12 @@ public class EurekaModFabric implements ModInitializer {
         // Register the S2C armada-bond snapshot payload (both sides need the codec).
         ArmadaNetworkingFabric.INSTANCE.registerCommon();
 
+        // The shipwright's screen: a shelf out, an action back. Also claims the right-click on a shipwright,
+        // which must not reach vanilla's trade screen -- the profession sells nothing, and an unclaimed click
+        // is what makes the villager shake its head.
+        ShipwrightNetworkingFabric.INSTANCE.registerCommon();
+        ShipwrightNetworkingFabric.INSTANCE.registerServer();
+
         // Ship paths: the C2S hotkey action packet and the two S2C snapshots, plus the server-side handler.
         PathNetworkingFabric.INSTANCE.registerCommon();
         PathNetworkingFabric.INSTANCE.registerServer();
@@ -138,6 +146,13 @@ public class EurekaModFabric implements ModInitializer {
             // PathMessages: common declares the hook, the client entrypoint fills it in.
             BlueprintPages.setOpener(page -> {
                 BlueprintScreen.Companion.open(page);
+                return kotlin.Unit.INSTANCE;
+            });
+
+            // Same indirection for the shipwright's book, which arrives as a packet rather than off an item.
+            ShipwrightNetworkingFabric.INSTANCE.registerClient();
+            ShipwrightMenu.setOpener(shelf -> {
+                ShipwrightScreen.Companion.open(shelf);
                 return kotlin.Unit.INSTANCE;
             });
 

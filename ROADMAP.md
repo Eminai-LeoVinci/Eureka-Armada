@@ -295,25 +295,72 @@ uncraftable at first; that is what makes "only found at harbors" true rather tha
 
 Menu (its own, not a trade screen):
 
-- lists ships in progress and ships finished but unclaimed
-- click a ship name → the blueprint's information, plus what materials remain
-- a **Give Materials** button appears only when the player is holding something on the list;
-  pressing it hands over everything relevant from the inventory at once. Creative auto-pull
-  should mirror `EurekaAssembler.apply`, where `player.abilities.instabuild` skips the
-  inventory gate
-- materials accepted in installments, progress persisted per player
-- on completion: **build in the world (not assembled)** at the designated dock spot, *or* mint
-  a Bottled Ship
-- blueprints are always consumed; the shipwright remembers no ship you have not paid for
+**Status: the commission loop is built and working. Repair/restore and spawn eggs are not.**
 
-**Repair / restore:** the ship needs only to be **partially** within the harbor's dimensions —
-not wholly contained. Baseline is the harbor's natural dimensions plus some wiggle room, and
-the accepted range can be widened later if it proves fussy in practice. Name must match,
-dimensions must match, and the majority of non-air blocks must match the blueprint — otherwise
-the shipwright rejects it, stating it is not the same ship. *The "majority" percentage is still
-to be picked (see §7).*
+#### The overhaul: a library, not an order desk
 
-Spawn eggs for both Shipwright and Crewman; no `SpawnEggItem` exists in the mod today.
+The original plan had the shipwright taking one order at a time. It became something better during
+Phase 3 and the change is worth recording, because everything downstream assumes it:
+
+**Plans are filed permanently and keyed by ship name; only materials are spent by building.** So the
+same hull can be ordered again and again by bringing the bill again — a survival-legal schematic
+system rather than a one-shot commission. It is also what makes taking a pillager's ship worth
+doing: draft it, file it, rebuild it into your own armada whenever you can afford to.
+
+**The shelf belongs to the player, not the bench.** File at one bench and it is readable at every
+bench in the world. Being made to sail back to one workshop is bookkeeping, and it would punish
+exactly the behaviour the feature rewards.
+
+**Three slots, up to 32, one per Heart of the Sea** — deliberately the same currency and ceiling as
+crew berths, because it is the same kind of decision and a player who has learned one has learned
+the other.
+
+Entries can be deleted but **never renamed**. The name is the identity, so a renameable key is a key
+that can collide — and the only answers to a collision are to refuse the rename or to overwrite
+somebody's ship.
+
+#### Everything happens at the villager
+
+The bench grants the profession and does nothing else. It has no interactions at all: a workbench
+that answered questions would make the shipwright decorative, and the point of the profession is
+that a harbor without one cannot build you anything.
+
+Right-clicking a shipwright is **claimed outright** — that is not optional. The profession sells
+nothing, so any click that reaches vanilla's trade screen makes the villager shake its head at the
+player. Blueprint in hand files it, Heart of the Sea buys a slot, anything else opens the book.
+
+#### The book
+
+A shelf of plans with a progress bar each; clicking one opens its card — the blueprint page again,
+plus what has been delivered, plus the buttons. **Materials** while unpaid, becoming **Build** and
+**Bottle** at 100%; **Delete** always. The screen holds a snapshot and never polls: every button
+sends an action and the server answers with a fresh shelf, so a refused action still redraws.
+
+**Build** sets the hull down beside the **bench** (not the villager, which could have wandered),
+unassembled, with [Shipwright.CLEARANCE] blocks of open water on every horizontal side — searched
+outward in four directions up to 24 blocks. The gap is not cosmetic: assembly walks outward from the
+wheel through connected blocks, so a hull touching a jetty takes the jetty with it, and the first
+anyone knows is a harbor with a hole in it sailing away.
+
+**Bottle** requires an unmarked Ship Bottle in the inventory and consumes it. It is **not** on the
+material list — a ship's cost must not change with how you take delivery — but the shipwright has
+nothing to put a ship into without one. No heart and no eye of ender: those are what a Ship Bottle
+is *made* of, and charging for the ingredients as well is charging twice. Marked bottles are
+ignored, since one already pointed at a hull is about to be thrown at it.
+
+The bottled ship gets a **copy** of the plans' template, never a share of it. Releasing a bottle
+forgets its template, so a bottle pointing at the shelf's own file would destroy those plans on
+first use — and plans are meant to last forever.
+
+#### Still open in Phase 3
+
+- **Repair / restore.** Not started. The ship needs only to be **partially** within the harbor's
+  dimensions. Name must match, dimensions must match, and **70%** of non-air blocks must match,
+  counted as a total rather than per block-type (§7.2) — otherwise the shipwright rejects it as not
+  the same ship.
+- **Spawn eggs** for Shipwright and Crewman; no `SpawnEggItem` exists in the mod today.
+- The bench borrows vanilla's cartography table textures, and the Shipwright villager is the
+  Crewman's outfit shifted warm. Both are placeholders.
 
 ### Phase 4 — Cannons
 

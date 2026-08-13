@@ -162,12 +162,7 @@ object ShipBottle {
         // dropBlocks = false because the materials left with the template, not onto the seabed.
         VSShipAssembler.deleteShip(level, ship, true, false)
 
-        val bottled = ItemStack(EurekaItems.BOTTLED_SHIP.get())
-        val tag = CompoundTag()
-        tag.putString(TEMPLATE_KEY, templateName)
-        tag.putString(SHIP_NAME_KEY, shipName)
-        bottled.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
-
+        val bottled = bottleOf(templateName, shipName)
         PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD)
         return bottled
     }
@@ -320,6 +315,26 @@ object ShipBottle {
             }
         }
         return null
+    }
+
+    /**
+     * A Bottled Ship holding [templateName], labelled [shipName].
+     *
+     * Exists so that anything which can produce a ship -- a shipwright taking delivery, and in time a pirate
+     * hold or a harbor's stock -- writes the same three keys in the same way. The tag layout is this object's
+     * business and nowhere else's; a second place assembling it by hand is a second place to get it subtly
+     * wrong, and the failure would look like an empty bottle rather than a mistake.
+     *
+     * The caller owns the template. Whatever is named here will be **forgotten** when the ship comes out, so
+     * hand this a template nothing else depends on.
+     */
+    fun bottleOf(templateName: String, shipName: String): ItemStack {
+        val bottled = ItemStack(EurekaItems.BOTTLED_SHIP.get())
+        val tag = CompoundTag()
+        tag.putString(TEMPLATE_KEY, templateName)
+        tag.putString(SHIP_NAME_KEY, shipName)
+        bottled.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+        return bottled
     }
 
     fun templateOf(stack: ItemStack): String? {

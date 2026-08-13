@@ -972,6 +972,19 @@ object EurekaConfig {
         var crewSlotsMax = 32
 
         @JsonSchema(
+            description = "How many sets of ship plans a player can keep with shipwrights before buying more. " +
+                "Plans are held per player and readable at every bench in the world, not per bench. Default 3."
+        )
+        var shipwrightSlotsStart = 3
+
+        @JsonSchema(
+            description = "The most sets of ship plans any player can ever hold. Each Heart of the Sea offered " +
+                "to a Shipwright's Bench buys exactly one, so the default pair means a full shelf costs 29 " +
+                "hearts. Deliberately the same currency and ceiling as crew berths. Default 32."
+        )
+        var shipwrightSlotsMax = 32
+
+        @JsonSchema(
             description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
                 "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
                 "weights are the whole distribution. At the defaults (100/12/5/1) plain comes up about half the " +

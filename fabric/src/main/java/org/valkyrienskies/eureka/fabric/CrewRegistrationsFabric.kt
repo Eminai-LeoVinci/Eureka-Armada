@@ -19,6 +19,7 @@ import org.valkyrienskies.eureka.crew.CrewLedger
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.crew.CrewTrades
+import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 
 /**
  * The three halves of the crew system that need Fabric API, and therefore cannot live in :common (which has
@@ -52,6 +53,17 @@ object CrewRegistrationsFabric {
             EurekaConfig.SERVER.crewmanHelmPoiTickets,
             EurekaConfig.SERVER.crewmanHelmPoiRange,
             *CrewProfession.helmBlocks()
+        )
+
+        // The shipwright's bench: an ORDINARY job site, one ticket, like a lectern. The helm above is the odd
+        // one out with its crew-sized count, not this. Registered here rather than in a file of its own for
+        // the same reason the helm is -- PointOfInterestHelper walks each block's state definition, so both
+        // have to come after EurekaBlocks.register(), and one call site is easier to keep true than two.
+        PointOfInterestHelper.register(
+            ShipwrightProfession.POI_ID,
+            1,
+            SHIPWRIGHT_POI_RANGE,
+            *ShipwrightProfession.benchBlocks()
         )
 
         // The listings themselves are vanilla and live in :common; only this registration call needs the API.
@@ -177,4 +189,12 @@ object CrewRegistrationsFabric {
             CrewBerths.offerHeart(level, pos, player, stack)
         }
     }
+
+    /**
+     * How far a villager will wander from its bench to claim it, matching the helm's default.
+     *
+     * A plain constant rather than a config entry: the helm's range is tunable because a ship's deck varies
+     * wildly in size, and a bench is a bench.
+     */
+    private const val SHIPWRIGHT_POI_RANGE = 1
 }

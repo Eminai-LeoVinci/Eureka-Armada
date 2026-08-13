@@ -1,6 +1,8 @@
 package org.valkyrienskies.eureka.template
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.registries.Registries
+import net.minecraft.nbt.CompoundTag
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.ProblemReporter
@@ -324,6 +326,27 @@ object ShipTemplate {
     fun forget(level: ServerLevel, name: String) {
         val id = idFor(name) ?: return
         level.server.structureManager.remove(id)
+    }
+
+    /**
+     * Write a second, independent copy of [from] under the name [to].
+     *
+     * Needed wherever one saved ship becomes two things with different lifetimes. A shipwright minting a
+     * bottled ship from a blueprint is the case that forced it: releasing a bottle *forgets* its template
+     * when the ship comes out, so a bottle sharing the blueprint's file would delete the blueprint's ship on
+     * first use -- silently, and for every copy of that page in the world at once.
+     *
+     * Goes through the template's own save/load rather than copying the file, so the result is whatever the
+     * running version of Minecraft considers a valid template rather than bytes that merely used to be one.
+     */
+    fun copy(level: ServerLevel, from: String, to: String): Boolean {
+        val source = find(level, from) ?: return false
+        val target = idFor(to) ?: return false
+
+        val manager = level.server.structureManager
+        val written = manager.getOrCreate(target)
+        written.load(level.holderLookup(Registries.BLOCK), source.save(CompoundTag()))
+        return manager.save(target)
     }
 
     /** Every template this mod can see, ours only -- the manager also lists vanilla's and other mods'. */

@@ -24,6 +24,9 @@ object EurekaBlocks {
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
 
+    // The shipwright's job site. Deliberately has no recipe -- see ShipwrightsBenchBlock.
+    val SHIPWRIGHTS_BENCH = BLOCKS.register("shipwrights_bench", ::ShipwrightsBenchBlock)
+
     // A submarine's interior air. No item and no creative tab entry -- it is placed by the assembler, never by
     // hand. Properties copy vanilla air exactly so that everything which asks "is this air?" says yes.
     val SUB_AIR = BLOCKS.register("sub_air") {

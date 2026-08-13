@@ -1,6 +1,7 @@
 {
   "replace": false,
   "values": [
-    "vs_eureka:ship_helm"
+    "vs_eureka:ship_helm",
+    "vs_eureka:shipwrights_bench"
   ]
 }

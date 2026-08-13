@@ -34,6 +34,11 @@ object PathMessages {
         /**
          * "Keep holding that." Re-sent every tick for as long as the gesture is in progress, so it takes the
          * HUD's single-slot channel rather than the stack -- forty identical lines would bury everything else.
+         *
+         * **Never use this for a one-shot.** The prompt slot expires a quarter second after its last refresh,
+         * which is what makes it vanish the instant a key is released -- and what makes a message sent once
+         * flash past unreadably. Anything said a single time belongs on [GOOD], [WARN] or [ERROR], which stack
+         * and hold for `EurekaConfig.CLIENT.pathMessageSeconds`. This has now been got wrong twice.
          */
         PROMPT(ChatFormatting.WHITE, 0xFFFFFFFF.toInt())
     }

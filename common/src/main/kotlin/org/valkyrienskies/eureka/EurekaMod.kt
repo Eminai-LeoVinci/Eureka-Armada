@@ -4,6 +4,7 @@ import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.path.PathBinding
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
 
 object EurekaMod {
@@ -27,6 +28,9 @@ object EurekaMod {
         // The Crewman profession. Pure vanilla registry work, so it belongs here rather than in the loader
         // layer; the POI and the trades need Fabric API and are registered from EurekaModFabric instead.
         CrewProfession.registerProfession()
+
+        // The Shipwright. Same deal as the Crewman above: plain registry work here, POI in the loader module.
+        ShipwrightProfession.registerProfession()
 
         // VS 2.5+ vs-core requires every attachment class to be registered during mod init
         // before it can be set on a ship. Without this, assembling a ship crashes with

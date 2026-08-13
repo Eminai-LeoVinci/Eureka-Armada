@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka.template
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.Vec3i
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
 
@@ -64,5 +65,31 @@ object PlacementCheck {
             }
         }
         return Fits
+    }
+
+    /**
+     * Whether a solid box of [size] at [corner] is entirely replaceable, by the same rule [test] uses.
+     *
+     * Where [test] asks about a hull's own blocks, this asks about a *region* — which is what a clearance skirt
+     * is. The shipwright needs a delivered ship to stand clear of docks and piers, and the only honest
+     * definition of "too close" is the same one that defines "in the way": whatever the ship is not allowed to
+     * overwrite is also what it is not allowed to touch.
+     *
+     * Every cell counts here, including the ones a hull would leave empty. That is deliberate — a skirt with a
+     * jetty running through the middle of it is not clear just because the ship's own interior is hollow there.
+     */
+    fun isClear(level: ServerLevel, size: Vec3i, corner: BlockPos): Boolean {
+        val cursor = BlockPos.MutableBlockPos()
+        for (x in 0 until size.x) {
+            for (y in 0 until size.y) {
+                for (z in 0 until size.z) {
+                    cursor.set(corner.x + x, corner.y + y, corner.z + z)
+                    if (level.isOutsideBuildHeight(cursor.y)) return false
+                    if (!level.hasChunkAt(cursor)) continue
+                    if (!level.getBlockState(cursor).canBeReplaced()) return false
+                }
+            }
+        }
+        return true
     }
 }
