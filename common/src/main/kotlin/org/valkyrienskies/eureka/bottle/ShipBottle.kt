@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.Clearable
 import net.minecraft.world.InteractionHand
+import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
@@ -26,6 +27,7 @@ import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
+import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
 
 /**
  * A whole ship, carried in one hand.
@@ -195,7 +197,38 @@ object ShipBottle {
         // disassemble() hands the hull back to the WORLD, which would leave the ship standing there as well as
         // sitting in the bottle: one ship in, two ships out. deleteShip removes it and its blocks outright, and
         // dropBlocks = false because the materials left with the template, not onto the seabed.
+        val shipId = ship.id
+        val deck = ship.worldAABB.let {
+            AABB(
+                it.minX() - 2.0, it.minY() - 2.0, it.minZ() - 2.0,
+                it.maxX() + 2.0, it.maxY() + 2.0, it.maxZ() + 2.0
+            )
+        }
+
         VSShipAssembler.deleteShip(level, ship, true, false)
+
+        // Let go of anyone the ship was carrying, the instant it stops existing.
+        //
+        // VS2 keeps carrying an entity for TICKS_TO_DRAG_ENTITIES after it last stood on a hull, which is right
+        // for stepping off a deck and wrong for a deck that has been put in a bottle: there is no longer a ship
+        // to be carried BY. Left alone the carry ran on for its full count with the hull's last movement still
+        // applied, so a captain standing on their own ship as they took it was towed for a beat by a vessel that
+        // was already in their hand -- and kept being towed after they landed, ashore, on solid ground.
+        //
+        // fallDistance goes too. The carry holds an entity up while gravity keeps counting, so the tick the hold
+        // expired cashed in a fall that never happened -- half a heart bar for standing still. Whatever fall
+        // follows the capture should be measured from here.
+        //
+        // A ship taken by a bottle is meant to drop whoever was aboard, and this is what makes it drop them
+        // NOW rather than a second and a half later.
+        for (entity in level.getEntities(null as Entity?, deck)) {
+            val dragging = (entity as? IEntityDraggingInformationProvider)?.draggingInformation ?: continue
+            if (dragging.lastShipStoodOn != shipId) continue
+            dragging.lastShipStoodOn = null
+            dragging.addedMovementLastTick = Vector3d()
+            dragging.addedYawRotLastTick = 0.0
+            entity.fallDistance = 0.0
+        }
 
         val bottled = bottleOf(templateName, shipName)
         PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD)
@@ -319,7 +352,11 @@ object ShipBottle {
                 PathMessages.Kind.WARN
             )
         } else {
-            helmEntity.assemble(player, placed)
+            // holdEntities = false: see ShipHelmBlockEntity.assemble. The fall-through hold exists to catch
+            // people standing on a deck that is briefly not collidable, and a hull coming out of a bottle has
+            // nobody standing on it -- so all the freeze can do here is grab whoever is passing overhead, which
+            // on a thrown bottle is very often the person who threw it, mid-elytra.
+            helmEntity.assemble(player, placed, holdEntities = false)
             // Said out loud on purpose: a hull resting on the ground looks exactly like a pile of blocks, so
             // "it came out" and "it came out as a ship" are indistinguishable without being told which.
             PathMessages.send(player, "$shipName is afloat again.", PathMessages.Kind.GOOD)

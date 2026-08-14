@@ -73,10 +73,10 @@ import org.valkyrienskies.eureka.util.EurekaAssembler
 import org.valkyrienskies.eureka.util.ShipAssembler
 import org.valkyrienskies.mod.api.SeatedControllingPlayer
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
-import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.common.util.EntityShipCollisionUtils
 import org.valkyrienskies.mod.common.util.settings
 import org.valkyrienskies.mod.common.util.toDoubles
@@ -902,7 +902,19 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      * put down -- see the note at the branch below.
      */
     // Needs to get called server-side
-    fun assemble(player: Player, knownBlocks: Set<BlockPos>? = null) {
+    /**
+     * @param holdEntities whether to freeze entities over the footprint through the swap.
+     *
+     * True for a wheel somebody pressed Assemble on, which is the case the hold was built for: the hull leaves
+     * the world and reappears in the shipyard, neither copy is collidable for a moment, and anything standing
+     * on the deck would drop through it.
+     *
+     * False for a ship coming out of a bottle, where the same hold is a menace. Nobody is standing on that deck
+     * -- it did not exist a tick ago -- so there is nothing to catch, and the freeze grabs whatever happens to
+     * be passing over the spot instead. A player gliding in on an elytra to drop a ship ahead of themselves
+     * flies straight into their own two-second hold and falls out of the sky.
+     */
+    fun assemble(player: Player, knownBlocks: Set<BlockPos>? = null, holdEntities: Boolean = true) {
         val level = level as ServerLevel
 
         // Check the block state before assembling to avoid creating an empty ship
@@ -1057,7 +1069,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Armed twice, before and after, for the same reason disassemble() does: the second one starts its
         // clock when the world-side work is finished rather than when it began.
         val holdAABB = worldFootprint(blockPositions)
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s, self-expiring
+        if (holdEntities) {
+            EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s, self-expiring
+        }
 
         // This wheel becomes the ship's crew station -- "the first helm wins", stated as the one that built the
         // ship. Set BEFORE the assembly, so the flag is part of the block entity data the relocation carries
@@ -1067,7 +1081,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
         val builtShip = ShipAssembler.finishAssembly(level, blockPositions)
 
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+        if (holdEntities) {
+            EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+        }
+
 
         // Where that wheel ended up, so the roster can be found in one block-entity lookup instead of a walk of
         // the ship's blocks. Rounds the same way the assembler does: the block containing the helm's centre.
@@ -1231,7 +1248,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // because unfillShip removes the ship (its id can't be used); the box is captured now, while the ship is
         // still valid, and reused for both arms.
         val holdAABB = EntityShipCollisionUtils.worldAABBForShip(ship)
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s gravity-hold through teardown (mobs/entities only)
+        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s, mobs and other entities
 
         val serverLevel = level as ServerLevel
         if (!ShipAssembler.unfillShip(serverLevel, ship, this.blockPos, BlockPos.containing(inWorld.x, inWorld.y, inWorld.z))) {
