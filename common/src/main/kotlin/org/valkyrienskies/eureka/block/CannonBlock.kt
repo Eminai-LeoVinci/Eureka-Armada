@@ -166,11 +166,30 @@ class CannonBlock : BaseEntityBlock(
                 // KNOWN_SHAPE because this also runs during bulk work -- assembling, bottling, a ship being
                 // deleted -- where a neighbour update knocks whatever was resting against the gun loose and
                 // drops that too.
-                level.setBlock(
-                    other,
-                    Blocks.AIR.defaultBlockState(),
-                    Block.UPDATE_CLIENTS or Block.UPDATE_KNOWN_SHAPE or Block.UPDATE_SUPPRESS_DROPS
-                )
+                //
+                // ## Why UPDATE_SUPPRESS_DROPS is not enough, and the magazine duplicated for weeks
+                //
+                // 1.21.11 moved a container's "spill your contents" from the old `Block.onRemove` path -- which
+                // honoured UPDATE_SUPPRESS_DROPS -- onto `BlockEntity.preRemoveSideEffects`, and gated THAT on
+                // a different, newer flag. `LevelChunk.setBlockState` reads it as
+                // `(flags & UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS) == 0`; UPDATE_SUPPRESS_DROPS (32) is never
+                // consulted. So a suppressed removal still emptied the magazine onto the floor.
+                //
+                // It bit cannons and nothing else because a cannon is the only two-block CONTAINER here. VS2's
+                // assembler clears and removes each block entity before it takes the block, so a chest is
+                // already empty by the time vanilla could spill it -- but a gun dismantles ITSELF from whichever
+                // half the assembler reaches first, and that runs while the other half's magazine is still
+                // loaded. The powder and shot were already safe in the copy at the destination, so what landed
+                // on the ground was a duplicate of a full magazine.
+                //
+                // Skipping the side effects is right only for bulk work. A player breaking the FRONT half
+                // depends on exactly this spill to get the magazine back, since playerWillDestroy only drops
+                // from the breech. `isMoving` separates the two: it is
+                // `(flags & UPDATE_MOVE_BY_PISTON) != 0`, which every VS2 relocation sets and no player break
+                // does -- so a gun broken by hand or blown up still gives its rounds back.
+                var flags = Block.UPDATE_CLIENTS or Block.UPDATE_KNOWN_SHAPE or Block.UPDATE_SUPPRESS_DROPS
+                if (isMoving) flags = flags or Block.UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS
+                level.setBlock(other, Blocks.AIR.defaultBlockState(), flags)
             }
         } finally {
             dismantling = false
