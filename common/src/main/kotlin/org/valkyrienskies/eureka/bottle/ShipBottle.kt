@@ -464,5 +464,5 @@ object ShipBottle {
      * statement about how far a captain can reach, and it wants to be answered before the bottle leaves the
      * hand rather than after it has flown off over the horizon.
      */
-    const val CAPTURE_RANGE = 100.0
+    const val CAPTURE_RANGE = 160.0
 }
