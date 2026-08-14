@@ -95,9 +95,10 @@ class ShipBottleItem(properties: Properties) : Item(properties) {
             SoundEvents.ENDER_EYE_LAUNCH, SoundSource.PLAYERS, 0.5f, 0.4f
         )
 
-        // Spent even in creative. The bottle in the air IS this stack -- it comes back to the inventory whether
-        // it caught a ship or not, so letting creative keep the original would hand out a second one.
-        stack.shrink(1)
+        // Spent even in creative -- and that takes replacing the slot rather than shrinking it; see spendOne.
+        // The bottle in the air IS this stack, and it comes back to the inventory whether it caught a ship or
+        // not, so letting creative keep the original hands out a second one.
+        ShipBottle.spendOne(serverPlayer, hand, stack)
         return InteractionResult.SUCCESS
     }
 

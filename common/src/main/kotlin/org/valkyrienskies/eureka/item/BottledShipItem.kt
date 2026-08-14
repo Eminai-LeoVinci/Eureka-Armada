@@ -61,7 +61,9 @@ class BottledShipItem(properties: Properties) : Item(properties) {
             SoundEvents.ENDER_EYE_LAUNCH, SoundSource.PLAYERS, 0.5f, 0.4f
         )
 
-        stack.shrink(1)
+        // One bottle, one ship -- and spent by replacing the slot, or creative keeps it and releases the same
+        // hull again for nothing; see spendOne.
+        ShipBottle.spendOne(serverPlayer, hand, stack)
         return InteractionResult.SUCCESS
     }
 

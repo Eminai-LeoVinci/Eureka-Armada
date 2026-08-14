@@ -254,7 +254,6 @@ class ThrownShipBottle(type: EntityType<out ThrownShipBottle>, level: Level) : E
 
         val captain = captain(level)
         val taken = if (captain == null) null else ShipBottle.take(level, captain, marked)
-
         if (taken != null) {
             carry(taken)
             level.playSound(null, x, y, z, SoundEvents.BOTTLE_FILL, SoundSource.PLAYERS, 1.0f, 1.0f)
@@ -281,6 +280,11 @@ class ThrownShipBottle(type: EntityType<out ThrownShipBottle>, level: Level) : E
         val distance = gap.length()
 
         if (distance < CAUGHT_WITHIN) {
+            // A bottle can be a long time coming home -- it chases its wheel until it arrives or runs out of
+            // patience -- and the ship it was marked for may be gone by the time it gets here, bottled by
+            // something else or taken apart. Handing back a bottle still pointed at it is handing back one
+            // that cannot be thrown, so the mark goes and the bottle is simply empty again.
+            ShipBottle.forgetDeadMark(level, carried)
             if (!captain.inventory.add(carried)) captain.drop(carried, false)
             level.playSound(
                 null, captain.x, captain.y, captain.z,

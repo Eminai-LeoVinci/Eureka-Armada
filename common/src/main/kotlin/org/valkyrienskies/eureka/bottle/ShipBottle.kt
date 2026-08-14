@@ -7,6 +7,7 @@ import net.minecraft.nbt.CompoundTag
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.Clearable
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
@@ -362,6 +363,39 @@ object ShipBottle {
      * The caller owns the template. Whatever is named here will be **forgotten** when the ship comes out, so
      * hand this a template nothing else depends on.
      */
+    /**
+     * Rub out a mark whose wheel is gone, so a returning bottle comes back usable.
+     *
+     * A capture that never happened hands the bottle back on purpose -- a hull that will not fit must never
+     * cost somebody their ship. But it was handing it back still pointed at a wheel that had since stopped
+     * existing, which is worse than an empty bottle: it cannot be thrown at all ("not loaded anywhere
+     * nearby") and gives no hint that the fix is to mark something again. An unmarked bottle at least says
+     * what to do with itself.
+     */
+    fun forgetDeadMark(level: ServerLevel, stack: ItemStack) {
+        val helm = markedHelm(stack) ?: return
+        if (helmWorldPos(level, helm) != null) return
+        stack.remove(DataComponents.CUSTOM_DATA)
+    }
+
+    /**
+     * Spend one bottle out of the hand, in a way creative mode cannot undo.
+     *
+     * `ServerPlayerGameMode.useItemOn` reads the count before the interaction and, for a player with infinite
+     * materials, calls `setCount` afterwards to put it back -- so shrinking the stack in place is silently
+     * reverted while the bottle in the air, a separate copy, goes on doing its job. A creative captain kept
+     * the marker after a capture, and kept a bottled ship that would release the same hull again for free.
+     *
+     * The restore writes to the stack OBJECT it captured, not to whatever the slot holds by then, so putting
+     * a different object in the slot leaves it correcting one nothing else can see. Deferring the shrink to
+     * the server's task queue does not work: on the server thread `execute` runs the task inline, still
+     * inside the interaction.
+     */
+    fun spendOne(player: ServerPlayer, hand: InteractionHand, stack: ItemStack) {
+        val left = stack.count - 1
+        player.setItemInHand(hand, if (left > 0) stack.copyWithCount(left) else ItemStack.EMPTY)
+    }
+
     fun bottleOf(templateName: String, shipName: String): ItemStack {
         val bottled = ItemStack(EurekaItems.BOTTLED_SHIP.get())
         val tag = CompoundTag()
