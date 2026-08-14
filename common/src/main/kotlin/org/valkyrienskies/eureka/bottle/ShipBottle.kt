@@ -70,7 +70,19 @@ object ShipBottle {
         val tag = CompoundTag()
         tag.putString(SHIP_NAME_KEY, shipName)
         tag.putLong(MARKED_HELM_KEY, helm.asLong())
-        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+
+        // Mark ONE bottle, not the stack. Components belong to the stack, so writing the mark in place brands
+        // every bottle the player is holding -- and throwing spends only one, leaving the rest apparently
+        // marked for a ship that is about to stop existing. They read as duplicates of the bottle that was
+        // just used, and their mark is a helm position that no longer resolves, so they cannot even be thrown.
+        if (stack.count > 1) {
+            val marked = stack.copyWithCount(1)
+            marked.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+            stack.shrink(1)
+            if (!player.inventory.add(marked)) player.drop(marked, false)
+        } else {
+            stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+        }
 
         // GOOD, not PROMPT: the prompt channel is a single slot meant to be re-sent every tick while a key is
         // held, and it expires a quarter second after its last refresh. This is said once and needs to survive
