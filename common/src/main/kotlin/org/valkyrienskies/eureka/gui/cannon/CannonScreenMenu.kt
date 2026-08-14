@@ -18,7 +18,14 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
 
     constructor(syncId: Int, playerInv: Inventory) : this(syncId, playerInv, null)
 
-    private val container: Container = blockEntity ?: SimpleContainer(MAGAZINE_SLOTS)
+    // The client has no block entity, so it builds its own container to hold the synced copy -- and
+    // SimpleContainer.setItem runs every incoming stack through limitSize(getMaxStackSize(stack)), which
+    // defaults to min(container, item) and so is 16 for cannonballs. A magazine holding forty therefore
+    // arrived, was truncated to sixteen for display, and only told the truth once the stack was picked up
+    // and the real one came back from the server. The gun's capacity has to be the gun's on both sides.
+    private val container: Container = blockEntity ?: object : SimpleContainer(MAGAZINE_SLOTS) {
+        override fun getMaxStackSize(stack: ItemStack): Int = CannonBlockEntity.MAGAZINE_CAPACITY
+    }
 
     /** True once the gun has both halves of a shot in it. Read straight off the synced slots. */
     val loaded: Boolean get() = slots[CannonBlockEntity.POWDER].hasItem() && slots[CannonBlockEntity.SHOT].hasItem()

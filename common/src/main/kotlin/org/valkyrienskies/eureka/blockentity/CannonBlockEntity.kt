@@ -104,6 +104,11 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     override fun getMaxStackSize(): Int = MAGAZINE_CAPACITY
 
+    // Both, not just the no-argument one. Container.getMaxStackSize(stack) defaults to min(container, item)
+    // and is what every container-level write actually consults -- so leaving it alone let the magazine be
+    // clamped back to the cannonball's own 16 by anything that set a slot rather than assigning the field.
+    override fun getMaxStackSize(stack: ItemStack): Int = MAGAZINE_CAPACITY
+
     override fun isEmpty(): Boolean = powder.isEmpty && shot.isEmpty
 
     override fun clearContent() {
