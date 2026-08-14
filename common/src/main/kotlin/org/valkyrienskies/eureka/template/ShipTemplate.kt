@@ -26,6 +26,8 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.bottle.ThrownShipBottle
+import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
 /**
@@ -234,7 +236,24 @@ object ShipTemplate {
                 // by the next bottling. Every cycle adds another copy. The gunpowder and shot raining off a
                 // released hull were exactly this: the magazines came back from the blocks' own NBT, and the
                 // loose duplicates came back from the entity list beside them.
-                it !is ItemEntity && it !is ExperienceOrb
+                it !is ItemEntity && it !is ExperienceOrb &&
+                // And our own two things in flight, for a sharper version of the same reason: a bottle
+                // CAPTURES ITSELF.
+                //
+                // `takeTheShip` stations the bottle RISE_ABOVE blocks over the wheel and calls the capture from
+                // there -- so at the instant the template is written, the bottle doing the writing is hovering
+                // inside the ship's own box and gets recorded like a deck fixture. It is written in the state
+                // it held at that moment: still carrying the EMPTY it set out with, since `carry(taken)` has
+                // not run yet, and already `helm = null`, which `takeTheShip` clears first.
+                //
+                // Releasing the ship then hatches that copy. It arrives in phase HOMING with no helm, which
+                // `home` reads as "lost my ship" on its very first tick, so it turns straight round and hands
+                // its empty bottle to the captain -- which is the empty, unmarked bottle that came back after
+                // every single release. Nothing about it was a bottle-spending bug; it was a stowaway.
+                //
+                // A cannonball in flight over the deck at capture time is the identical trap, and would come
+                // back out of the bottle still flying, so it goes the same way.
+                it !is ThrownShipBottle && it !is CannonShot
         }
 
         for (entity in candidates) {
@@ -321,6 +340,11 @@ object ShipTemplate {
         template.entityInfoList.removeIf { info ->
             when (info.nbt?.getString("id")?.orElse("")) {
                 "minecraft:item", "minecraft:experience_orb" -> true
+                // The stowaway bottle, and a shot that happened to be over the deck -- see captureEntities.
+                // Filtered here as well as at capture for the reason the items are: a bottle is a saved file,
+                // and every template already on disk carries its own stowaway. Without this, existing bottles
+                // would go on handing an empty back forever and only newly captured ones would behave.
+                "vs_eureka:thrown_ship_bottle", "vs_eureka:cannon_shot" -> true
                 else -> false
             }
         }
