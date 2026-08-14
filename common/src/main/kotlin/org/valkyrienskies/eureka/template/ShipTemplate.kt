@@ -7,9 +7,11 @@ import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.ProblemReporter
 import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.ExperienceOrb
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
+import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
@@ -198,6 +200,10 @@ object ShipTemplate {
      * [org.valkyrienskies.eureka.crew.CrewLedger], so a bottled ship keeps them by skipping the stand-down, never
      * by serializing villagers. Armour stands are the deliberate exception: furniture that happens to extend
      * `LivingEntity`.
+     *
+     * Loose items and experience orbs are skipped too, and for a different reason: they are not part of a
+     * ship, and carrying them makes a bottle a duplicator -- restored on release, then captured again by the
+     * next bottling, a copy deeper every cycle.
      */
     private fun captureEntities(
         level: ServerLevel,
@@ -221,7 +227,14 @@ object ShipTemplate {
 
         var captured = 0
         val candidates = level.getEntitiesOfClass(Entity::class.java, box) {
-            it !is Player && !it.isPassenger && (it !is LivingEntity || it is ArmorStand)
+            it !is Player && !it.isPassenger && (it !is LivingEntity || it is ArmorStand) &&
+                // Loose items and orbs are not part of a ship, and capturing them is how a bottle turns into
+                // a duplicator. A dropped stack is written into the template as an entity, laid back out on
+                // release, and -- because it is on the deck of the ship that just came out -- captured again
+                // by the next bottling. Every cycle adds another copy. The gunpowder and shot raining off a
+                // released hull were exactly this: the magazines came back from the blocks' own NBT, and the
+                // loose duplicates came back from the entity list beside them.
+                it !is ItemEntity && it !is ExperienceOrb
         }
 
         for (entity in candidates) {
@@ -297,6 +310,20 @@ object ShipTemplate {
     fun place(level: ServerLevel, name: String, at: BlockPos): Outcome {
         val id = idFor(name) ?: return Failed("'$name' is not a usable template name.")
         val template = find(level, name) ?: return Failed("No template named '$name'.")
+
+        // Drop loose items and orbs on the way OUT as well as on the way in.
+        //
+        // captureEntities no longer records them, but every template written before it stopped still carries
+        // them, and a bottle is a saved file: those keep laying their pile out on every release, and every
+        // re-bottling of the ship they land on writes a deeper copy. Filtering here retires the whole cycle
+        // instead of only stopping new ones, so an existing bottle is safe to use rather than being one last
+        // duplication waiting to happen.
+        template.entityInfoList.removeIf { info ->
+            when (info.nbt?.getString("id")?.orElse("")) {
+                "minecraft:item", "minecraft:experience_orb" -> true
+                else -> false
+            }
+        }
 
         // Explicit rather than relying on the default: entities are half the point of a captured ship.
         val settings = StructurePlaceSettings().setIgnoreEntities(false)
