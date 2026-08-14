@@ -17,6 +17,7 @@ import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.item.ItemStack
 import org.lwjgl.glfw.GLFW
+import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
@@ -236,10 +237,23 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     override fun mouseClicked(mouseButtonEvent: MouseButtonEvent, doubled: Boolean): Boolean {
         if (super.mouseClicked(mouseButtonEvent, doubled)) return true
-        if (openCard != null) return false
 
         val mx = mouseButtonEvent.x.toInt()
         val my = mouseButtonEvent.y.toInt()
+
+        // The card's own hand-drawn control, tested before the card swallows the click. Only live once the
+        // detail has arrived -- there is no duty to cycle while the card still says "Reading the articles".
+        if (openCard != null) {
+            if (detail != null) {
+                val bx = dutyButtonX()
+                val by = dutyRowY()
+                if (mx >= bx && mx < bx + DUTY_BTN_W && my >= by && my < by + DUTY_BTN_H) {
+                    cycleDuty()
+                    return true
+                }
+            }
+            return false
+        }
 
         // Clicking anywhere off the box while renaming commits it, the way a name field is expected to behave.
         if (renamingCrew) {
@@ -377,6 +391,17 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             ),
             left + 44, y + 14, SUBTLE
         )
+
+        // The job, on the row itself, so a whole crew's assignments read at a glance instead of taking eight
+        // cards to find. Drawn in the crew accent because a duty is the one thing on this row the captain
+        // chose; everything else is a fact about the villager.
+        if (row.duty != CrewDuty.NONE) {
+            val duty = dutyName(row.duty)
+            small(
+                guiGraphics, duty,
+                left + PANEL_W - 32 - (font.width(duty) * SMALL).toInt(), y + 9, ACCENT
+            )
+        }
 
         // A card opens from anywhere on the row; the glyph is the affordance, not the only target.
         val bx = left + PANEL_W - 26
@@ -520,17 +545,95 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             small(guiGraphics, NO_TRADES_TEXT, x, y + 1, DIM)
             y += 12
         } else {
-            for (offer in card.offers) {
+            // Bounded by where the duty rows start, rather than by the offer count. A master crewman carries
+            // ten trades and the card has never had room for them, but it used to overrun into an inert label;
+            // now it would overrun into the assignment button and bury a control the player has to click.
+            val room = ((dutyRowY() - 6) - y) / OFFER_H
+            val shown = card.offers.take(room.coerceAtLeast(0))
+            for (offer in shown) {
                 drawOffer(guiGraphics, x, y, offer, mouseX, mouseY)
                 y += OFFER_H
             }
+            val hidden = card.offers.size - shown.size
+            if (hidden > 0) {
+                small(guiGraphics, Component.translatable("gui.vs_eureka.crew_more_trades", hidden), x, y + 1, DIM)
+            }
         }
 
-        // Where duties will land. Deliberately plain and inert -- a greyed row promises a place, not a feature.
-        val footY = cardY() + CARD_H - CARD_PAD - BACK_BTN_H - 24
-        guiGraphics.fill(x, footY - 4, cardX() + CARD_W - CARD_PAD, footY - 3, SEPARATOR)
-        small(guiGraphics, ASSIGNMENT_TEXT, x, footY, DIM)
-        small(guiGraphics, STATION_TEXT, x, footY + 10, DIM)
+        drawDuties(guiGraphics, card, mouseX, mouseY)
+    }
+
+    /**
+     * The two duty lines: what this crew member has been told to do, and what that amounts to on this ship.
+     *
+     * The assignment control is PAINTED rather than built as a button, for the same reason the berth rows are:
+     * its label is its state, so a widget would have to be torn down and rebuilt on every click and on every
+     * detail packet that arrived underneath one. A rectangle and a hit test in [mouseClicked] cannot fall out
+     * of step with what was drawn.
+     */
+    private fun drawDuties(guiGraphics: GuiGraphics, card: CrewManifest.Detail, mouseX: Int, mouseY: Int) {
+        val x = cardX() + CARD_PAD
+        val footY = dutyRowY()
+
+        guiGraphics.fill(x, footY - 6, cardX() + CARD_W - CARD_PAD, footY - 5, SEPARATOR)
+        small(guiGraphics, ASSIGNMENT_TEXT, x, footY + 4, DIM)
+
+        val bx = dutyButtonX()
+        val hovered = mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= footY && mouseY < footY + DUTY_BTN_H
+        guiGraphics.fill(bx, footY, bx + DUTY_BTN_W, footY + DUTY_BTN_H, if (hovered) ACCENT else ROW_LOCKED)
+        val label = dutyName(card.duty)
+        guiGraphics.drawString(
+            font, label,
+            bx + (DUTY_BTN_W - font.width(label)) / 2, footY + 3,
+            if (hovered) 0xFFFFFFFF.toInt() else TEXT, false
+        )
+
+        small(guiGraphics, STATION_TEXT, x, footY + DUTY_BTN_H + 6, DIM)
+        val station = stationLine(card)
+        small(
+            guiGraphics, station,
+            cardX() + CARD_W - CARD_PAD - (font.width(station) * SMALL).toInt(), footY + DUTY_BTN_H + 6,
+            SUBTLE
+        )
+    }
+
+    /**
+     * What this crew member's duty amounts to aboard THIS ship.
+     *
+     * Deliberately the vessel's tally rather than a particular gun. Guns have no bow-relative numbers yet, so
+     * naming one would mean inventing an order and then having to change it -- whereas "four of six guns
+     * manned" is the number a captain acts on, and it answers both questions at once: buy another berth, or
+     * bolt on another cannon.
+     */
+    private fun stationLine(card: CrewManifest.Detail): Component = when (card.duty) {
+        CrewDuty.GUNNER ->
+            if (card.guns == 0) NO_GUNS_TEXT
+            else Component.translatable(
+                "gui.vs_eureka.crew_station_guns", minOf(card.gunners, card.guns), card.guns
+            )
+        CrewDuty.FIREFIGHTER -> Component.translatable("gui.vs_eureka.crew_station_watch", card.fireParty)
+        CrewDuty.NONE -> OFF_DUTY_TEXT
+    }
+
+    private fun dutyName(duty: CrewDuty): Component = Component.translatable(duty.translationKey)
+
+    /** Top of the assignment row. Everything in the card's footer is measured from here. */
+    private fun dutyRowY(): Int = cardY() + CARD_H - CARD_PAD - BACK_BTN_H - 44
+
+    private fun dutyButtonX(): Int = cardX() + CARD_W - CARD_PAD - DUTY_BTN_W
+
+    /**
+     * Step this crew member's duty on one, and tell the server where it landed.
+     *
+     * The card is updated straight away rather than waiting for the answer. A duty is one field and the server
+     * replies with a fresh card anyway, so the optimistic hop only removes a round trip's worth of lag from a
+     * button whose whole job is to say what it is now.
+     */
+    private fun cycleDuty() {
+        val card = detail ?: return
+        val next = card.duty.next
+        detail = card.copy(duty = next)
+        PathNetworkingFabric.sendCrewDuty(snapshot.helm, card.villager, next)
     }
 
     private fun drawOffer(
@@ -645,6 +748,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val OUT_OF_STOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_out_of_stock")
         private val ASSIGNMENT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_assignment")
         private val STATION_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station")
+        private val NO_GUNS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station_no_guns")
+        private val OFF_DUTY_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station_none")
         private val UNEMPLOYED_TEXT: Component = Component.translatable("entity.vs_eureka.villager.unemployed")
         private val INFO_GLYPH: Component = Component.literal("i")
         private val ARROW_TEXT: Component = Component.literal("→")
@@ -659,9 +764,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val LIST_BOTTOM = LIST_TOP + ROW_H * VISIBLE_ROWS
 
         private const val CARD_W = 260
-        private const val CARD_H = 178
+
+        /** Grown from 178 to make room for the two duty lines under the trades, which used to be inert labels. */
+        private const val CARD_H = 192
         private const val CARD_PAD = 8
         private const val NAME_BOX_H = 14
+
+        /** Wide enough for "Firefighter", so the control does not resize as it is cycled through. */
+        private const val DUTY_BTN_W = 76
+        private const val DUTY_BTN_H = 14
 
         /**
          * Pixels reserved at the right of the header for the berth counter.

@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
+import org.valkyrienskies.eureka.crew.CrewDuties;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
@@ -123,6 +124,9 @@ public class EurekaModFabric implements ModInitializer {
             // route follower above because the two are mutually exclusive on any one hull -- they'd fight over
             // the wheel -- but they share the same guidance plumbing on EurekaShipControl.
             ShipFollows.INSTANCE.tick(level);
+            // Crew duties: walk any broadside in progress one gun further along, and run the fire watch on its
+            // own once-a-second clock. Both self-silence -- no volley and no tracked fire is two map checks.
+            CrewDuties.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -135,6 +139,9 @@ public class EurekaModFabric implements ModInitializer {
             // Without it a ship in the next world that happened to take a follower's id would set off after a
             // leader from the last one.
             ShipFollows.INSTANCE.reset();
+            // Same reasoning: a volley in flight and a firefighter on their way to a fire are runtime-only, and
+            // in single player this singleton outlives the world they belonged to.
+            CrewDuties.INSTANCE.reset();
             PathNetworkingFabric.INSTANCE.resetServer();
         });
     }

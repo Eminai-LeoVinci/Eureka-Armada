@@ -21,6 +21,8 @@ import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.item.ItemStack
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.crew.CrewDuties
+import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.HelmNames
@@ -71,6 +73,7 @@ object PathNetworkingFabric {
     private val CREW_ASK_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_detail_ask")
     private val CREW_RENAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_rename")
     private val CREW_DISMISS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_dismiss")
+    private val CREW_DUTY_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_duty")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
@@ -84,6 +87,7 @@ object PathNetworkingFabric {
     private val CREW_ASK_TYPE = CustomPacketPayload.Type<CrewAskPayload>(CREW_ASK_RL)
     private val CREW_RENAME_TYPE = CustomPacketPayload.Type<CrewRenamePayload>(CREW_RENAME_RL)
     private val CREW_DISMISS_TYPE = CustomPacketPayload.Type<CrewDismissPayload>(CREW_DISMISS_RL)
+    private val CREW_DUTY_TYPE = CustomPacketPayload.Type<CrewDutyPayload>(CREW_DUTY_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
@@ -107,6 +111,8 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewRenamePayload::data) { CrewRenamePayload(it) }
     private val CREW_DISMISS_CODEC: StreamCodec<FriendlyByteBuf, CrewDismissPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDismissPayload::data) { CrewDismissPayload(it) }
+    private val CREW_DUTY_CODEC: StreamCodec<FriendlyByteBuf, CrewDutyPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDutyPayload::data) { CrewDutyPayload(it) }
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -156,6 +162,11 @@ object PathNetworkingFabric {
     /** "This one is off the articles." Whether that is allowed is the server's business, not the button's. */
     class CrewDismissPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_DISMISS_TYPE
+    }
+
+    /** "Put this one on that duty." Carries the duty the button landed on, not "next" -- see the sender. */
+    class CrewDutyPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_DUTY_TYPE
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
@@ -214,6 +225,19 @@ object PathNetworkingFabric {
      */
     const val ACTION_CREW: Byte = 7
 
+    /**
+     * "Fire!" -- every manned gun aboard the ship the player is on.
+     *
+     * The only binding in the mod with NO sneak on it, and that is forced rather than chosen: a helm dismounts
+     * any rider holding shift, so every SHIFT hotkey is usable only while standing on the deck. Ordering a
+     * broadside from the deck and not from the wheel would be the wrong way round -- fighting a ship IS
+     * steering it, and the captain giving the order is the one at the helm.
+     *
+     * Carries no target for the same reason [ACTION_FOLLOW_SHIP] does not: which ship, which guns and which
+     * crew are all the server's to work out from where the player is standing.
+     */
+    const val ACTION_BROADSIDE: Byte = 8
+
     /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
     private const val NO_ROUTE = 0L
 
@@ -263,6 +287,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playC2S().register(CREW_ASK_TYPE, CREW_ASK_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_RENAME_TYPE, CREW_RENAME_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_DISMISS_TYPE, CREW_DISMISS_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_DUTY_TYPE, CREW_DUTY_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
@@ -328,6 +353,7 @@ object PathNetworkingFabric {
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
                     ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
                     ACTION_CREW -> ShipCrews.gesture(level, player)
+                    ACTION_BROADSIDE -> CrewDuties.broadside(level, player)
                 }
             }
         }
@@ -368,6 +394,20 @@ object PathNetworkingFabric {
             context.server().execute {
                 val level = player.level() as? ServerLevel ?: return@execute
                 CrewManifest.requestDismiss(level, player, helm, villager)
+            }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(CREW_DUTY_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val villager = buf.readUUID()
+            // byOrdinal, never entries[]: a client on a different build sends whatever ITS list said, and an
+            // unknown duty has to read as "off duty" rather than throw on the netty thread.
+            val duty = CrewDuty.byOrdinal(buf.readByte().toInt())
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                CrewManifest.requestDuty(level, player, helm, villager, duty)
             }
         }
 
@@ -478,6 +518,21 @@ object PathNetworkingFabric {
         ClientPlayNetworking.send(CrewDismissPayload(toArray(buf)))
     }
 
+    /**
+     * Client: put one crew member on a duty.
+     *
+     * Sends the duty the button has ARRIVED at rather than "advance one", so two clicks that cross in flight
+     * cannot leave the server one step out from what the player is looking at.
+     */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewDuty(helm: Long, villager: UUID, duty: CrewDuty) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeUUID(villager)
+        buf.writeByte(duty.ordinal)
+        ClientPlayNetworking.send(CrewDutyPayload(toArray(buf)))
+    }
+
     /** Client: name the wheel at [pos]. An empty name clears it back to blank. */
     @Environment(EnvType.CLIENT)
     fun sendHelmName(pos: BlockPos, name: String) {
@@ -513,6 +568,7 @@ object PathNetworkingFabric {
             buf.writeUtf(row.villagerType)
             buf.writeVarInt(row.level)
             buf.writeUtf(row.name)
+            buf.writeByte(row.duty.ordinal)
         }
         return toArray(buf)
     }
@@ -532,7 +588,8 @@ object PathNetworkingFabric {
                 profession = buf.readUtf(),
                 villagerType = buf.readUtf(),
                 level = buf.readVarInt(),
-                name = buf.readUtf()
+                name = buf.readUtf(),
+                duty = CrewDuty.byOrdinal(buf.readByte().toInt())
             )
         }
         return CrewManifest.Snapshot(ship, helm, berths, maxBerths, rows)
@@ -554,6 +611,10 @@ object PathNetworkingFabric {
         buf.writeVarInt(detail.level)
         buf.writeVarInt(detail.xp)
         buf.writeBoolean(detail.aboard)
+        buf.writeByte(detail.duty.ordinal)
+        buf.writeVarInt(detail.guns)
+        buf.writeVarInt(detail.gunners)
+        buf.writeVarInt(detail.fireParty)
         buf.writeVarInt(detail.offers.size)
         for (offer in detail.offers) {
             ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.costA)
@@ -575,6 +636,10 @@ object PathNetworkingFabric {
         val level = buf.readVarInt()
         val xp = buf.readVarInt()
         val aboard = buf.readBoolean()
+        val duty = CrewDuty.byOrdinal(buf.readByte().toInt())
+        val guns = buf.readVarInt()
+        val gunners = buf.readVarInt()
+        val fireParty = buf.readVarInt()
         val offers = List(buf.readVarInt()) {
             CrewManifest.Offer(
                 costA = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
@@ -585,7 +650,9 @@ object PathNetworkingFabric {
                 outOfStock = buf.readBoolean()
             )
         }
-        return CrewManifest.Detail(villager, name, profession, level, xp, offers, aboard)
+        return CrewManifest.Detail(
+            villager, name, profession, level, xp, offers, aboard, duty, guns, gunners, fireParty
+        )
     }
 
     // endregion

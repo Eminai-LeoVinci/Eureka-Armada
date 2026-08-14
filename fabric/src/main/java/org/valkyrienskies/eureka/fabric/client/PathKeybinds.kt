@@ -71,6 +71,7 @@ object PathKeybinds {
     private lateinit var show: KeyMapping
     private lateinit var follow: KeyMapping
     private lateinit var crew: KeyMapping
+    private lateinit var broadside: KeyMapping
 
     /**
      * One key's worth of "is this a tap or a hold?".
@@ -114,6 +115,9 @@ object PathKeybinds {
         // `C` for crew. Unbound in vanilla today, but it goes through the same collision scan as the rest, so a
         // rebind or another mod landing on it is covered without anything here changing.
         crew = bind("crew", GLFW.GLFW_KEY_C)
+        // `G` for guns, and the ONLY binding here with no sneak on it -- see the note on `tick`. Unbound in
+        // vanilla, and it goes through the same collision scan as the rest if anything else takes it.
+        broadside = bind("broadside", GLFW.GLFW_KEY_G)
 
         recordGesture = Gesture(record)
         playGesture = Gesture(play)
@@ -143,7 +147,7 @@ object PathKeybinds {
 
         for (mapping in client.options.keyMappings) {
             if (mapping === record || mapping === play || mapping === show ||
-                mapping === follow || mapping === crew
+                mapping === follow || mapping === crew || mapping === broadside
             ) continue
             // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
             if (ours.none { mapping.same(it) }) continue
@@ -151,7 +155,7 @@ object PathKeybinds {
         }
     }
 
-    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow, crew) }
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow, crew, broadside) }
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -168,6 +172,17 @@ object PathKeybinds {
         if (client.player == null || client.screen != null) {
             reset()
             return
+        }
+
+        // The one binding polled before the sneak gate, because it must NOT have sneak on it: a helm dismounts
+        // any rider holding shift, so a SHIFT hotkey can only be pressed from the deck -- and a broadside is
+        // ordered from the wheel, mid-turn, by the person doing the steering. Read here, ahead of the early
+        // return below, so it works seated as well as standing.
+        //
+        // Firing at nothing is harmless: the server refuses unless the player is aboard a ship with guns and
+        // gunners, so a stray press ashore costs a line of text at worst.
+        if (broadside.consumeClick()) {
+            PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_BROADSIDE)
         }
 
         // Every path hotkey is a SHIFT combination, so nothing here can fire during ordinary play. Read through

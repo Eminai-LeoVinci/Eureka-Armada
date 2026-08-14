@@ -83,6 +83,24 @@ object ShipFireBurn {
     }
 
     /**
+     * Every spot in this dimension a contained fire has been seen at, packed.
+     *
+     * This is what makes a fire watch affordable. Finding fire by looking for it would mean sweeping the volume
+     * of every ship in the world on a timer, for a block that is almost never there -- whereas the containment
+     * rule has already had to notice each ship fire in order to put a clock on it, so the list exists as a
+     * by-product of a feature that was being built anyway.
+     *
+     * The answer is deliberately a superset. An entry survives its fire being put out, broken or rained on,
+     * because none of those call [forget] -- so a caller must check that there is still fire at each position
+     * rather than trust the list. That is one block read per entry against a table that holds tens.
+     *
+     * A copy, not the live map: the caller is expected to put fires out while walking it, and dousing one is
+     * exactly what removes an entry.
+     */
+    fun tracked(level: ServerLevel): LongArray =
+        byDimension[level.dimension()]?.keys?.toLongArray() ?: LongArray(0)
+
+    /**
      * Drop entries whose deadline is long past. Anything that old was either consumed, or belonged to a
      * fire that was put out or broken -- neither leaves us anything to do, and neither calls [forget].
      */

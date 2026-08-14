@@ -64,7 +64,16 @@ class CrewLedger : SavedData() {
          * never come back. Tombstoning them anyway would work, but it would leave an entry that nothing ever
          * clears, growing by a whole crew every time a ship is rebuilt.
          */
-        val ashore: Boolean = false
+        val ashore: Boolean = false,
+        /**
+         * What they have been told to do. See [CrewDuty] for why this is one value rather than a set.
+         *
+         * Kept on the BERTH rather than on the villager, like everything else the articles record. A duty is an
+         * order given to somebody serving on a particular crew, so it belongs where the crew is written down --
+         * which also means it survives its holder walking ashore, dying and being rebuilt from a snapshot, or
+         * being struck by lightning and rekeyed, none of which are decisions to stop being a gunner.
+         */
+        val duty: CrewDuty = CrewDuty.NONE
     )
 
     private val crews = LinkedHashMap<Key, MutableList<Berth>>()
@@ -170,6 +179,17 @@ class CrewLedger : SavedData() {
      */
     fun standDown(villager: UUID, snapshot: CompoundTag) {
         edit(villager) { it.copy(snapshot = snapshot, ashore = true) }
+    }
+
+    /** What [villager] has been told to do, or [CrewDuty.NONE] if they are nobody's crew. */
+    fun dutyOf(villager: UUID): CrewDuty {
+        val key = byVillager[villager] ?: return CrewDuty.NONE
+        return crews[key]?.firstOrNull { it.villager == villager }?.duty ?: CrewDuty.NONE
+    }
+
+    /** Put [villager] on [duty], taking them off whatever they were doing. Silent if they are not on any crew. */
+    fun setDuty(villager: UUID, duty: CrewDuty) {
+        edit(villager) { it.copy(duty = duty) }
     }
 
     /** Whether [villager]'s berth is waiting for them to be rebuilt rather than found. */
@@ -347,6 +367,9 @@ class CrewLedger : SavedData() {
                 // Written only when true, so the ordinary case leaves no trace in the file and a berth saved
                 // before this existed reads back as what it was: somebody expected to be out there somewhere.
                 if (berth.ashore) member.putBoolean(ASHORE_KEY, true)
+                // Same treatment, and the same reasoning: most of a crew has no duty, so writing NONE would
+                // put a line in the file for every berth in the world to say nothing at all.
+                if (berth.duty != CrewDuty.NONE) member.putString(DUTY_KEY, berth.duty.id)
                 members.add(member)
             }
             entry.put(BERTHS_KEY, members)
@@ -377,6 +400,7 @@ class CrewLedger : SavedData() {
         private const val MEMBER_NAME_KEY = "member_name"
         private const val SNAPSHOT_KEY = "snapshot"
         private const val ASHORE_KEY = "ashore"
+        private const val DUTY_KEY = "duty"
         private const val TOMBSTONES_KEY = "tombstones"
 
         private val TYPE: SavedDataType<CrewLedger> = SavedDataType(
@@ -421,7 +445,8 @@ class CrewLedger : SavedData() {
                         .orElse(CrewNames.defaultFor(slot))
                     val snapshot = member.getCompound(SNAPSHOT_KEY).orElse(null)
                     val ashore = member.getBoolean(ASHORE_KEY).orElse(false)
-                    berths.add(Berth(villager, slot, memberName, snapshot, ashore))
+                    val duty = CrewDuty.byId(member.getString(DUTY_KEY).orElse(CrewDuty.NONE.id))
+                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty))
                 }
                 if (berths.isEmpty()) continue
 

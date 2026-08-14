@@ -101,8 +101,16 @@
   "gui.vs_eureka.crew_no_trades": "Nothing yet — they have no trade",
   "gui.vs_eureka.crew_loading": "Reading the articles...",
   "gui.vs_eureka.crew_out_of_stock": "out of stock until they restock",
+  "gui.vs_eureka.crew_more_trades": "…and %s more — trade with them to see the rest",
   "gui.vs_eureka.crew_assignment": "Assignment  —",
   "gui.vs_eureka.crew_station": "Station  —",
+  "gui.vs_eureka.crew_duty.none": "Unassigned",
+  "gui.vs_eureka.crew_duty.gunner": "Gunner",
+  "gui.vs_eureka.crew_duty.firefighter": "Firefighter",
+  "gui.vs_eureka.crew_station_guns": "%s of %s guns manned",
+  "gui.vs_eureka.crew_station_no_guns": "No guns aboard",
+  "gui.vs_eureka.crew_station_watch": "%s on the fire watch",
+  "gui.vs_eureka.crew_station_none": "Nothing to do",
   "gui.vs_eureka.crew_level.1": "Novice",
   "gui.vs_eureka.crew_level.2": "Apprentice",
   "gui.vs_eureka.crew_level.3": "Journeyman",
@@ -163,5 +171,6 @@
   "key.vs_eureka.path_play": "Fly route — +Ctrl replays it exactly, hold to release (hold Sneak)",
   "key.vs_eureka.path_show": "Show saved routes (hold Sneak)",
   "key.vs_eureka.path_follow": "Follow the ship you're looking at (hold Sneak)",
-  "key.vs_eureka.path_crew": "Sign on the villager you're looking at, open a wheel's crew manifest, or name this ship's crew (hold Sneak)"
+  "key.vs_eureka.path_crew": "Sign on the villager you're looking at, open a wheel's crew manifest, or name this ship's crew (hold Sneak)",
+  "key.vs_eureka.path_broadside": "Fire! — every manned gun aboard (no Sneak: works at the wheel)"
 }

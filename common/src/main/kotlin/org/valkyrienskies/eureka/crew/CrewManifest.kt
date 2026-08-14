@@ -12,6 +12,7 @@ import net.minecraft.world.item.trading.MerchantOffer
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
@@ -51,7 +52,9 @@ object CrewManifest {
         val profession: String,
         val villagerType: String,
         val level: Int,
-        val name: String
+        val name: String,
+        /** Shown on the row itself, so a captain can read a whole crew's jobs without opening eight cards. */
+        val duty: CrewDuty
     )
 
     data class Snapshot(
@@ -94,7 +97,22 @@ object CrewManifest {
          * That knows who they are but cannot know what they are selling: trades change every time somebody
          * buys. The card says as much rather than showing an empty list, which would read as "no trades".
          */
-        val aboard: Boolean
+        val aboard: Boolean,
+
+        /** What they have been told to do. The assignment button on the card cycles this. */
+        val duty: CrewDuty,
+
+        /**
+         * The ship's own tally, carried on the card so the Station line can say something true.
+         *
+         * These describe the VESSEL, not this crew member, and that is deliberate. Until guns carry their
+         * bow-relative numbers there is no non-arbitrary way to say WHICH gun somebody is at -- but "four of
+         * six guns manned" is the fact a captain actually acts on, and it answers both questions a gunner's
+         * card raises: do I need another berth, or another cannon?
+         */
+        val guns: Int,
+        val gunners: Int,
+        val fireParty: Int
     )
 
     // endregion
@@ -195,7 +213,10 @@ object CrewManifest {
                 profession = papers?.profession ?: NO_PROFESSION,
                 villagerType = papers?.type ?: DEFAULT_TYPE,
                 level = papers?.level ?: 0,
-                name = berth.name
+                name = berth.name,
+                // Off the BERTH, not off the villager, so somebody ashore still shows the job they hold. That
+                // is the point of keeping duties on the articles -- walking off the deck is not resigning.
+                duty = berth.duty
             )
         }
         val data = villager.villagerData
@@ -206,7 +227,8 @@ object CrewManifest {
             profession = keyOf(data.profession(), NO_PROFESSION),
             villagerType = keyOf(data.type(), DEFAULT_TYPE),
             level = data.level(),
-            name = CrewNames.displayName(villager)
+            name = CrewNames.displayName(villager),
+            duty = berth.duty
         )
     }
 
@@ -221,6 +243,7 @@ object CrewManifest {
     fun detailFor(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID): Detail? {
         val berth = berthOf(level, player, station, villager) ?: return null
         val crew = CrewMuster.findAnywhere(level.server, villager)
+        val muster = musterOf(level, station)
 
         // Nobody to ask: answer from the articles instead of not answering at all. Silence here left the card
         // showing "Reading the articles..." for as long as it was open, which is what a crew member who had
@@ -235,7 +258,11 @@ object CrewManifest {
                 level = papers?.level ?: 0,
                 xp = papers?.xp ?: 0,
                 offers = emptyList(),
-                aboard = false
+                aboard = false,
+                duty = berth.duty,
+                guns = muster.guns,
+                gunners = muster.gunners,
+                fireParty = muster.fireParty
             )
         }
 
@@ -247,8 +274,40 @@ object CrewManifest {
             level = data.level(),
             xp = crew.villagerXp,
             offers = crew.offers.map { offerOf(it) },
-            aboard = true
+            aboard = true,
+            duty = berth.duty,
+            guns = muster.guns,
+            gunners = muster.gunners,
+            fireParty = muster.fireParty
         )
+    }
+
+    /** What a vessel has to work with: guns bolted on, and hands told off to the two duties. */
+    private data class Muster(val guns: Int, val gunners: Int, val fireParty: Int)
+
+    /**
+     * Count [station]'s vessel once, for a card that needs all three numbers.
+     *
+     * Counted per CARD rather than per manifest: the gun census walks chunks and the duty counts need the
+     * villagers aboard, and neither is worth doing eight times over to fill in a list nobody has opened a row
+     * of. A card is opened one at a time and closed again, which makes it exactly the right grain.
+     *
+     * Counts every gunner aboard whoever signed them on -- the same rule that fires the guns. A card that
+     * counted only its own captain's would report four of six guns manned on a ship where all six are.
+     */
+    private fun musterOf(level: ServerLevel, station: ShipHelmBlockEntity): Muster {
+        val ship = CrewStations.shipOf(level, station) ?: return Muster(0, 0, 0)
+        val ledger = CrewLedger.get(level.server)
+        var gunners = 0
+        var fireParty = 0
+        for (crew in ShipCrew.villagersAboard(level, ship)) {
+            when (ledger.dutyOf(crew.uuid)) {
+                CrewDuty.GUNNER -> gunners++
+                CrewDuty.FIREFIGHTER -> fireParty++
+                CrewDuty.NONE -> Unit
+            }
+        }
+        return Muster(ShipGuns.count(level, ship), gunners, fireParty)
     }
 
     private fun offerOf(offer: MerchantOffer): Offer = Offer(
@@ -347,6 +406,35 @@ object CrewManifest {
         val station = stationAt(level, player, helm) ?: return
         if (!rename(level, player, station, villager, raw)) return
         sender(player, build(level, player, station))
+    }
+
+    /**
+     * Put one crew member on a duty, and hand back both halves of what the screen is showing.
+     *
+     * Two payloads because the card and the list behind it both change: the row grows a job label, and the
+     * card's own Assignment and Station lines are on the card. The card is refreshed second so it lands after
+     * the manifest that would otherwise close it.
+     *
+     * Only the captain who signed somebody on may re-task them, which falls out of [berthOf] rather than being
+     * checked here -- the same gate that guards renaming and dismissal.
+     */
+    fun requestDuty(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, duty: CrewDuty) {
+        val station = stationAt(level, player, helm) ?: return
+        val berth = berthOf(level, player, station, villager) ?: return
+        if (berth.duty == duty) return
+
+        CrewLedger.get(level.server).setDuty(villager, duty)
+        PathMessages.send(player, orderFor(berth.name, duty), PathMessages.Kind.GOOD)
+
+        sender(player, build(level, player, station))
+        detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+    }
+
+    /** What to tell a captain they have just done. Named plainly -- these are orders, not settings. */
+    private fun orderFor(name: String, duty: CrewDuty): String = when (duty) {
+        CrewDuty.GUNNER -> "$name is at the guns."
+        CrewDuty.FIREFIGHTER -> "$name has the fire watch."
+        CrewDuty.NONE -> "$name is off duty."
     }
 
     /** Discharge one crew member and hand back a manifest without them. */
