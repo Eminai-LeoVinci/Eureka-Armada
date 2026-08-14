@@ -2,13 +2,10 @@ package org.valkyrienskies.eureka.crew
 
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
-import net.minecraft.core.registries.Registries
-import net.minecraft.resources.ResourceKey
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.npc.villager.Villager
-import net.minecraft.world.entity.npc.villager.VillagerProfession
 import net.minecraft.world.entity.projectile.ProjectileUtil
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
@@ -100,7 +97,9 @@ object ShipCrews {
             val paidOff = CrewNames.displayName(villager)
             CrewNames.clearDefault(villager, ledger.slotOf(villager.uuid))
             ledger.payOff(villager.uuid)
-            leaveCrew(level, villager)
+            // No profession change on the way out either, for the same reason there is none on the way in. A
+            // Crewman who is paid off keeps the job they took at the wheel; if the captain wants them out of
+            // the role as well, breaking or moving the helm is what does it -- the same as any workstation.
             PathMessages.send(
                 player,
                 "Paid off $paidOff, a ${professionName(villager)}, from ${existing.name}.",
@@ -123,6 +122,9 @@ object ShipCrews {
             return
         }
 
+        // NOTE: nothing below touches the villager's profession, and that is the rule now. See the note above
+        // nameTheCrew for why signing the articles and taking a job are two different things.
+        //
         // A crew cannot be filed without a name, so a blank wheel names itself here rather than refusing. This
         // is the first moment a name is actually needed -- naming every wheel at placement would burn a name on
         // every throwaway test helm, and would give a three-wheeled ship three separate crews.
@@ -148,8 +150,6 @@ object ShipCrews {
         // manifest, and it is deliberately NOT what the limit above is counted from.
         val berth = ledger.freeSlot(key, EurekaConfig.SERVER.crewSlotsMax)
         CrewNames.applyDefault(villager, berth)
-        // Signing the articles is what makes a Crewman, not standing near a wheel. See becomeCrew.
-        becomeCrew(level, villager)
         // Written down from the moment they sign on, so a crew member is recoverable even if the very next
         // thing that happens is their chunk unloading. The copy is refreshed whenever they are next in hand.
         ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager), CrewSnapshot.capture(villager))
@@ -162,58 +162,26 @@ object ShipCrews {
     }
 
     /**
-     * Make a villager a Crewman, and unmake one when they are paid off.
+     * ## Signing the articles does not give anybody a job, and never did anybody a favour by trying
      *
-     * ## Why the profession is assigned here rather than caught from the helm
-     * It used to be neither: the helm sat in `minecraft:acquirable_job_site`, and vanilla did the rest. That
-     * tag is what sends an **unemployed** villager hunting for a workstation, and a helm carries 32 tickets
-     * against an ordinary bench's one -- so it was the most claimable job site for a long way in every
-     * direction. Any villager who briefly lost their own workstation, which untraded villagers do routinely,
-     * was hired by the nearest ship. Shipwrights especially, since their bench stands next to the wheel.
+     * Recruiting used to set the Crewman profession on any villager who was unemployed, because the helm had
+     * been taken OUT of `minecraft:acquirable_job_site` -- it carries 32 tickets against an ordinary bench's
+     * one, so as an acquirable site it was the most claimable job for a long way in every direction and hired
+     * every villager who briefly lost their own workstation.
      *
-     * Assigning it on signing makes the profession follow the decision that was actually made. A villager
-     * walking past a wheel is a villager walking past a wheel.
+     * That traded one problem for a worse one. It made "sign on" and "change career" the same gesture, so the
+     * only villagers who could join a crew without being altered were ones who already had a trade -- and the
+     * unemployed, who are exactly who you recruit, were quietly converted. A crew is meant to be *people*: a
+     * blacksmith and a librarian sail as a blacksmith and a librarian.
      *
-     * A Crewman still finds and claims helms afterwards: `AcquirePoi` reads the predicate off the villager's
-     * **current** profession, and Crewman's own `acquirableJobSite` matches the helm POI directly -- so the
-     * tag was only ever needed to catch villagers who were not crew yet.
+     * So the two are separated properly. The tag is restored, which makes the helm the one and only thing that
+     * grants Crewman -- a villager walks to a wheel and takes the job, the way every other profession in the
+     * game is taken. Signing the articles is a line in the [CrewLedger] and nothing else, and paying somebody
+     * off is the same line struck out: neither reads or writes a profession.
+     *
+     * The known cost is the one the tag comment records. A helm out-hires nearby benches, and
+     * `crewmanHelmPoiTickets` / `crewmanHelmPoiRange` are the dials for that.
      */
-    private fun becomeCrew(level: ServerLevel, villager: Villager) {
-        // Only the unemployed are given the job. Signing on is a fact recorded in the LEDGER; a profession is
-        // what somebody does for a living, and the two are not the same thing. Overwriting it would mean
-        // recruiting a shipwright quietly destroyed a shipwright -- and there is no way back, because the
-        // helm is no longer an acquirable job site for them to re-take.
-        //
-        // So a tradesman keeps their trade and sails anyway. The crew is the roster, not the hat.
-        if (!villager.villagerData.profession().`is`(VillagerProfession.NONE)) return
-        setProfession(level, villager, CrewProfession.PROFESSION_KEY)
-    }
-
-    /**
-     * Hand a paid-off crew member back their unemployment.
-     *
-     * Left as a Crewman they would keep the crew trades and the job site of a ship they no longer sail with,
-     * and no gesture could ever clear it -- paying off is the only way out of the articles, so it has to be
-     * the way out of the profession too. Unemployed, they are free to take up whatever work is around them.
-     */
-    private fun leaveCrew(level: ServerLevel, villager: Villager) {
-        if (villager.villagerData.profession().`is`(CrewProfession.PROFESSION_KEY)) {
-            setProfession(level, villager, VillagerProfession.NONE)
-        }
-    }
-
-    private fun setProfession(
-        level: ServerLevel,
-        villager: Villager,
-        profession: ResourceKey<VillagerProfession>
-    ) {
-        val holder = level.registryAccess()
-            .lookupOrThrow(Registries.VILLAGER_PROFESSION)
-            .get(profession)
-            .orElse(null) ?: return
-        villager.villagerData = villager.villagerData.withProfession(holder)
-    }
-
     /**
      * Give an unnamed wheel a crew name, and say so.
      *
