@@ -20,7 +20,6 @@ import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
-import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaEntities
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.item.Cannonball
@@ -85,25 +84,33 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
     override fun defineSynchedData(builder: SynchedEntityData.Builder) {
         builder.define(SHOWN, ItemStack.EMPTY)
+        builder.define(POWDER, PowderCharge.SINGLE.ordinal)
     }
 
     override fun getItem(): ItemStack = entityData.get(SHOWN)
 
     /**
-     * [muzzleSpeed] is handed in rather than read here because it belongs to the GUN, and a gun belongs to a
-     * ship category -- an airship throws flatter than a hull. By the time the ball is in the air it has left
-     * the ship and has no category to ask, so the number is spent at the muzzle and lives on in the velocity.
+     * How much powder threw this, which is what decides its whole arc.
      *
-     * That also means the client needs nothing extra: it already receives this velocity in the spawn packet
-     * and integrates the flight itself (see [tick]), so per-category muzzle velocity costs no synced data.
-     * Gravity and drag stay global for exactly the reason this one cannot be -- they are read every tick, on
-     * both sides, long after the gun is out of the picture, and they are properties of the ball anyway.
+     * **Synced, and it has to be.** The client integrates the flight itself rather than being told where the
+     * ball is (see [tick]), so it needs the same gravity and drag the server is using. Muzzle velocity does
+     * not need syncing -- it is spent once and rides along inside the spawn packet's velocity -- but gravity
+     * and drag are read every tick on both sides, and a client applying the 1x pair to a 3x shot would draw
+     * the ball drifting off a path the server never flew it down.
      */
-    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack, muzzleSpeed: Double) {
+    val charge: PowderCharge get() = PowderCharge.of(entityData.get(POWDER))
+
+    /**
+     * [charge] is handed in rather than read off the gun, because by the time the ball is in the air the gun
+     * is out of the picture -- and a shot's arc has to keep answering to the measure that actually threw it,
+     * not to whatever the breech happens to be set to by the time it lands.
+     */
+    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack, charge: PowderCharge) {
         this.load = load
         entityData.set(SHOWN, shownAs.copyWithCount(1))
+        entityData.set(POWDER, charge.ordinal)
         setPos(from.x, from.y, from.z)
-        deltaMovement = direction.normalize().scale(muzzleSpeed)
+        deltaMovement = direction.normalize().scale(charge.speed)
     }
 
     override fun tick() {
@@ -123,8 +130,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // the shot on impact and the client simply stops seeing it.
         if (level().isClientSide) {
             setPos(to.x, to.y, to.z)
-            deltaMovement = deltaMovement.scale(EurekaConfig.SERVER.cannonShotDrag)
-            .subtract(0.0, EurekaConfig.SERVER.cannonShotGravity, 0.0)
+            val charge = this.charge
+            deltaMovement = deltaMovement.scale(charge.drag)
+                .subtract(0.0, charge.gravity, 0.0)
             smoke()
             return
         }
@@ -156,8 +164,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         }
 
         setPos(to.x, to.y, to.z)
-        deltaMovement = deltaMovement.scale(EurekaConfig.SERVER.cannonShotDrag)
-            .subtract(0.0, EurekaConfig.SERVER.cannonShotGravity, 0.0)
+        val charge = this.charge
+        deltaMovement = deltaMovement.scale(charge.drag)
+            .subtract(0.0, charge.gravity, 0.0)
         smoke()
     }
 
@@ -205,12 +214,15 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         discard()
     }
 
+    // "Charge" is the SHELL type (plain/explosive/incendiary) and predates this; the powder measure gets its
+    // own key rather than overloading it.
     override fun readAdditionalSaveData(input: ValueInput) {
         age = input.getIntOr("Age", 0)
         load = Load(
             Cannonball.entries.getOrNull(input.getIntOr("Ball", Cannonball.IRON.ordinal)) ?: Cannonball.IRON,
             CannonCharge.entries.getOrNull(input.getIntOr("Charge", 0)) ?: CannonCharge.PLAIN
         )
+        entityData.set(POWDER, input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal))
         entityData.set(SHOWN, input.read("Shown", ItemStack.CODEC).orElse(ItemStack.EMPTY))
     }
 
@@ -218,6 +230,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         output.putInt("Age", age)
         output.putInt("Ball", load.ball.ordinal)
         output.putInt("Charge", load.charge.ordinal)
+        output.putInt("PowderCharge", entityData.get(POWDER))
         if (!item.isEmpty) output.store("Shown", ItemStack.CODEC, item)
     }
 
@@ -225,10 +238,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         private val SHOWN: EntityDataAccessor<ItemStack> =
             SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.ITEM_STACK)
 
-        // Speed, gravity and drag live on EurekaConfig.SERVER so an arc can be dialled in against a real ship
-        // with a /reload rather than a rebuild. Only the lifetime cap stays here -- it is a safety net rather
-        // than a tuning knob, and a config value that could strand shots in the sky forever is not one worth
-        // exposing.
+        /** The powder measure that threw this, as a [PowderCharge] ordinal. See [charge] for why it syncs. */
+        private val POWDER: EntityDataAccessor<Int> =
+            SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.INT)
+
+        // Speed, gravity and drag live on EurekaConfig.SERVER, cut three ways by powder charge, so an arc can
+        // be dialled in against a real ship with a /reload rather than a rebuild. Only the lifetime cap stays
+        // here -- it is a safety net rather than a tuning knob, and a config value that could strand shots in
+        // the sky forever is not one worth exposing.
         private const val MAX_TICKS = 200
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
@@ -240,14 +257,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             direction: Vec3,
             load: Load,
             shownAs: ItemStack,
-            muzzleSpeed: Double,
+            charge: PowderCharge,
             firedBy: Entity? = null,
             gun: Array<BlockPos> = emptyArray()
         ): CannonShot {
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
             shot.gun = gun
-            shot.launch(from, direction, load, shownAs, muzzleSpeed)
+            shot.launch(from, direction, load, shownAs, charge)
             level.addFreshEntity(shot)
             return shot
         }

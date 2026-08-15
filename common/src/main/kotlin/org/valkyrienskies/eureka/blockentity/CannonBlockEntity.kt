@@ -16,17 +16,26 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.storage.ValueInput
 import net.minecraft.world.level.storage.ValueOutput
 import org.valkyrienskies.eureka.EurekaBlockEntities
+import org.valkyrienskies.eureka.cannon.PowderCharge
 import org.valkyrienskies.eureka.gui.cannon.CannonScreenMenu
 import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.util.KtContainerData
 
 /**
- * A cannon's magazine: powder in one slot, shot in the other.
+ * A cannon's magazine: three powder slots and one for shot.
  *
- * ## Why the two are kept apart
+ * ## Why powder and shot are kept apart
  * A single slot would let a player load a gun with shot and no charge, or charge and no shot, and then wonder
- * why it will not fire. Two slots make the requirement visible: the gun is ready when both have something in
- * them, and a glance at the menu says which one is empty.
+ * why it will not fire. Separate slots make the requirement visible: the gun is ready when both kinds are
+ * present, and a glance at the menu says which is missing.
+ *
+ * ## Why powder gets three slots
+ * Because a gunner can pack one, two or three measures behind the ball (see
+ * [org.valkyrienskies.eureka.cannon.PowderCharge]), and a column of three reads as the powder store for a gun
+ * that thinks in threes. They are POOLED rather than one-slot-per-measure: a 3x shot takes three powder from
+ * wherever they are, top down, so a magazine with two slots empty and one full still fires heavy. Tying each
+ * measure to its own slot would have made a full 192 rounds of powder refuse a 3x shot for no reason a player
+ * could see.
  *
  * ## It lives on the rear block only
  * A cannon is two blocks but one gun, and only [org.valkyrienskies.eureka.block.CannonPart.REAR] carries the
@@ -43,8 +52,29 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
 
     val data = KtContainerData()
 
-    var powder: ItemStack = ItemStack.EMPTY
+    /**
+     * How much powder this gun packs per shot, as a [PowderCharge] ordinal.
+     *
+     * Delegated through [data] so it rides the menu's synced container data to the client, which is what lets
+     * the breech button show the current setting without a packet of its own. An int rather than the enum
+     * because that is what [net.minecraft.world.inventory.ContainerData] carries; read it through
+     * [powderCharge].
+     */
+    var powderChargeOrdinal by data
+
+    /** This gun's powder measure. Setting it writes the ordinal the menu syncs. */
+    var powderCharge: PowderCharge
+        get() = PowderCharge.of(powderChargeOrdinal)
+        set(value) { powderChargeOrdinal = value.ordinal }
+
+    /** The three powder slots, top to bottom, and the shot slot. */
+    var powderA: ItemStack = ItemStack.EMPTY
+    var powderB: ItemStack = ItemStack.EMPTY
+    var powderC: ItemStack = ItemStack.EMPTY
     var shot: ItemStack = ItemStack.EMPTY
+
+    /** Every measure of powder aboard this gun, across all three slots. */
+    val powderCount: Int get() = powderA.count + powderB.count + powderC.count
 
     /**
      * The game tick this gun can next be fired on.
@@ -59,37 +89,76 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     var readyAt: Long = 0L
 
-    /** Both barrels of the question: a gun with powder and no ball is as useless as the reverse. */
-    val loaded: Boolean get() = !powder.isEmpty && !shot.isEmpty
+    /**
+     * Both barrels of the question: a gun with powder and no ball is as useless as the reverse.
+     *
+     * Powder is measured against the SELECTED charge rather than against zero, so a gun set to 3x with two
+     * measures in it reads "not loaded" -- which is the truth, since firing it would be refused.
+     */
+    val loaded: Boolean get() = powderCount >= powderCharge.powder && !shot.isEmpty
 
     override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu =
         CannonScreenMenu(containerId, inventory, this)
 
     override fun getDefaultName(): Component = Component.translatable("gui.vs_eureka.cannon")
 
-    override fun getItems(): NonNullList<ItemStack> = NonNullList.of(ItemStack.EMPTY, powder, shot)
+    override fun getItems(): NonNullList<ItemStack> =
+        NonNullList.of(ItemStack.EMPTY, powderA, powderB, powderC, shot)
 
     override fun setItems(list: NonNullList<ItemStack>) {
-        powder = list.getOrElse(POWDER) { ItemStack.EMPTY }
+        powderA = list.getOrElse(POWDER_A) { ItemStack.EMPTY }
+        powderB = list.getOrElse(POWDER_B) { ItemStack.EMPTY }
+        powderC = list.getOrElse(POWDER_C) { ItemStack.EMPTY }
         shot = list.getOrElse(SHOT) { ItemStack.EMPTY }
     }
 
+    // Saved by NAME, not by index, which is what lets a gun built before powder slots B and C existed come
+    // back loaded: its single "Powder" stack is still slot A's key, and its "Shot" is untouched. A gun that
+    // has never been given a charge setting reads 0 = 1x, which is what it always effectively fired at.
     override fun saveAdditional(output: ValueOutput) {
         super.saveAdditional(output)
-        if (!powder.isEmpty) output.store("Powder", ItemStack.CODEC, powder)
+        if (!powderA.isEmpty) output.store("Powder", ItemStack.CODEC, powderA)
+        if (!powderB.isEmpty) output.store("Powder2", ItemStack.CODEC, powderB)
+        if (!powderC.isEmpty) output.store("Powder3", ItemStack.CODEC, powderC)
         if (!shot.isEmpty) output.store("Shot", ItemStack.CODEC, shot)
         output.putLong("ReadyAt", readyAt)
+        output.putInt("PowderCharge", powderChargeOrdinal)
     }
 
     override fun loadAdditional(input: ValueInput) {
         super.loadAdditional(input)
-        powder = input.read("Powder", ItemStack.CODEC).orElse(ItemStack.EMPTY)
+        powderA = input.read("Powder", ItemStack.CODEC).orElse(ItemStack.EMPTY)
+        powderB = input.read("Powder2", ItemStack.CODEC).orElse(ItemStack.EMPTY)
+        powderC = input.read("Powder3", ItemStack.CODEC).orElse(ItemStack.EMPTY)
         shot = input.read("Shot", ItemStack.CODEC).orElse(ItemStack.EMPTY)
         readyAt = input.getLongOr("ReadyAt", 0L)
+        powderChargeOrdinal = input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal)
+    }
+
+    /**
+     * Take [amount] measures of powder, top slot first, and report whether the gun had them.
+     *
+     * All-or-nothing on purpose: a refused shot must not eat half a charge. The caller checks
+     * [powderCount] first, so the guard here is for the case where two things fire the same gun on the
+     * same tick.
+     */
+    fun consumePowder(amount: Int): Boolean {
+        if (powderCount < amount) return false
+        var left = amount
+        for (slot in POWDER_A..POWDER_C) {
+            if (left <= 0) break
+            val stack = getItem(slot)
+            val taken = minOf(left, stack.count)
+            if (taken <= 0) continue
+            stack.shrink(taken)
+            if (stack.isEmpty) setItem(slot, ItemStack.EMPTY)
+            left -= taken
+        }
+        return true
     }
 
     // region Container
-    override fun getContainerSize(): Int = 2
+    override fun getContainerSize(): Int = 4
 
     /**
      * The magazine holds 64 rounds even though shot only stacks to 16 in a player's hands.
@@ -109,28 +178,45 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     // clamped back to the cannonball's own 16 by anything that set a slot rather than assigning the field.
     override fun getMaxStackSize(stack: ItemStack): Int = MAGAZINE_CAPACITY
 
-    override fun isEmpty(): Boolean = powder.isEmpty && shot.isEmpty
+    override fun isEmpty(): Boolean =
+        powderA.isEmpty && powderB.isEmpty && powderC.isEmpty && shot.isEmpty
 
     override fun clearContent() {
-        powder = ItemStack.EMPTY
+        powderA = ItemStack.EMPTY
+        powderB = ItemStack.EMPTY
+        powderC = ItemStack.EMPTY
         shot = ItemStack.EMPTY
     }
 
     override fun getItem(slot: Int): ItemStack = when (slot) {
-        POWDER -> powder
+        POWDER_A -> powderA
+        POWDER_B -> powderB
+        POWDER_C -> powderC
         SHOT -> shot
         else -> ItemStack.EMPTY
     }
 
     override fun setItem(slot: Int, stack: ItemStack) {
         when (slot) {
-            POWDER -> powder = stack
+            POWDER_A -> powderA = stack
+            POWDER_B -> powderB = stack
+            POWDER_C -> powderC = stack
             SHOT -> shot = stack
         }
     }
 
-    override fun removeItem(slot: Int, amount: Int): ItemStack =
-        ContainerHelper.removeItem(mutableListOf(powder, shot), slot, amount).also { setChanged() }
+    // Through a list built from the live stacks and written back, because ContainerHelper.removeItem
+    // mutates the list it is handed -- assigning EMPTY into it, not into these fields.
+    override fun removeItem(slot: Int, amount: Int): ItemStack {
+        val items = mutableListOf(powderA, powderB, powderC, shot)
+        val taken = ContainerHelper.removeItem(items, slot, amount)
+        powderA = items[POWDER_A]
+        powderB = items[POWDER_B]
+        powderC = items[POWDER_C]
+        shot = items[SHOT]
+        setChanged()
+        return taken
+    }
 
     override fun removeItemNoUpdate(slot: Int): ItemStack {
         val taken = getItem(slot)
@@ -149,7 +235,7 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         ) <= 64.0
 
     override fun canPlaceItem(slot: Int, stack: ItemStack): Boolean = when (slot) {
-        POWDER -> stack.`is`(Items.GUNPOWDER)
+        POWDER_A, POWDER_B, POWDER_C -> stack.`is`(Items.GUNPOWDER)
         SHOT -> stack.item is CannonballItem
         else -> false
     }
@@ -157,7 +243,8 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     // Hoppers may feed a gun from any side but the bottom, and may not empty it. A gun deck should be
     // suppliable by machinery -- that is most of what makes a big broadside practical -- but a hopper
     // under a cannon quietly unloading it would be a trap rather than a feature.
-    override fun getSlotsForFace(side: Direction): IntArray = intArrayOf(POWDER, SHOT)
+    override fun getSlotsForFace(side: Direction): IntArray =
+        intArrayOf(POWDER_A, POWDER_B, POWDER_C, SHOT)
 
     override fun canPlaceItemThroughFace(slot: Int, stack: ItemStack, direction: Direction?): Boolean =
         direction != Direction.DOWN && canPlaceItem(slot, stack)
@@ -166,8 +253,10 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     // endregion
 
     companion object {
-        const val POWDER = 0
-        const val SHOT = 1
+        const val POWDER_A = 0
+        const val POWDER_B = 1
+        const val POWDER_C = 2
+        const val SHOT = 3
 
         /** Rounds a gun can hold, regardless of how few a player can carry in one slot. */
         const val MAGAZINE_CAPACITY = 64

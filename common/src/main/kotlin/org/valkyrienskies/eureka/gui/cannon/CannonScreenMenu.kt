@@ -10,7 +10,9 @@ import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import org.valkyrienskies.eureka.EurekaScreens
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.cannon.PowderCharge
 import org.valkyrienskies.eureka.item.CannonballItem
+import org.valkyrienskies.eureka.util.KtContainerData
 import org.valkyrienskies.eureka.util.inventorySlots
 
 class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: CannonBlockEntity?) :
@@ -27,15 +29,39 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
         override fun getMaxStackSize(stack: ItemStack): Int = CannonBlockEntity.MAGAZINE_CAPACITY
     }
 
-    /** True once the gun has both halves of a shot in it. Read straight off the synced slots. */
-    val loaded: Boolean get() = slots[CannonBlockEntity.POWDER].hasItem() && slots[CannonBlockEntity.SHOT].hasItem()
+    // Mirrors CannonBlockEntity.powderChargeOrdinal through the synced container data, which is how the
+    // breech button knows what to draw without a packet of its own. Declared in the same order as the
+    // block entity's own delegates, because that order IS the slot index.
+    private val data = blockEntity?.data?.clone() ?: KtContainerData()
+    var powderChargeOrdinal by data
+
+    /** This gun's powder measure, as the client sees it. */
+    val powderCharge: PowderCharge get() = PowderCharge.of(powderChargeOrdinal)
+
+    /** Every measure of powder aboard, summed across the three slots. Read straight off the synced slots. */
+    val powderCount: Int
+        get() = (CannonBlockEntity.POWDER_A..CannonBlockEntity.POWDER_C)
+            .sumOf { slots[it].item.count }
+
+    /**
+     * True once the gun has a ball and enough powder FOR THE SELECTED CHARGE -- so a gun set to 3x with two
+     * measures in it reads as not loaded, which is exactly what firing it will tell you.
+     */
+    val loaded: Boolean get() = powderCount >= powderCharge.powder && slots[CannonBlockEntity.SHOT].hasItem()
 
     init {
         // Each slot refuses anything it is not for, so a player cannot load shot into the powder
         // horn and then wonder why the gun will not fire.
-        addSlot(object : Slot(container, CannonBlockEntity.POWDER, POWDER_X, SLOT_Y) {
-            override fun mayPlace(stack: ItemStack): Boolean = stack.`is`(Items.GUNPOWDER)
-        })
+        for (slot in CannonBlockEntity.POWDER_A..CannonBlockEntity.POWDER_C) {
+            addSlot(object : Slot(container, slot, POWDER_X, powderSlotY(slot)) {
+                override fun mayPlace(stack: ItemStack): Boolean = stack.`is`(Items.GUNPOWDER)
+
+                // The gun's capacity is a fact about the gun, so powder stacks to the magazine's limit for
+                // the same reason shot does -- and gunpowder's own limit is 64 anyway, so this only matters
+                // if that ever changes.
+                override fun getMaxStackSize(stack: ItemStack): Int = CannonBlockEntity.MAGAZINE_CAPACITY
+            })
+        }
         addSlot(object : Slot(container, CannonBlockEntity.SHOT, SHOT_X, SLOT_Y) {
             override fun mayPlace(stack: ItemStack): Boolean = stack.item is CannonballItem
 
@@ -47,9 +73,26 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
         })
 
         inventorySlots(::addSlot, playerInv)
+
+        addDataSlots(data)
     }
 
     override fun stillValid(player: Player): Boolean = container.stillValid(player)
+
+    /**
+     * The breech button: [BUTTON_CHARGE] steps the powder measure 1x -> 2x -> 3x -> 1x.
+     *
+     * Server-side only, and it writes the block entity rather than the menu, so the setting belongs to the
+     * GUN and survives the screen being closed. The synced data carries the new value straight back to
+     * whoever has the menu open.
+     */
+    override fun clickMenuButton(player: Player, id: Int): Boolean {
+        if (id != BUTTON_CHARGE) return super.clickMenuButton(player, id)
+        val gun = blockEntity ?: return false
+        gun.powderCharge = gun.powderCharge.next
+        gun.setChanged()
+        return true
+    }
 
     /**
      * Shift-click routes by what the item *is*, not by which slot is free.
@@ -68,12 +111,15 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
         if (index < MAGAZINE_SLOTS) {
             if (!moveItemStackTo(stack, MAGAZINE_SLOTS, slots.size, true)) return ItemStack.EMPTY
         } else {
-            val target = when {
-                stack.`is`(Items.GUNPOWDER) -> CannonBlockEntity.POWDER
-                stack.item is CannonballItem -> CannonBlockEntity.SHOT
+            // Powder spreads across the whole column so a shift-click fills the gun rather than one slot.
+            val moved = when {
+                stack.`is`(Items.GUNPOWDER) ->
+                    moveItemStackTo(stack, CannonBlockEntity.POWDER_A, CannonBlockEntity.POWDER_C + 1, false)
+                stack.item is CannonballItem ->
+                    moveItemStackTo(stack, CannonBlockEntity.SHOT, CannonBlockEntity.SHOT + 1, false)
                 else -> return ItemStack.EMPTY
             }
-            if (!moveItemStackTo(stack, target, target + 1, false)) return ItemStack.EMPTY
+            if (!moved) return ItemStack.EMPTY
         }
 
         if (stack.isEmpty) slot.set(ItemStack.EMPTY) else slot.setChanged()
@@ -81,12 +127,21 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
     }
 
     companion object {
-        const val MAGAZINE_SLOTS = 2
+        const val MAGAZINE_SLOTS = 4
 
-        // Symmetric about the panel's centre line at x = 88.
-        const val POWDER_X = 62
-        const val SHOT_X = 98
-        const val SLOT_Y = 35
+        /** Button id for the breech's powder-measure toggle. */
+        const val BUTTON_CHARGE = 0
+
+        // The magazine has to fit between the divider at y=19 and the player inventory at y=84, and three
+        // 18px wells plus their gaps is most of that. The powder column sits left, the shot slot centres
+        // against it, and the charge button takes the space to the right.
+        const val POWDER_X = 26
+        const val SHOT_X = 80
+        const val SLOT_Y = 42
+        const val SLOT_PITCH = 18
+
+        /** Where powder slot [slot] sits: the column is centred on [SLOT_Y], one well above and one below. */
+        fun powderSlotY(slot: Int): Int = SLOT_Y + (slot - CannonBlockEntity.POWDER_B) * SLOT_PITCH
 
         val factory: (syncId: Int, playerInv: Inventory) -> CannonScreenMenu = ::CannonScreenMenu
     }

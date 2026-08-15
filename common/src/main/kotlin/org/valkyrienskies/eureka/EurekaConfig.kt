@@ -125,8 +125,6 @@ object EurekaConfig {
         s.linearBaseMass = 70.0
         // A stronger brake for a hull nobody is steering.
         s.linearStabilizeMaxAntiVelocity = 8.0
-        // Airship guns throw flatter. Gravity and drag stay global -- they belong to the ball, not the gun.
-        s.cannonShotSpeed = 5.0
     }
 
     // PLACEHOLDER. Submarine handling is not implemented -- ControlProfile.SUBMARINE is never selected, so
@@ -199,8 +197,7 @@ object EurekaConfig {
 
     /**
      * The settings a ship reads its HANDLING off: engine force and heat gain, speed caps, throttle ramp,
-     * turning, stabilization, vertical response, thrust assists, and the two cannon numbers that belong to
-     * the gun rather than to the ball.
+     * turning, stabilization, vertical response and thrust assists.
      *
      * Split out from [Server] so the three category blocks in the config file carry ONLY the keys a category
      * actually governs. They used to be full copies of [Server], which wrote every global key into all three
@@ -356,23 +353,10 @@ object EurekaConfig {
         @JsonSchema(description = "How much inertia affects Eureka ships. Max 10 = full inertia")
         var antiVelocityMassRelevance = 0.8
 
-        // region Cannons
-        // The three numbers that decide a shot's arc, exposed so it can be dialled in against a real ship
-        // without a rebuild. They interact: speed sets the range, gravity sets how much the shot curves on
-        // the way, and drag decides how quickly it stops being fast enough for gravity not to matter.
-
-        @JsonSchema(
-            description = "How far a cannonball travels each tick, in blocks. Sets the range and how flat the " +
-                "shot looks; raising it makes a cannon read more like a rifle and less like a mortar. Default 3.0."
-        )
-        var cannonShotSpeed = 3.0
-
-        @JsonSchema(
-            description = "Seconds a cannon takes to reload. This is PER GUN -- a six-gun broadside fires six " +
-                "times in this window -- so gun count, not this number, is what sets a ship's weight of fire. " +
-                "Default 4.0."
-        )
-        var cannonReloadSeconds = 4.0
+        // Cannons used to keep their muzzle velocity and reload here, on the rule that a gun belongs to a
+        // ship and a ball does not. That rule was right and is now moot: a shot's arc is cut by POWDER
+        // CHARGE instead, and how much powder is behind the ball is not a fact about the hull under it. All
+        // twelve cannon numbers live on Server -- see the Cannons region there.
     }
 
     /**
@@ -1060,18 +1044,70 @@ object EurekaConfig {
         )
         var crewSlotsMax = 32
 
-        @JsonSchema(
-            description = "Blocks per tick squared the shot falls. The main control over the ARC: raise it to " +
-                "lob, lower it toward a straight line. Default 0.05."
-        )
-        var cannonShotGravity = 0.05
+        // region Cannons
+        // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
+        // the three carries its OWN four numbers, repeated below rather than scaled off one base arc.
+        //
+        // Scaling would have been less config to read, but it would also make the three levels the same
+        // curve sampled at three points: steepening the light charge into a proper lob would flatten the
+        // heavy one by the same act, because there would only ever be one arc. Independent sets are what
+        // let 1x be a mortar and 3x a rifle, which is the entire reason a gunner is offered the choice.
+        //
+        // They interact within a level: speed sets the range, gravity sets how far the shot bends on the
+        // way, and drag decides how quickly it stops being fast enough for gravity not to matter.
+        //
+        // Gravity, drag and reload ship IDENTICAL across the three so that out of the box only the muzzle
+        // velocity differs -- a starting point that changes one thing rather than four. Tune from there.
 
         @JsonSchema(
-            description = "Fraction of its speed a shot keeps each tick. Below 1.0 it slows in flight, which " +
-                "shortens the range and steepens the tail of the arc rather than changing its start. 1.0 is no " +
-                "drag at all. Default 0.93."
+            description = "1x charge (1 gunpowder): blocks a cannonball travels each tick. Sets the range and " +
+                "how flat the shot looks. Default 2.5."
         )
-        var cannonShotDrag = 0.93
+        var cannonShotSpeed1x = 2.5
+
+        @JsonSchema(
+            description = "1x charge: blocks per tick squared the shot falls. The main control over the ARC -- " +
+                "raise it to lob, lower it toward a straight line. Default 0.05."
+        )
+        var cannonShotGravity1x = 0.05
+
+        @JsonSchema(
+            description = "1x charge: fraction of its speed a shot keeps each tick. Below 1.0 it slows in " +
+                "flight, which shortens the range and steepens the tail of the arc rather than changing its " +
+                "start. 1.0 is no drag at all. Default 0.93."
+        )
+        var cannonShotDrag1x = 0.93
+
+        @JsonSchema(
+            description = "1x charge: seconds a cannon takes to reload. PER GUN -- a six-gun broadside fires " +
+                "six times in this window -- so gun count, not this number, sets a ship's weight of fire. " +
+                "Default 4.0."
+        )
+        var cannonReloadSeconds1x = 4.0
+
+        @JsonSchema(description = "2x charge (2 gunpowder): blocks a cannonball travels each tick. Default 5.0.")
+        var cannonShotSpeed2x = 5.0
+
+        @JsonSchema(description = "2x charge: blocks per tick squared the shot falls. Default 0.05.")
+        var cannonShotGravity2x = 0.05
+
+        @JsonSchema(description = "2x charge: fraction of its speed a shot keeps each tick. Default 0.93.")
+        var cannonShotDrag2x = 0.93
+
+        @JsonSchema(description = "2x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
+        var cannonReloadSeconds2x = 4.0
+
+        @JsonSchema(description = "3x charge (3 gunpowder): blocks a cannonball travels each tick. Default 7.5.")
+        var cannonShotSpeed3x = 7.5
+
+        @JsonSchema(description = "3x charge: blocks per tick squared the shot falls. Default 0.05.")
+        var cannonShotGravity3x = 0.05
+
+        @JsonSchema(description = "3x charge: fraction of its speed a shot keeps each tick. Default 0.93.")
+        var cannonShotDrag3x = 0.93
+
+        @JsonSchema(description = "3x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
+        var cannonReloadSeconds3x = 4.0
         // endregion
 
         @JsonSchema(

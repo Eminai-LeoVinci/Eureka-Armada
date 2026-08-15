@@ -12,7 +12,6 @@ import net.minecraft.world.InteractionHand
 import net.minecraft.world.item.Items
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
-import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
@@ -21,7 +20,6 @@ import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.item.CannonCharge
-import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 
@@ -42,22 +40,8 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties.HOR
  */
 object CannonFire {
 
-    /** One shot per gun per reload. Broadside weight comes from gun count, not from fire rate. */
-    private fun cooldownTicks(cfg: EurekaConfig.ShipHandling): Long =
-        (cfg.cannonReloadSeconds * 20.0).toLong().coerceAtLeast(1L)
-
-    /**
-     * The handling block the gun at [pos] serves under, or the global one for a gun on solid ground.
-     *
-     * Reload and muzzle velocity are the two cannon numbers that belong to the gun and its crew rather than
-     * to the ball, so they are per ship category; a gun that is not on a ship has no category and falls back
-     * to [EurekaConfig.SERVER], which is the same thing a loose engine does.
-     */
-    private fun handlingAt(level: ServerLevel, pos: BlockPos): EurekaConfig.ShipHandling =
-        level.getLoadedShipManagingPos(pos)
-            ?.getAttachment(EurekaShipControl::class.java)
-            ?.engineCfg
-            ?: EurekaConfig.SERVER
+    // One shot per gun per reload, and how long that is now depends on the powder measure -- see
+    // PowderCharge.reloadTicks. Broadside weight still comes from gun count, not from fire rate.
 
     /**
      * The bore, measured off the model, relative to the rear block's centre and in blocks.
@@ -81,11 +65,12 @@ object CannonFire {
         val magazine = level.getBlockEntity(rear) as? CannonBlockEntity
             ?: return Component.translatable("info.vs_eureka.cannon_broken")
 
-        // Resolved once, off the breech: it answers both what this gun's reload is and what its muzzle
-        // velocity will be, and the same ship carries the transform that puts the shot into world space.
+        // The gun's own transform, resolved once: it puts the muzzle into world space further down.
         val ship = level.getLoadedShipManagingPos(rear)
-        val cfg = handlingAt(level, rear)
-        val cooldown = cooldownTicks(cfg)
+
+        // What the breech is set to, which decides the arc, the powder cost AND the reload.
+        val charge = magazine.powderCharge
+        val cooldown = charge.reloadTicks
 
         // Anything beyond a full cooldown means the world clock moved rather than the gun being genuinely
         // hot -- a restored backup, most likely -- so let it fire instead of locking the gun out for a week.
@@ -94,7 +79,15 @@ object CannonFire {
             return Component.translatable("info.vs_eureka.cannon_cooling", (remaining / 20.0 + 0.5).toInt().coerceAtLeast(1))
         }
 
-        if (magazine.powder.isEmpty) return Component.translatable("info.vs_eureka.cannon_no_powder")
+        // A gun set heavier than it is stocked refuses rather than quietly firing light. Dropping to the
+        // charge it CAN afford would send the ball down an arc the breech does not claim, which in a fight
+        // reads as the gun being broken rather than as the player being out of powder.
+        if (magazine.powderCount <= 0) return Component.translatable("info.vs_eureka.cannon_no_powder")
+        if (magazine.powderCount < charge.powder) {
+            return Component.translatable(
+                "info.vs_eureka.cannon_not_enough_powder", charge.powder, magazine.powderCount
+            )
+        }
         val load = CannonShot.loadOf(magazine.shot) ?: return Component.translatable("info.vs_eureka.cannon_no_shot")
 
         // Bore geometry, in whatever space the block lives in. The shot leaves along the barrel, so the
@@ -129,14 +122,14 @@ object CannonFire {
         // in the air is still just an iron ball -- and the gunpowder pip on the item sprite is a label for
         // the player's inventory, not something you would see going past you.
         val shown = ItemStack(EurekaItems.cannonball(load.ball, CannonCharge.PLAIN))
-        magazine.powder.shrink(1)
+        magazine.consumePowder(charge.powder)
         magazine.shot.shrink(1)
         magazine.readyAt = level.gameTime + cooldown
         magazine.setChanged()
 
         // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left.
         val gun = CannonPart.entries.map { rear.relative(facing, it.ordinal) }.toTypedArray()
-        CannonShot.spawn(level, from, direction, load, shown, cfg.cannonShotSpeed, player, gun)
+        CannonShot.spawn(level, from, direction, load, shown, charge, player, gun)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)
