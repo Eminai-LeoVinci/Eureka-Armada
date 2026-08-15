@@ -57,7 +57,7 @@ class ShipBottleItem(properties: Properties) : Item(properties) {
         val serverPlayer = player as? ServerPlayer ?: return InteractionResult.PASS
         val stack = serverPlayer.getItemInHand(hand)
 
-        val helm = ShipBottle.markedHelm(stack) ?: run {
+        if (ShipBottle.markedHelm(stack) == null) {
             PathMessages.send(
                 serverPlayer,
                 "Sneak and right-click a ship's wheel to mark it, then throw the bottle.",
@@ -68,12 +68,23 @@ class ShipBottleItem(properties: Properties) : Item(properties) {
             return InteractionResult.CONSUME
         }
 
+        // The mark's stored position is only where the wheel WAS; resolve where it is now. A capture/release
+        // cycle re-homes the wheel to a fresh shipyard address, and the binding is what lets the rest of a
+        // marked stack follow it there. See ShipBottle.resolveMarkedHelm.
+        val name = ShipBottle.shipNameOf(stack) ?: "That ship"
+        val helm = ShipBottle.resolveMarkedHelm(serverLevel, stack) ?: run {
+            PathMessages.send(serverPlayer, "$name is not loaded anywhere nearby.", PathMessages.Kind.WARN)
+            return InteractionResult.CONSUME
+        }
+
         // Answered before the bottle leaves the hand, never after. A throw at a ship that is not there would
         // arc off, land, and spend a minute flying at nothing before it came back with an apology.
         val wheel = ShipBottle.helmWorldPos(serverLevel, helm)
-        val name = ShipBottle.shipNameOf(stack) ?: "That ship"
         if (wheel == null) {
-            PathMessages.send(serverPlayer, "$name is not loaded anywhere nearby.", PathMessages.Kind.WARN)
+            // The wheel is real and reachable -- resolution just proved it -- but no ship manages it, which
+            // means the hull is sitting in the world unassembled. Distinct message, because the fix is
+            // different: sail it, don't walk closer.
+            PathMessages.send(serverPlayer, "$name is not assembled right now -- its wheel is ashore.", PathMessages.Kind.WARN)
             return InteractionResult.CONSUME
         }
         val range = wheel.distanceTo(serverPlayer.position())

@@ -53,6 +53,12 @@ object ShipBottle {
     private const val SHIP_NAME_KEY = "vs_eureka:bottle_ship"
     private const val MARKED_HELM_KEY = "vs_eureka:marked_helm"
 
+    // The wheel's durable identity (ShipHelmBlockEntity.bottleBinding), written alongside the position.
+    // The position alone was the whole bug: capture deletes the ship and release builds a new one on a new
+    // chunk claim, so every OTHER bottle marked on the same wheel was left holding a shipyard address into
+    // dead space -- "not loaded anywhere nearby" at best, some other ship's recycled chunk at worst.
+    private const val BINDING_KEY = "vs_eureka:bottle_binding"
+
     /** Templates written by a bottle are named for nothing else, so a player cannot collide with one by hand. */
     private fun templateNameFor(id: UUID) = "bottled/${id.toString().replace("-", "")}"
 
@@ -68,11 +74,18 @@ object ShipBottle {
             PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
             return false
         }
+        val helmEntity = level.getBlockEntity(helm) as? ShipHelmBlockEntity ?: run {
+            PathMessages.send(player, "That wheel is broken -- it has no workings.", PathMessages.Kind.WARN)
+            return false
+        }
         val shipName = ship.slug ?: "unnamed ship"
 
         val tag = CompoundTag()
         tag.putString(SHIP_NAME_KEY, shipName)
         tag.putLong(MARKED_HELM_KEY, helm.asLong())
+        // The identity that outlives the address. Every bottle ever marked on this wheel carries the same
+        // binding, which is what lets a whole stack stay valid across any number of capture/release cycles.
+        tag.putString(BINDING_KEY, helmEntity.mintBottleBinding().toString())
 
         // Mark ONE bottle, not the stack. Components belong to the stack, so writing the mark in place brands
         // every bottle the player is holding -- and throwing spends only one, leaving the rest apparently
@@ -117,6 +130,47 @@ object ShipBottle {
         val tag = data.copyTag()
         if (tag.getString(TEMPLATE_KEY).isPresent) return null // already full, not a mark
         return tag.getLong(MARKED_HELM_KEY).orElse(null)?.let { BlockPos.of(it) }
+    }
+
+    /** The binding a marked bottle carries, or null on an unmarked or pre-binding one. */
+    private fun markedBinding(stack: ItemStack): UUID? {
+        val data = stack.get(DataComponents.CUSTOM_DATA) ?: return null
+        val tag = data.copyTag()
+        if (tag.getString(TEMPLATE_KEY).isPresent) return null
+        return tag.getString(BINDING_KEY).orElse(null)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+    }
+
+    /**
+     * Where the marked wheel is RIGHT NOW -- the address a throw should actually fly at -- or null when it
+     * cannot be answered. Null is honest: it means the wheel has not reported from anywhere reachable, not
+     * that the bottle is broken, so callers should say "not loaded" and leave the mark alone.
+     *
+     * The stored position is only the wheel's address AT MARKING TIME, and a capture/release cycle re-homes
+     * the wheel to a fresh shipyard address. So resolution goes identity-first: the binding names the wheel,
+     * [BottleBindings] says where it last reported from, and the block entity there is re-checked for the
+     * same binding because positions outlive the things at them -- a registry answer pointing at a mined
+     * wheel, or at a chunk some other ship now claims, must read as "nowhere" rather than as a target.
+     *
+     * A pre-binding bottle falls back to its stored position, and when that still points at a real wheel the
+     * bottle is quietly upgraded in place -- marked stacks from before this existed heal on their next throw.
+     * A pre-binding bottle whose position has already died stays dead (one re-mark is its migration).
+     */
+    fun resolveMarkedHelm(level: ServerLevel, stack: ItemStack): BlockPos? {
+        val binding = markedBinding(stack)
+        if (binding != null) {
+            val pos = BottleBindings.find(level, binding) ?: return null
+            val wheel = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: return null
+            return if (wheel.bottleBinding == binding) pos else null
+        }
+
+        // Legacy mark: position only. Deliberately requires the wheel itself, not just a ship owning the
+        // chunk -- the old chunk-claim lookup is exactly what sent bottles after recycled claims.
+        val stored = markedHelm(stack) ?: return null
+        val wheel = level.getBlockEntity(stored) as? ShipHelmBlockEntity ?: return null
+        val tag = stack.get(DataComponents.CUSTOM_DATA)?.copyTag() ?: return null
+        tag.putString(BINDING_KEY, wheel.mintBottleBinding().toString())
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
+        return stored
     }
 
     /**
@@ -410,6 +464,11 @@ object ShipBottle {
      * what to do with itself.
      */
     fun forgetDeadMark(level: ServerLevel, stack: ItemStack) {
+        // A bound mark is never wiped. "Unresolvable right now" is not "dead": after a restart the wheel's
+        // chunk may simply not have loaded and reported yet, and wiping the mark would throw away an
+        // identity that was about to start working again. Only the old position-only marks -- which have no
+        // way back once their address dies -- still get the courtesy of being cleared.
+        if (markedBinding(stack) != null) return
         val helm = markedHelm(stack) ?: return
         if (helmWorldPos(level, helm) != null) return
         stack.remove(DataComponents.CUSTOM_DATA)

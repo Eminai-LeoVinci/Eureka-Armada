@@ -310,6 +310,10 @@ object ShipTemplate {
                 tag.remove("CustomName")
                 tag.remove(REMEMBERED_SHIP_KEY)
                 tag.remove(SHIP_SLUG_KEY)
+                // The bottle-binding identity goes the same way the name does, and for the same reason a
+                // copy must not share a name: two wheels carrying one binding would have every bottle marked
+                // on the original answering to whichever copy reported its address last.
+                tag.remove(BOTTLE_BINDING_KEY)
                 tag.putBoolean(KEEP_NAME_KEY, false)
             }
         }
@@ -319,6 +323,7 @@ object ShipTemplate {
     private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
     private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
     private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
+    private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
 
     /**
      * Place a saved template into the world with its corner at [at], as loose blocks -- no ship is created.

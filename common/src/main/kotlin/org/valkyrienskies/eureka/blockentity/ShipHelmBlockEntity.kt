@@ -56,6 +56,7 @@ import org.valkyrienskies.eureka.block.BalloonBlock
 import org.valkyrienskies.eureka.block.EngineBlock
 import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.bottle.BottleBindings
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.crew.CrewData
 import org.valkyrienskies.eureka.crew.CrewMuster
@@ -82,6 +83,7 @@ import org.valkyrienskies.mod.common.util.settings
 import org.valkyrienskies.mod.common.util.toDoubles
 import org.valkyrienskies.mod.common.util.toJOMLD
 import org.valkyrienskies.mod.util.logger
+import java.util.UUID
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -120,6 +122,7 @@ private const val TICKET_HEAL_TICKS = 600L
 private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
 private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
 private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
+private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
 
 // How long after a ship loads before its remembered name is applied. Long enough for vs-core to have finished
 // building the ship -- a slug set while it is still doing so does not survive -- and far too short to see.
@@ -415,6 +418,28 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     var shipSlug: String? = null
         private set
 
+    /**
+     * The durable name Ship Bottles know this wheel by, or null until one is marked here.
+     *
+     * A bottle cannot remember its ship by anything the ship has: capture DELETES the ship -- id, chunk
+     * claim, shipyard address all die -- and release mints a new one of each. What survives the cycle is
+     * this block entity's NBT, riding the bottle's template exactly as the ship's name does. So the wheel
+     * carries the identity, every bottle marked here shares it, and [BottleBindings] (fed from [tick])
+     * answers where the wheel is now. Minted lazily by [mintBottleBinding] so the overwhelming majority of
+     * wheels -- never bottled -- carry nothing.
+     */
+    var bottleBinding: UUID? = null
+        private set
+
+    /** This wheel's bottle identity, minting one the first time a bottle is marked here. */
+    fun mintBottleBinding(): UUID {
+        bottleBinding?.let { return it }
+        val minted = UUID.randomUUID()
+        bottleBinding = minted
+        setChanged()
+        return minted
+    }
+
     /** Toggle the Keep Name behaviour. Clearing it also forgets, so unticking is a complete off switch. */
     fun setKeepName(value: Boolean) {
         keepName = value
@@ -518,6 +543,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Written only when OFF, so the default costs nothing and every wheel already in a save keeps the
         // behaviour switched on without a migration.
         if (!keepName) output.putBoolean(KEEP_NAME_KEY, false)
+        // As a string rather than an int array: ShipTemplate.stripShipName edits this tag as raw NBT in a
+        // template palette, and a string key can be removed there without agreeing on an encoding.
+        bottleBinding?.let { output.putString(BOTTLE_BINDING_KEY, it.toString()) }
     }
 
     override fun loadAdditional(input: ValueInput) {
@@ -528,6 +556,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         rememberedShipName = input.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
         keepName = input.getBooleanOr(KEEP_NAME_KEY, true)
         shipSlug = input.getString(SHIP_SLUG_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+        bottleBinding = input.getString(BOTTLE_BINDING_KEY).orElse(null)
+            ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
     }
 
     private val seats = mutableListOf<ShipMountingEntity>()
@@ -752,6 +782,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     fun tick() {
+        // Keep the bottle-binding registry current. Every tick rather than on load because assembly and
+        // release MOVE this block entity (RelocationUtil), and no lifecycle hook fires at the new address;
+        // the report is a no-op map read when nothing changed.
+        bottleBinding?.let { binding ->
+            (level as? ServerLevel)?.let { BottleBindings.report(it, binding, blockPos) }
+        }
+
         // One shipyard lookup per tick: the [ship]/[control] getters walk the loaded-ship index
         // on every call, and this tick used to do that two or three times.
         val curShip = ship
