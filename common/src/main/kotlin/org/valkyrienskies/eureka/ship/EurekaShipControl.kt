@@ -61,6 +61,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     var disassembling = false // Disassembling also affects position
     private var physConsumption = 0f
 
+    // Physics ticks counted since the last server tick, folded into [physTicksPerGameTick] by onServerTick.
+    // Physics-thread only (incremented at the top of physTick, read and reset on the game thread once a tick;
+    // a stale-by-one read costs nothing here because the result is smoothed).
+    @JsonIgnore
+    private var physTickCount = 0
+
     private var angleUntilAligned = 0.0
     private var positionUntilAligned = Vector3d()
     val canDisassemble
@@ -530,6 +536,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
     @OptIn(VsBeta::class)
     override fun physTick(physShip: PhysShip, physLevel: PhysLevel) {
+        // Before every early return below: this counts the physics rate itself, which is a property of the
+        // server and not of whether this particular hull has anything to do this tick. [estimateTopSpeed]
+        // needs it to work out how fast engines burn their heat off.
+        physTickCount++
         if (helms < 1) {
             // Enable fluid drag if all the helms have been destroyed
             physShip.doFluidDrag = true
@@ -1889,11 +1899,58 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
          * implementations of this would be two answers to "how fast is it", and the page would be the one
          * quietly lying.
          */
+        /**
+         * Physics ticks per server tick, as measured by any ship that is running (see [physTick]). Seeded at
+         * the usual 3 so the figure is sane before the first sample and while nothing is loaded.
+         *
+         * A property of the server rather than of any one hull, which is why it is shared: engines burn heat
+         * once per PHYSICS tick and shed it once per SERVER tick, so the ratio between the two is what decides
+         * how hot an engine can stay -- see [steadyStateHeat].
+         */
+        @JvmStatic
+        @Volatile
+        var physTicksPerGameTick = 3.0
+            private set
+
+        /** `consumed = physConsumption * this`, per [onServerTick]. */
+        private const val PHYS_CONSUMPTION_SCALE = 0.1
+
+        /**
+         * The heat (0..100) an engine settles at under sustained full throttle.
+         *
+         * The readout used to assume 100 -- every engine at its full [EurekaConfig.Server.enginePowerLinear] --
+         * and no engine is ever near that while it is being used. Heat is a balance of three flows per server
+         * tick: it gains `(100*exponent - heat*exponent + 1) * engineHeatGain`, sheds
+         * `(heat*exponent + 1) * engineHeatLoss`, and is drained by `consumed`, which is one unit per physics
+         * tick spent at full throttle scaled by [PHYS_CONSUMPTION_SCALE]. Setting gain equal to the two drains
+         * and solving for heat gives the steady state directly.
+         *
+         * On stock numbers that lands at ~68, i.e. engines make ~68% of their advertised force under load --
+         * which is very nearly the whole of the gap between the helm's quoted top speed and the speed a pilot
+         * could actually reach.
+         */
+        @JvmStatic
+        fun steadyStateHeat(cfg: EurekaConfig.Server): Double {
+            val exponent = cfg.engineHeatChangeExponent.toDouble()
+            val gain = cfg.engineHeatGain.toDouble()
+            val loss = cfg.engineHeatLoss.toDouble()
+            val drain = physTicksPerGameTick * PHYS_CONSUMPTION_SCALE
+            val denominator = exponent * (gain + loss)
+            // Degenerate config (no exponent, or no heat flow at all): the balance below has no solution, so
+            // fall back to the old assumption when the engine can gain heat and to a dead cold one when it can't.
+            if (denominator <= 0.0) return if (gain > drain + loss) 100.0 else 0.0
+            return ((100.0 * exponent * gain + gain - drain - loss) / denominator).coerceIn(0.0, 100.0)
+        }
+
         @JvmStatic
         fun estimateTopSpeed(cfg: EurekaConfig.Server, engineCount: Int, mass: Double): Double {
             val scaledMass = mass * cfg.speedMassScale
             var speed = cfg.linearCasualSpeed / 3.0 * cfg.baseSpeed // oldSpeed -> 1
-            val fullPower = engineCount * cfg.enginePowerLinear.toDouble()
+            // What an engine ACTUALLY makes at the throttle this figure describes -- the same lerp
+            // EngineBlockEntity applies, at the heat it settles to rather than at a full tank it never sees.
+            val perEngine = cfg.enginePowerLinearMin +
+                (cfg.enginePowerLinear - cfg.enginePowerLinearMin) * (steadyStateHeat(cfg) / 100.0)
+            val fullPower = engineCount * perEngine
             if (fullPower > 0.0 && scaledMass > 0.0) {
                 var extra = fullPower
                 val boost = max(
@@ -1974,6 +2031,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         consumed = physConsumption * /* should be physics ticks based*/ 0.1f
         physConsumption = 0.0f
+
+        // Fold this ship's physics-tick count into the server-wide rate [estimateTopSpeed] reads. Smoothed
+        // because the count jitters by one under load, and skipped on a zero count so a ship whose physics
+        // isn't running (unloaded, or the tick after assembly) can't drag the figure to nothing.
+        if (physTickCount > 0) {
+            physTicksPerGameTick = physTicksPerGameTick * 0.9 + physTickCount * 0.1
+            physTickCount = 0
+        }
 
         // Finalize last tick's engine fuel-tank average into the synced percent, then swap the double buffer.
         // Order-independent of the engine block-entity ticks (they fill accumNext; we read the settled accum).
