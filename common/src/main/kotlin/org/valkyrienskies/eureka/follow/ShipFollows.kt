@@ -17,7 +17,6 @@ import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -92,8 +91,6 @@ object ShipFollows {
         // block entities, and the helm's tick is the only thing that hands the control its own ship.
         if (!control.pathHullReady) return
 
-        if (checkManualTakeover(level, ship, control, follower)) return
-
         val leader = world.loadedShips.getById(follower.leaderId)
         if (leader == null || leader.chunkClaimDimension != ship.chunkClaimDimension) {
             breakOff(level, ship, follower, "Lost contact -- the leader is gone.")
@@ -103,11 +100,32 @@ object ShipFollows {
         // No blocks to measure yet. Early rather than stale, same as the helm above.
         val frame = FollowGeometry.frameOf(leader) ?: return
 
-        updateSide(level, ship, leader, follower, frame)
+        // The koi case: the leader is following US, so the pair orbit each other instead of one keeping
+        // station on the other. Answered here because this object owns the followers map.
+        val mutual = followers[follower.leaderId]?.leaderId == follower.shipId
 
-        if (!follower.tick(ship, control, leader, frame)) {
+        // No side or slot while orbiting -- a circle has neither beams nor a queue, and letting the flip
+        // hysteresis run on orbital geometry would churn the slot for nothing.
+        if (!follower.circling) updateSide(level, ship, leader, follower, frame)
+
+        if (!follower.tick(ship, control, leader, frame, mutual)) {
             breakOff(level, ship, follower, "Pursuit ended -- the ship lost its course.")
             return
+        }
+
+        // One line at each edge of the orbit, to whoever is standing on deck. Consumed here rather than sent
+        // from the follower because messages need the level, and the follower deliberately never sees one.
+        when (follower.consumeCircleTransition()) {
+            1 -> ShipCrew.tell(
+                level, ship,
+                if (mutual) "Circling with '${ShipCrew.name(leader)}'." else "Circling '${ShipCrew.name(leader)}'.",
+                PathMessages.Kind.GOOD
+            )
+            -1 -> ShipCrew.tell(
+                level, ship,
+                "'${ShipCrew.name(leader)}' is under way -- resuming pursuit.",
+                PathMessages.Kind.GOOD
+            )
         }
 
         // One rule, and it is the user's: a pursuit ends when the leader OUTPACES the follower, and at nothing
@@ -165,56 +183,6 @@ object ShipFollows {
 
         follower.side = -follower.side
         follower.slot = claimSlot(follower.leaderId, follower.side, follower.shipId)
-    }
-
-    /**
-     * Hand the ship back to the pilot when they hold any control input, and report having done so.
-     *
-     * Unlike a route, the THROTTLE counts here alongside steering and elevation. A route never owned speed, so
-     * driving while bound to one was ordinary use; a follow owns speed completely, so a pilot pushing the
-     * throttle is arguing with the ship and has to be able to win. They win instantly in the physics -- a live
-     * forward input outranks the commanded speed on the very next tick -- and holding it is what makes the
-     * handover permanent. A brief nudge past an obstacle stays a nudge, and the station re-acquires.
-     *
-     * Returns true if the pursuit was ended, in which case the caller must not steer this tick.
-     */
-    private fun checkManualTakeover(
-        level: ServerLevel,
-        ship: LoadedServerShip,
-        control: EurekaShipControl,
-        follower: ShipFollower
-    ): Boolean {
-        val hold = EurekaConfig.SERVER.followCancelHold
-        if (hold <= 0.0) return false
-
-        // Signed seconds accumulated on the game thread and zeroed the moment the input stops, so nothing stale
-        // can build up while nobody is at the helm.
-        val turning = abs(control.turnHold)
-        val climbing = abs(control.vertHold)
-        val driving = abs(control.fwdHold)
-        val held = max(driving, max(turning, climbing))
-        if (held <= 0.0) return false
-
-        if (held >= hold) {
-            // Not stopShip: the pilot is taking over, so leave them the way they have on rather than dropping a
-            // moving vessel's throttle out from under them.
-            release(ship, stopShip = false)
-            ShipCrew.tell(level, ship, "You have the wheel -- pursuit ended.", PathMessages.Kind.WARN)
-            return true
-        }
-
-        if (held >= hold * PROMPT_AT) {
-            val what = when {
-                driving >= turning && driving >= climbing -> "the throttle"
-                turning >= climbing -> "turning"
-                else -> "climbing"
-            }
-            // Only the people who can see the wheel need this one, and only one of them is holding a key.
-            for (player in ShipCrew.aboard(level, ship)) {
-                PathMessages.send(player, "Keep on $what to break off the pursuit…", PathMessages.Kind.PROMPT)
-            }
-        }
-        return false
     }
 
     /** End a pursuit that can no longer be flown, bring the ship up, and tell whoever is aboard. */
@@ -308,10 +276,13 @@ object ShipFollows {
             return fail(player, "This ship is busy with a route -- hold SHIFT+P to release it first.")
         }
 
-        // A chases B chases A is a standoff neither ship can resolve: each keeps station on something that is
-        // keeping station on it, and the pair drifts off together doing it.
-        if (leadsBackTo(own.id, target.id)) {
-            return fail(player, "'${ShipCrew.name(target)}' is already following yours.")
+        // A pair marking EACH OTHER is the koi manoeuvre -- both ships enter the circling mode and orbit their
+        // shared midpoint -- so the direct A<->B case is welcomed through. Longer loops (A follows B follows C
+        // follows A) are still refused: nothing in a three-ship ring is circling anything in particular, and
+        // each keeps station on something that is keeping station on it while the whole ring drifts.
+        val mutualPair = followers[target.id]?.leaderId == own.id
+        if (!mutualPair && leadsBackTo(own.id, target.id)) {
+            return fail(player, "'${ShipCrew.name(target)}' is already in this ship's follow chain.")
         }
 
         // BEFORE pathBegin, not after. pathBegin sets `pathFollowing`, which suppresses every abandoned-hull
@@ -432,23 +403,29 @@ object ShipFollows {
         return slot
     }
 
-    /** Whether following [leaderId] would close a loop back to [ownId]. Depth-capped, never trusting a chain. */
+    /**
+     * Whether following [leaderId] would close a loop back to [ownId].
+     *
+     * The walk has to survive meeting SOMEONE ELSE'S mutual pair: two ships legitimately circling each other
+     * are a cycle that never reaches [ownId], and the old depth-cap-means-refuse reading would have banned
+     * following either of them. A visited set tells "a loop that includes me" from "a loop I merely lead to",
+     * and only the first is a reason to refuse.
+     */
     private fun leadsBackTo(ownId: Long, leaderId: Long): Boolean {
+        val visited = HashSet<Long>()
         var current = leaderId
         var hops = 0
         while (hops++ < MAX_CHAIN) {
             if (current == ownId) return true
+            if (!visited.add(current)) return false
             current = followers[current]?.leaderId ?: return false
         }
-        // A chain this long is either a cycle or something that should not exist; refuse either way.
-        return true
+        // Deeper than any sane formation; whatever it is, it doesn't come back to us.
+        return false
     }
 
     private fun fail(player: ServerPlayer, message: String) =
         PathMessages.send(player, message, PathMessages.Kind.ERROR)
-
-    /** Fraction of the cancel hold at which the "keep holding" prompt appears. */
-    private const val PROMPT_AT = 0.25
 
     /** Estimated top speed (m/s) below which a ship is warned it probably can't keep up with anything. */
     private const val UNDER_POWERED = 1.0

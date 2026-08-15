@@ -990,12 +990,34 @@ object EurekaConfig {
         var followVerticalDeadband = 1.5
 
         @JsonSchema(
-            description = "Ship following: seconds a manual input must be HELD to break off the follow. Steering " +
-                "AND throttle count here, unlike a route -- following owns the throttle, so a pilot pushing it " +
-                "is arguing with the ship and has to be able to win. Brief nudges still just nudge; the station " +
-                "re-acquires afterwards. Default 3.0."
+            description = "Ship following: how fast the commanded speed may RISE, in m/s per second. This is " +
+                "the launch feel -- a follower ordered after a moving leader spools up at this rate instead of " +
+                "zooming straight to the leader's speed. Slowing down is never rate-limited (braking beside " +
+                "another hull must not wait on a ramp), and a huge value restores the old instant zoom. " +
+                "Default 10.0."
         )
-        var followCancelHold = 3.0
+        var followAcceleration = 10.0
+
+        @JsonSchema(
+            description = "Ship following: leader speed in m/s below which a follower that has caught up stops " +
+                "keeping station and CIRCLES the leader instead. Two ships following each other circle " +
+                "regardless of this. Default 1.5."
+        )
+        var followCircleBelow = 1.5
+
+        @JsonSchema(
+            description = "Ship following: orbit speed in m/s while circling a stopped leader or a mutual " +
+                "follow partner. Slowish reads best -- these are laps of honour, not attack runs. Default 7.0."
+        )
+        var followCircleSpeed = 7.0
+
+        @JsonSchema(
+            description = "Ship following: blocks of clear water held while circling, on top of both hulls' " +
+                "own sizes. The circle's radius comes from the two hulls' diagonals plus this, and it " +
+                "deliberately ignores followGapMax -- an orbit needs the room whatever the alongside gap is " +
+                "capped at. Default 8.0."
+        )
+        var followCircleGap = 8.0
 
         @JsonSchema(
             description = "Ship following: how far onto the leader's OTHER side a follower must end up, as a " +

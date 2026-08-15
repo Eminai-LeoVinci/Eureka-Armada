@@ -227,6 +227,23 @@ object FollowGeometry {
     fun keelLiftFor(leader: LoadedServerShip, follower: LoadedServerShip): Double =
         halfExtentAlong(follower, UP) - halfExtentAlong(leader, UP)
 
+    /**
+     * Half the hull's horizontal DIAGONAL, in blocks: the radius of the smallest vertical cylinder the hull
+     * fits inside however it is turned. 0 if it has no bounds.
+     *
+     * This is the size a hull has for CIRCLING, where the direction between the two ships sweeps every
+     * bearing in turn: any direction-dependent measure would give an orbit that breathes in and out as the
+     * hulls rotate past each other, and its narrowest reading is exactly the one that lets a corner touch.
+     * The diagonal errs wide on a hull that doesn't fill its box, which opens the ring rather than closing it
+     * -- the same right-way-to-be-wrong as [halfExtentAlong].
+     */
+    fun horizHalfDiagonal(ship: LoadedServerShip): Double {
+        val aabb = ship.shipAABB ?: return 0.0
+        val hx = (aabb.maxX() + 1 - aabb.minX()) * 0.5
+        val hz = (aabb.maxZ() + 1 - aabb.minZ()) * 0.5
+        return kotlin.math.sqrt(hx * hx + hz * hz)
+    }
+
     /** Which side of the leader a point is on: +1, -1, or 0 when it is dead on the centreline. */
     fun sideOf(leader: Frame, point: Vector3dc, deadband: Double): Int {
         val lateral = (point.x() - leader.centre.x) * leader.beam.x +
