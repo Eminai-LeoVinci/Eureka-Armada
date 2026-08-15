@@ -89,11 +89,21 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
     override fun getItem(): ItemStack = entityData.get(SHOWN)
 
-    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack) {
+    /**
+     * [muzzleSpeed] is handed in rather than read here because it belongs to the GUN, and a gun belongs to a
+     * ship category -- an airship throws flatter than a hull. By the time the ball is in the air it has left
+     * the ship and has no category to ask, so the number is spent at the muzzle and lives on in the velocity.
+     *
+     * That also means the client needs nothing extra: it already receives this velocity in the spawn packet
+     * and integrates the flight itself (see [tick]), so per-category muzzle velocity costs no synced data.
+     * Gravity and drag stay global for exactly the reason this one cannot be -- they are read every tick, on
+     * both sides, long after the gun is out of the picture, and they are properties of the ball anyway.
+     */
+    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack, muzzleSpeed: Double) {
         this.load = load
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         setPos(from.x, from.y, from.z)
-        deltaMovement = direction.normalize().scale(EurekaConfig.SERVER.cannonShotSpeed)
+        deltaMovement = direction.normalize().scale(muzzleSpeed)
     }
 
     override fun tick() {
@@ -230,13 +240,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             direction: Vec3,
             load: Load,
             shownAs: ItemStack,
+            muzzleSpeed: Double,
             firedBy: Entity? = null,
             gun: Array<BlockPos> = emptyArray()
         ): CannonShot {
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
             shot.gun = gun
-            shot.launch(from, direction, load, shownAs)
+            shot.launch(from, direction, load, shownAs, muzzleSpeed)
             level.addFreshEntity(shot)
             return shot
         }

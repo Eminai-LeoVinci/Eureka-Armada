@@ -27,7 +27,7 @@ private val WORLD_UP: Vector3dc = Vector3d(0.0, 1.0, 0.0)
  */
 fun stabilize(
     body: ArmadaBody,
-    cfg: EurekaConfig.Server,
+    cfg: EurekaConfig.ShipHandling,
     linear: Boolean,
     yaw: Boolean
 ): Double {
@@ -51,7 +51,7 @@ fun stabilize(
 }
 
 /** The upright-righting + spin-damping half of [stabilize]. */
-private fun applyStabilizationTorque(body: ArmadaBody, cfg: EurekaConfig.Server, yaw: Boolean) {
+private fun applyStabilizationTorque(body: ArmadaBody, cfg: EurekaConfig.ShipHandling, yaw: Boolean) {
     // Attitude comes from the lead: the welds make the armada one body, so the parent's up IS the armada's up.
     val shipUp = Vector3d(0.0, 1.0, 0.0)
     body.lead.transform.shipToWorldRotation.transform(shipUp)

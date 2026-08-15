@@ -125,7 +125,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // engineHeatGain, so an airship's engine force and heat match its own preset rather than the boat's. Same
     // instance as [cfg]; exposed read-only. Computed getter with no backing field, so it isn't serialized (the
     // class sets getterVisibility = NONE), like [cfg]/[canDisassemble].
-    val engineCfg: EurekaConfig.Server get() = cfg
+    val engineCfg: EurekaConfig.ShipHandling get() = cfg
 
     @JsonIgnore
     private var controlData: ControlData? = null
@@ -1918,7 +1918,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         /**
          * The heat (0..100) an engine settles at under sustained full throttle.
          *
-         * The readout used to assume 100 -- every engine at its full [EurekaConfig.Server.enginePowerLinear] --
+         * The readout used to assume 100 -- every engine at its full [EurekaConfig.ShipHandling.enginePowerLinear] --
          * and no engine is ever near that while it is being used. Heat is a balance of three flows per server
          * tick: it gains `(100*exponent - heat*exponent + 1) * engineHeatGain`, sheds
          * `(heat*exponent + 1) * engineHeatLoss`, and is drained by `consumed`, which is one unit per physics
@@ -1930,10 +1930,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
          * could actually reach.
          */
         @JvmStatic
-        fun steadyStateHeat(cfg: EurekaConfig.Server): Double {
-            val exponent = cfg.engineHeatChangeExponent.toDouble()
+        fun steadyStateHeat(cfg: EurekaConfig.ShipHandling): Double {
+            // Sourced exactly as EngineBlockEntity sources them, which is NOT uniformly: the gain is taken off
+            // the ship's own category preset, while the exponent and the loss are read globally. Reading all
+            // three off one block would agree with the physics only for as long as the two blocks happen to
+            // hold the same numbers, and would quietly start lying the first time either is tuned per category.
+            val exponent = EurekaConfig.SERVER.engineHeatChangeExponent.toDouble()
             val gain = cfg.engineHeatGain.toDouble()
-            val loss = cfg.engineHeatLoss.toDouble()
+            val loss = EurekaConfig.SERVER.engineHeatLoss.toDouble()
             val drain = physTicksPerGameTick * PHYS_CONSUMPTION_SCALE
             val denominator = exponent * (gain + loss)
             // Degenerate config (no exponent, or no heat flow at all): the balance below has no solution, so
@@ -1943,7 +1947,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         }
 
         @JvmStatic
-        fun estimateTopSpeed(cfg: EurekaConfig.Server, engineCount: Int, mass: Double): Double {
+        fun estimateTopSpeed(cfg: EurekaConfig.ShipHandling, engineCount: Int, mass: Double): Double {
             val scaledMass = mass * cfg.speedMassScale
             var speed = cfg.linearCasualSpeed / 3.0 * cfg.baseSpeed // oldSpeed -> 1
             // What an engine ACTUALLY makes at the throttle this figure describes -- the same lerp

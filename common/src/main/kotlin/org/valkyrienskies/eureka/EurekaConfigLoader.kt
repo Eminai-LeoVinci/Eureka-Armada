@@ -9,9 +9,15 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Reads `config/vs_eureka.json` and copies its values into [EurekaConfig.SERVER] /
+ * Reads `config/vs_eureka_armada.json` and copies its values into [EurekaConfig.SERVER] /
  * [EurekaConfig.CLIENT] at mod init. VS 2.5 vs-core removed `registerConfig`, so this
  * is Eureka's replacement until VS2's ModConfigSpec framework is wired up.
+ *
+ * The file is deliberately NOT `vs_eureka.json`: that name belongs to Eureka Ships, and Armada is a
+ * different mod with a different set of knobs. Sharing it would mean each mod silently rewriting the
+ * other's file -- the re-serialize below drops keys it does not recognise -- so an install that had both,
+ * or a player moving between them, would lose a tuned config without ever being told. Armada keeps its
+ * own file and leaves Eureka Ships' alone; nothing is read from or written to the old name.
  *
  * The path resolves against MC's working directory (always the instance root), which
  * keeps the loader platform-agnostic — no FabricLoader / Architectury plumbing needed.
@@ -25,7 +31,7 @@ import java.nio.file.Path
  */
 object EurekaConfigLoader {
     private val LOGGER = LogUtils.getLogger()
-    private val CONFIG_FILE: Path = Path.of("config", "vs_eureka.json")
+    private val CONFIG_FILE: Path = Path.of("config", "vs_eureka_armada.json")
 
     private val mapper: ObjectMapper = ObjectMapper().apply {
         enable(SerializationFeature.INDENT_OUTPUT)
@@ -91,9 +97,17 @@ object EurekaConfigLoader {
      * apply that category's handling [deltas], then overlay whatever the config file holds for it.
      *
      * The copy goes through the mapper rather than a hand-written field-by-field clone so it can never fall
-     * behind the ~150-field Server class -- adding a config key needs no change here.
+     * behind the handling field set -- adding a config key needs no change here. It stays correct now that a
+     * preset is a [EurekaConfig.ShipHandling] rather than a full [EurekaConfig.Server]: the serialized SERVER
+     * carries both halves, and the reader simply drops the global half it has nowhere to put (the mapper has
+     * FAIL_ON_UNKNOWN_PROPERTIES disabled). That is also what quietly cleans up an OLD config file, whose
+     * category blocks are full of global keys this build no longer wants there.
      */
-    private fun seedCategory(preset: EurekaConfig.Server, node: JsonNode?, deltas: (EurekaConfig.Server) -> Unit) {
+    private fun seedCategory(
+        preset: EurekaConfig.ShipHandling,
+        node: JsonNode?,
+        deltas: (EurekaConfig.ShipHandling) -> Unit
+    ) {
         mapper.readerForUpdating(preset).readValue<Any>(mapper.valueToTree<JsonNode>(EurekaConfig.SERVER))
         deltas(preset)
         node?.takeIf { !it.isMissingNode && !it.isNull }?.let {

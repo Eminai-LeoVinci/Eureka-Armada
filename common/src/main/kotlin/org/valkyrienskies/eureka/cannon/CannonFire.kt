@@ -21,6 +21,7 @@ import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.item.CannonCharge
+import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 
@@ -42,8 +43,21 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties.HOR
 object CannonFire {
 
     /** One shot per gun per reload. Broadside weight comes from gun count, not from fire rate. */
-    private val cooldownTicks: Long
-        get() = (EurekaConfig.SERVER.cannonReloadSeconds * 20.0).toLong().coerceAtLeast(1L)
+    private fun cooldownTicks(cfg: EurekaConfig.ShipHandling): Long =
+        (cfg.cannonReloadSeconds * 20.0).toLong().coerceAtLeast(1L)
+
+    /**
+     * The handling block the gun at [pos] serves under, or the global one for a gun on solid ground.
+     *
+     * Reload and muzzle velocity are the two cannon numbers that belong to the gun and its crew rather than
+     * to the ball, so they are per ship category; a gun that is not on a ship has no category and falls back
+     * to [EurekaConfig.SERVER], which is the same thing a loose engine does.
+     */
+    private fun handlingAt(level: ServerLevel, pos: BlockPos): EurekaConfig.ShipHandling =
+        level.getLoadedShipManagingPos(pos)
+            ?.getAttachment(EurekaShipControl::class.java)
+            ?.engineCfg
+            ?: EurekaConfig.SERVER
 
     /**
      * The bore, measured off the model, relative to the rear block's centre and in blocks.
@@ -67,10 +81,16 @@ object CannonFire {
         val magazine = level.getBlockEntity(rear) as? CannonBlockEntity
             ?: return Component.translatable("info.vs_eureka.cannon_broken")
 
+        // Resolved once, off the breech: it answers both what this gun's reload is and what its muzzle
+        // velocity will be, and the same ship carries the transform that puts the shot into world space.
+        val ship = level.getLoadedShipManagingPos(rear)
+        val cfg = handlingAt(level, rear)
+        val cooldown = cooldownTicks(cfg)
+
         // Anything beyond a full cooldown means the world clock moved rather than the gun being genuinely
         // hot -- a restored backup, most likely -- so let it fire instead of locking the gun out for a week.
         val remaining = magazine.readyAt - level.gameTime
-        if (remaining in 1..cooldownTicks) {
+        if (remaining in 1..cooldown) {
             return Component.translatable("info.vs_eureka.cannon_cooling", (remaining / 20.0 + 0.5).toInt().coerceAtLeast(1))
         }
 
@@ -98,7 +118,6 @@ object CannonFire {
 
         // ...and the same two points in world space. On solid ground the transform is the identity, so this
         // costs nothing and needs no special case.
-        val ship = level.getLoadedShipManagingPos(rear)
         val muzzle = ship?.shipToWorld?.transformPosition(Vector3d(shipyardMuzzle)) ?: shipyardMuzzle
         val ahead = ship?.shipToWorld?.transformPosition(Vector3d(shipyardAhead)) ?: shipyardAhead
 
@@ -112,12 +131,12 @@ object CannonFire {
         val shown = ItemStack(EurekaItems.cannonball(load.ball, CannonCharge.PLAIN))
         magazine.powder.shrink(1)
         magazine.shot.shrink(1)
-        magazine.readyAt = level.gameTime + cooldownTicks
+        magazine.readyAt = level.gameTime + cooldown
         magazine.setChanged()
 
         // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left.
         val gun = CannonPart.entries.map { rear.relative(facing, it.ordinal) }.toTypedArray()
-        CannonShot.spawn(level, from, direction, load, shown, player, gun)
+        CannonShot.spawn(level, from, direction, load, shown, cfg.cannonShotSpeed, player, gun)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)

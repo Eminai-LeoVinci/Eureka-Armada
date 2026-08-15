@@ -36,7 +36,7 @@ enum class ControlProfile {
     SUBMARINE;
 
     /** The settings block a ship of this category reads its handling off. */
-    val preset: EurekaConfig.Server
+    val preset: EurekaConfig.ShipHandling
         get() = when (this) {
             BOAT -> EurekaConfig.BOAT
             AIRSHIP -> EurekaConfig.AIRSHIP

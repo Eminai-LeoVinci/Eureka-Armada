@@ -12,7 +12,7 @@ object EurekaMod {
 
     @JvmStatic
     fun init() {
-        // Load config/vs_eureka.json first so any registration code that reads EurekaConfig
+        // Load config/vs_eureka_armada.json first so any registration code that reads EurekaConfig
         // sees user-tuned values. VS 2.5 vs-core removed registerConfig; this is our
         // stand-in until ModConfigSpec is wired up.
         EurekaConfigLoader.loadOrCreate()

@@ -35,20 +35,20 @@ object EurekaConfig {
     // See ControlProfile and EurekaShipControl.cfg (and .engineCfg, which EngineBlockEntity reads for
     // per-category engine force and heat).
     @JvmField
-    val BOAT = Server().also { boatDefaults(it) }
+    val BOAT = ShipHandling().also { boatDefaults(it) }
 
     @JvmField
-    val AIRSHIP = Server().also { airshipDefaults(it) }
+    val AIRSHIP = ShipHandling().also { airshipDefaults(it) }
 
     @JvmField
-    val SUBMARINE = Server().also { submarineDefaults(it) }
+    val SUBMARINE = ShipHandling().also { submarineDefaults(it) }
 
     // Boats & Ships are the REFERENCE tuning -- every value below is the pre-category default, restated so
     // the three presets can be read side by side. The fastest and most manoeuvrable of the three.
     @JvmStatic
-    fun boatDefaults(s: Server) {
-        s.maxSpeedFromEngines = 70.0
-        s.maxReverseSpeedFromEngines = 36.0
+    fun boatDefaults(s: ShipHandling) {
+        s.maxSpeedFromEngines = 50.0
+        s.maxReverseSpeedFromEngines = 50.0
         s.turnSpeed = 0.5
         s.turnAcceleration = 8.0
         s.waterThrustAssist = 8.0
@@ -56,8 +56,9 @@ object EurekaConfig {
         s.doFluidDrag = false
     }
 
-    // Airships ship with BOAT HANDLING, deliberately. The category split is the feature; the flight feel is
-    // tuned from serverAirship in vs_eureka.json, which is what those blocks are for.
+    // Airships take BOAT HANDLING as their base and then a short list of flight deltas, below. Those deltas
+    // were arrived at by hand in serverAirship over a lot of flying, and they now ship as defaults rather
+    // than living only in one person's config file -- a preset nobody else receives is not a preset.
     //
     // The first cut seeded this preset from the retired Vanilla engine numbers and produced an airship that
     // crawled -- ~3 m/s piloted (i.e. baseSpeed and nothing more), ~8 under cruise. The culprit was
@@ -80,15 +81,59 @@ object EurekaConfig {
     // hold is gated on activeProfile == BOAT at its one use site and the helm checkbox writes BOAT directly,
     // so this preset's copy of the key is never read.
     @JvmStatic
-    fun airshipDefaults(s: Server) {
+    fun airshipDefaults(s: ShipHandling) {
         boatDefaults(s)
+        // Power, because an airship carries its weight on engines rather than on water, and the heat floor
+        // above means the way to make one move is more power and not more patience. engineHeatGain itself is
+        // deliberately left at the base value -- that is the trap the note describes, not a dial.
+        //
+        // These numbers are sized against the heat an engine SETTLES at under load (~68 on stock heat
+        // settings, see EurekaShipControl.steadyStateHeat), not against a full tank it never reaches. Sized
+        // against 100 instead, a hull lands about 11% short of the figure the helm quotes.
+        s.enginePowerLinear = 4900000f
+        s.enginePowerLinearMin = 245000f
+        // Deliberately linear past the threshold. engineBoostExponentialPower squares the surplus, which on a
+        // large bank overtook every other term and made five more engines a step change rather than a gain --
+        // impossible to tune a speed class around. Zero here; the offset carries the "an airship needs a real
+        // bank of engines before it pays off" idea on its own.
+        s.engineBoost = 1.0
+        s.engineBoostOffset = 8.0
+        s.engineBoostExponentialPower = 0.0
+        // 40 is a CEILING, not the target: sized so a 35-50 engine hull sits at roughly twice the power ratio
+        // and the throttle therefore maps onto speed nearly linearly. Pushed higher, the atan saturates and a
+        // few percent of throttle commands nearly full speed -- which is what makes a launch violent and a
+        // coast long, because the commanded speed hangs at the top while the throttle bleeds off.
+        s.maxSpeedFromEngines = 40.0
+        s.maxReverseSpeedFromEngines = 12.0
+        // Doubles the stiffness of the velocity controller (acceleration is speedMassScale * velocity error),
+        // which firms up stopping far more than it costs on the launch, since a launch is throttle-limited.
+        // enginePowerLinear above is scaled to match -- speedMassScale divides engine power as well.
+        s.speedMassScale = 2.0
+        // Vertical authority: an airship climbs and dives on its own lift rather than on a waterline.
+        s.baseImpulseElevationRate = 15.0
+        s.baseImpulseDescendRate = 15.0
+        s.balloonElevationMaxSpeed = 15.0
+        // Quicker than a hull, well short of the engine-independent 24/r ceiling. turnAcceleration is the one
+        // that decides whether a sustained hold reaches that ceiling; at 10 it got there in about two seconds,
+        // which reads as a ship on a swivel.
+        s.turnSpeed = 2.0
+        s.turnAcceleration = 6.0
+        // Throttle ramp. linearMassScaling is what dominates on a heavy hull -- at 2e-4 a 1.5M kg ship draws
+        // 300 against linearBaseMass's 70 -- so halving it, not raising the base, is what lets an airship
+        // spool up better than a boat of the same mass.
+        s.linearMassScaling = 0.0001
+        s.linearBaseMass = 70.0
+        // A stronger brake for a hull nobody is steering.
+        s.linearStabilizeMaxAntiVelocity = 8.0
+        // Airship guns throw flatter. Gravity and drag stay global -- they belong to the ball, not the gun.
+        s.cannonShotSpeed = 5.0
     }
 
     // PLACEHOLDER. Submarine handling is not implemented -- ControlProfile.SUBMARINE is never selected, so
     // nothing here is read yet. The block exists now so the config file's shape is final and the values are
     // ready to tune when the submarine work lands. Boat handling, slowed down, with more vertical authority.
     @JvmStatic
-    fun submarineDefaults(s: Server) {
+    fun submarineDefaults(s: ShipHandling) {
         boatDefaults(s)
         s.maxSpeedFromEngines = 40.0
         s.maxReverseSpeedFromEngines = 24.0
@@ -152,7 +197,21 @@ object EurekaConfig {
         var pathHoldSeconds = 2.0
     }
 
-    class Server {
+    /**
+     * The settings a ship reads its HANDLING off: engine force and heat gain, speed caps, throttle ramp,
+     * turning, stabilization, vertical response, thrust assists, and the two cannon numbers that belong to
+     * the gun rather than to the ball.
+     *
+     * Split out from [Server] so the three category blocks in the config file carry ONLY the keys a category
+     * actually governs. They used to be full copies of [Server], which wrote every global key into all three
+     * -- inert copies that read like knobs, so tuning a cannon in `serverAirship` looked like it should work
+     * and silently did nothing. A separate type makes that a compile error rather than a puzzle.
+     *
+     * [Server] extends this, so EurekaConfig.SERVER still answers for both halves: its handling half is the
+     * reference tuning the three presets are seeded from, and the fallback an engine reads when it is not on
+     * a ship at all.
+     */
+    open class ShipHandling {
 
         @JsonSchema(description = "Movement power per engine when heated fully")
         var enginePowerLinear: Float = 100000f
@@ -160,35 +219,8 @@ object EurekaConfig {
         @JsonSchema(description = "Movement power per engine with minimal heat")
         var enginePowerLinearMin: Float = 10000f
 
-        @JsonSchema(description = "Turning power per engine when heated fully")
-        var enginePowerAngular = 1.0f
-
-        @JsonSchema(description = "Turning power per engine when minimal heat")
-        var enginePowerAngularMin = 0.0f
-
-        @JsonSchema(description = "The amount of heat a engine loses per tick")
-        var engineHeatLoss = 0.01f
-
         @JsonSchema(description = "The amount of heat a gain per tick (when burning)")
         var engineHeatGain = 0.09f
-
-        @JsonSchema(description = "Increases heat gained at low heat level, and increased heat decreases when at high heat and not consuming fuel")
-        var engineHeatChangeExponent = 0.1f
-
-        @JsonSchema(description = "Pause fuel consumption and power when block is powered")
-        var engineRedstoneBehaviorPause = false
-
-        @JsonSchema(description = "Number of Balloons a single engine can power. 0 disables the feature")
-        var maxBalloonsPerEngine = 0
-
-        @JsonSchema(description = "Avoids consuming fuel when heat is 100%")
-        var engineFuelSaving = false
-
-        @JsonSchema(description = "Increasing this value will result in more items being able to converted to fuel")
-        var engineMinCapacity = 2000
-
-        @JsonSchema(description = "Fuel burn time multiplier")
-        var engineFuelMultiplier = 2f
 
         @JsonSchema(description = "Extra engine power for when having multiple engines per engine")
         var engineBoost = 4.0
@@ -209,12 +241,6 @@ object EurekaConfig {
 
         @JsonSchema(description = "The speed at which the ship stabilizes")
         var stabilizationSpeed = 10.0
-
-        @JsonSchema(description = "The amount extra that each floater will make the ship float, per kg mass")
-        var floaterBuoyantFactorPerKg = 50_000.0
-
-        @JsonSchema(description = "The maximum amount extra each floater will multiply the buoyant force by, irrespective of mass")
-        var maxFloaterBuoyantFactor = 1.0
 
         @JsonSchema(description = "how much the mass decreases the speed.")
         var speedMassScale = 1.0
@@ -248,18 +274,6 @@ object EurekaConfig {
         @JsonSchema(description = "Allow Eureka controlled ships to be affected by fluid drag")
         var doFluidDrag = false
 
-        // Do i need to explain? the mass 1 baloon gets to float
-        @JsonSchema(description = "Amount of mass in kg a balloon can lift")
-        var massPerBalloon = 5000.0
-
-        @JsonSchema(
-            description = "Multiplier on balloon FLIGHT LIFT -- the anti-gravity up-force balloons apply " +
-                "in air and water alike. This is NOT water buoyancy. 1 = normal lift, 0 = balloons provide " +
-                "no lift (debug lever for ships hovering above the waterline). Staying afloat on water is a " +
-                "separate system: see floaterBuoyantFactorPerKg / maxFloaterBuoyantFactor."
-        )
-        var balloonLiftMultiplier = 1.0
-
         @JsonSchema(
             description = "Water altitude-hold: a HYBRID ship (has both floaters AND balloons) pins its " +
                 "current Y the moment its keel touches water, so it sails on the surface instead of balloon " +
@@ -275,13 +289,6 @@ object EurekaConfig {
                 "oscillates. Default 9.0."
         )
         var waterAltitudeHoldStiffness = 9.0
-
-        @JsonSchema(
-            description = "How submerged the ship must be (fraction 0..1) for the water altitude-hold to " +
-                "ENGAGE. Once engaged it stays until the hull fully clears the water. Small = engages as soon " +
-                "as the keel touches. Default 0.05."
-        )
-        var waterAltitudeHoldMinOverlap = 0.05
 
         // The amount of speed that the ship can move at when the left/right impulse button is held down.
         @JsonSchema(
@@ -305,36 +312,6 @@ object EurekaConfig {
                 "sustained hold ramps the turn sharper. Default 0.6."
         )
         var turnAccelDelay = 0.6
-
-        @JsonSchema(
-            description = "Seconds you must hold the OPPOSITE turn (A/D) to cancel a locked orbit while cruising " +
-                "(leaving horizontal/vertical cruise running). Taps/shorter holds only ADD influence and never " +
-                "cancel. Canceling the last active set turns cruise off. Default 3.0."
-        )
-        var turnCancelHold = 3.0
-
-        @JsonSchema(
-            description = "Seconds you must hold the OPPOSITE forward/back input (W/S) to cancel the horizontal " +
-                "cruise set while cruising (leaving turn/vertical running). Taps only ADD speed influence. " +
-                "Canceling the last active set turns cruise off. Default 3.0."
-        )
-        var horizontalCancelHold = 3.0
-
-        @JsonSchema(
-            description = "Seconds you must hold the OPPOSITE ascend/descend input (Space/V) to cancel the " +
-                "vertical cruise set while cruising (leaving horizontal/turn running). Taps only ADD climb " +
-                "influence. Canceling the last active set turns cruise off. Default 3.0."
-        )
-        var verticalCancelHold = 3.0
-
-        @JsonSchema(
-            description = "Lock-in turn cruise: while CRUISING, holding a turn key spins the ship up and the " +
-                "achieved turn RATE is latched when you release -- so the ship holds a constant-radius circle " +
-                "hands-off instead of straightening. A brief tap = a gentle wide orbit; a longer hold = a " +
-                "sharper orbit (up to turnSpeed). Steer the opposite way to widen or straighten out. false = " +
-                "turning while cruising just steers live and brakes back to straight on release (legacy)."
-        )
-        var enableTurnCruise = true
 
         @JsonSchema(
             description = "The maximum distance from center of mass to one end of the ship considered by " +
@@ -378,6 +355,118 @@ object EurekaConfig {
         // Max 10.0 (means no mass irrelevance)
         @JsonSchema(description = "How much inertia affects Eureka ships. Max 10 = full inertia")
         var antiVelocityMassRelevance = 0.8
+
+        // region Cannons
+        // The three numbers that decide a shot's arc, exposed so it can be dialled in against a real ship
+        // without a rebuild. They interact: speed sets the range, gravity sets how much the shot curves on
+        // the way, and drag decides how quickly it stops being fast enough for gravity not to matter.
+
+        @JsonSchema(
+            description = "How far a cannonball travels each tick, in blocks. Sets the range and how flat the " +
+                "shot looks; raising it makes a cannon read more like a rifle and less like a mortar. Default 3.0."
+        )
+        var cannonShotSpeed = 3.0
+
+        @JsonSchema(
+            description = "Seconds a cannon takes to reload. This is PER GUN -- a six-gun broadside fires six " +
+                "times in this window -- so gun count, not this number, is what sets a ship's weight of fire. " +
+                "Default 4.0."
+        )
+        var cannonReloadSeconds = 4.0
+    }
+
+    /**
+     * Everything that is NOT per-category, plus -- by inheritance -- the handling block that is.
+     *
+     * Three kinds of thing live here. ASSEMBLY-TIME knobs, consumed while a ship is being built, when no
+     * ship (and therefore no category) exists yet. BUOYANCY AND LIFT, deliberately global because a hybrid
+     * changes category the moment its keel touches water, and a ship whose lift changed with it would sink
+     * or leap at the waterline. And everything simply shared: path servo gains, cruise hold times, engine
+     * internals, crew, fire, ballast, debug toggles.
+     */
+    class Server : ShipHandling() {
+
+        @JsonSchema(description = "Turning power per engine when heated fully")
+        var enginePowerAngular = 1.0f
+
+        @JsonSchema(description = "Turning power per engine when minimal heat")
+        var enginePowerAngularMin = 0.0f
+
+        @JsonSchema(description = "The amount of heat a engine loses per tick")
+        var engineHeatLoss = 0.01f
+
+        @JsonSchema(description = "Increases heat gained at low heat level, and increased heat decreases when at high heat and not consuming fuel")
+        var engineHeatChangeExponent = 0.1f
+
+        @JsonSchema(description = "Pause fuel consumption and power when block is powered")
+        var engineRedstoneBehaviorPause = false
+
+        @JsonSchema(description = "Number of Balloons a single engine can power. 0 disables the feature")
+        var maxBalloonsPerEngine = 0
+
+        @JsonSchema(description = "Avoids consuming fuel when heat is 100%")
+        var engineFuelSaving = false
+
+        @JsonSchema(description = "Increasing this value will result in more items being able to converted to fuel")
+        var engineMinCapacity = 2000
+
+        @JsonSchema(description = "Fuel burn time multiplier")
+        var engineFuelMultiplier = 2f
+
+        @JsonSchema(description = "The amount extra that each floater will make the ship float, per kg mass")
+        var floaterBuoyantFactorPerKg = 50_000.0
+
+        @JsonSchema(description = "The maximum amount extra each floater will multiply the buoyant force by, irrespective of mass")
+        var maxFloaterBuoyantFactor = 1.0
+
+        // Do i need to explain? the mass 1 baloon gets to float
+        @JsonSchema(description = "Amount of mass in kg a balloon can lift")
+        var massPerBalloon = 5000.0
+
+        @JsonSchema(
+            description = "Multiplier on balloon FLIGHT LIFT -- the anti-gravity up-force balloons apply " +
+                "in air and water alike. This is NOT water buoyancy. 1 = normal lift, 0 = balloons provide " +
+                "no lift (debug lever for ships hovering above the waterline). Staying afloat on water is a " +
+                "separate system: see floaterBuoyantFactorPerKg / maxFloaterBuoyantFactor."
+        )
+        var balloonLiftMultiplier = 1.0
+
+        @JsonSchema(
+            description = "How submerged the ship must be (fraction 0..1) for the water altitude-hold to " +
+                "ENGAGE. Once engaged it stays until the hull fully clears the water. Small = engages as soon " +
+                "as the keel touches. Default 0.05."
+        )
+        var waterAltitudeHoldMinOverlap = 0.05
+
+        @JsonSchema(
+            description = "Seconds you must hold the OPPOSITE turn (A/D) to cancel a locked orbit while cruising " +
+                "(leaving horizontal/vertical cruise running). Taps/shorter holds only ADD influence and never " +
+                "cancel. Canceling the last active set turns cruise off. Default 3.0."
+        )
+        var turnCancelHold = 3.0
+
+        @JsonSchema(
+            description = "Seconds you must hold the OPPOSITE forward/back input (W/S) to cancel the horizontal " +
+                "cruise set while cruising (leaving turn/vertical running). Taps only ADD speed influence. " +
+                "Canceling the last active set turns cruise off. Default 3.0."
+        )
+        var horizontalCancelHold = 3.0
+
+        @JsonSchema(
+            description = "Seconds you must hold the OPPOSITE ascend/descend input (Space/V) to cancel the " +
+                "vertical cruise set while cruising (leaving horizontal/turn running). Taps only ADD climb " +
+                "influence. Canceling the last active set turns cruise off. Default 3.0."
+        )
+        var verticalCancelHold = 3.0
+
+        @JsonSchema(
+            description = "Lock-in turn cruise: while CRUISING, holding a turn key spins the ship up and the " +
+                "achieved turn RATE is latched when you release -- so the ship holds a constant-radius circle " +
+                "hands-off instead of straightening. A brief tap = a gentle wide orbit; a longer hold = a " +
+                "sharper orbit (up to turnSpeed). Steer the opposite way to widen or straighten out. false = " +
+                "turning while cruising just steers live and brakes back to straight on release (legacy)."
+        )
+        var enableTurnCruise = true
 
         // Chance that if side will pop, its this chance per side
         @JsonSchema(description = "Chance for popped balloons to pop adjacent balloons, per side")
@@ -971,36 +1060,18 @@ object EurekaConfig {
         )
         var crewSlotsMax = 32
 
-        // region Cannons
-        // The three numbers that decide a shot's arc, exposed so it can be dialled in against a real ship
-        // without a rebuild. They interact: speed sets the range, gravity sets how much the shot curves on
-        // the way, and drag decides how quickly it stops being fast enough for gravity not to matter.
-
-        @JsonSchema(
-            description = "How far a cannonball travels each tick, in blocks. Sets the range and how flat the " +
-                "shot looks; raising it makes a cannon read more like a rifle and less like a mortar. Default 1.5."
-        )
-        var cannonShotSpeed = 1.5
-
         @JsonSchema(
             description = "Blocks per tick squared the shot falls. The main control over the ARC: raise it to " +
-                "lob, lower it toward a straight line. Default 0.1."
+                "lob, lower it toward a straight line. Default 0.05."
         )
-        var cannonShotGravity = 0.1
+        var cannonShotGravity = 0.05
 
         @JsonSchema(
             description = "Fraction of its speed a shot keeps each tick. Below 1.0 it slows in flight, which " +
                 "shortens the range and steepens the tail of the arc rather than changing its start. 1.0 is no " +
-                "drag at all. Default 0.9."
+                "drag at all. Default 0.93."
         )
-        var cannonShotDrag = 0.9
-
-        @JsonSchema(
-            description = "Seconds a cannon takes to reload. This is PER GUN -- a six-gun broadside fires six " +
-                "times in this window -- so gun count, not this number, is what sets a ship's weight of fire. " +
-                "Default 4.0."
-        )
-        var cannonReloadSeconds = 4.0
+        var cannonShotDrag = 0.93
         // endregion
 
         @JsonSchema(
