@@ -4,6 +4,9 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "MixinAnvilFreeHelmRename",
+    "MixinCrewNoWheelVisit",
+    "MixinCrewNoWorkAtWheel",
+    "MixinCrewStrollAnywhere",
     "MixinEntitySubAir",
     "MixinPoiCompetitorScan",
     "MixinShipFireContainment",
