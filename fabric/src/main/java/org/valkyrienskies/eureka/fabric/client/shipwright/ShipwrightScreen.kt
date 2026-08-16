@@ -5,12 +5,17 @@ import net.fabricmc.api.Environment
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.InputWithModifiers
 import net.minecraft.client.input.MouseButtonEvent
+import org.lwjgl.glfw.GLFW
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.ItemStack
+import net.minecraft.client.gui.components.AbstractButton
 import org.valkyrienskies.eureka.fabric.ShipwrightNetworkingFabric
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu
+import org.valkyrienskies.mod.client.ShipGamepad
+import kotlin.math.abs
 
 /**
  * The shipwright's book: every set of plans a captain owns, and what is still owed on each.
@@ -249,7 +254,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         for (i in 0 until VISIBLE_ROWS) {
             val index = scroll + i
             if (index >= shelf.rows.size) break
-            drawShelfRow(guiGraphics, shelf.rows[index], top + LIST_TOP + i * ROW_H, mouseX, mouseY)
+            drawShelfRow(guiGraphics, shelf.rows[index], top + LIST_TOP + i * ROW_H, mouseX, mouseY, index == padSel)
         }
         guiGraphics.disableScissor()
         drawScrollbar(guiGraphics, shelf.rows.size, VISIBLE_ROWS, LIST_BOTTOM)
@@ -260,9 +265,11 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         row: ShipwrightMenu.Row,
         y: Int,
         mouseX: Int,
-        mouseY: Int
+        mouseY: Int,
+        selected: Boolean
     ) {
-        val hovered = mouseX >= left + 4 && mouseX <= left + PANEL_W - 8 &&
+        val hovered = selected ||
+            mouseX >= left + 4 && mouseX <= left + PANEL_W - 8 &&
             mouseY >= y && mouseY < y + ROW_H && mouseY >= top + LIST_TOP && mouseY < top + LIST_BOTTOM
         if (hovered) guiGraphics.fill(left + 4, y, left + PANEL_W - 8, y + ROW_H - 1, ROW_HOVER)
 
@@ -310,7 +317,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         for (i in 0 until VISIBLE_ROWS) {
             val index = scroll + i
             if (index >= shelf.vessels.size) break
-            drawYardRow(guiGraphics, shelf.vessels[index], top + LIST_TOP + i * ROW_H, mouseX, mouseY)
+            drawYardRow(guiGraphics, shelf.vessels[index], top + LIST_TOP + i * ROW_H, mouseX, mouseY, index == padSel)
         }
         guiGraphics.disableScissor()
         drawScrollbar(guiGraphics, shelf.vessels.size, VISIBLE_ROWS, LIST_BOTTOM)
@@ -321,9 +328,11 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         hull: ShipwrightMenu.Vessel,
         y: Int,
         mouseX: Int,
-        mouseY: Int
+        mouseY: Int,
+        selected: Boolean
     ) {
-        val hovered = mouseX >= left + 4 && mouseX <= left + PANEL_W - 8 &&
+        val hovered = selected ||
+            mouseX >= left + 4 && mouseX <= left + PANEL_W - 8 &&
             mouseY >= y && mouseY < y + ROW_H && mouseY >= top + LIST_TOP && mouseY < top + LIST_BOTTOM
         if (hovered) guiGraphics.fill(left + 4, y, left + PANEL_W - 8, y + ROW_H - 1, ROW_HOVER)
 
@@ -486,6 +495,136 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         return true
     }
 
+    /**
+     * Controller support, read straight off the hardware (VS2's ShipGamepad) because a controller mod's
+     * screen handling never reaches a custom screen.
+     *
+     * The right stick is the scroll wheel everywhere. On the shelf and in the yard the D-pad is the
+     * hover: up/down walk the highlight through the rows -- painted through the same highlight the mouse
+     * uses -- D-pad right opens the highlighted ship, and D-pad left steps back out of an open card the
+     * way Back does. On an open card, up/down scroll the bill of materials a row at a time.
+     */
+    override fun tick() {
+        super.tick()
+
+        val deflect = ShipGamepad.rightStickY()
+        if (abs(deflect) < STICK_DEADZONE) {
+            stickHeld = 0
+        } else {
+            if (stickHeld % STICK_EVERY == 0) mouseScrolled(0.0, 0.0, 0.0, if (deflect < 0) 1.0 else -1.0)
+            stickHeld++
+        }
+
+        // The bumpers flip between the book's two halves, exactly as the tab buttons do.
+        if (ShipGamepad.bumperLeftPressed() || ShipGamepad.bumperRightPressed()) {
+            if (onYard) {
+                onYard = false
+                openVessel = null
+            } else {
+                onYard = true
+                openCard = null
+            }
+            scroll = 0
+            rebuild()
+        }
+
+        // Entering or leaving a view drops the selection rather than letting a shelf index masquerade as
+        // a yard one.
+        val context = when {
+            onYard && openVessel != null -> 3
+            onYard -> 2
+            openCard != null -> 1
+            else -> 0
+        }
+        if (context != padContext) {
+            padContext = context
+            padSel = -1
+            focused = null
+        }
+
+        if (ShipGamepad.dpadLeftPressed()) {
+            if (context == 3) {
+                openVessel = null
+                scroll = 0
+                rebuild()
+            } else if (context == 1) {
+                openCard = null
+                rebuild()
+            }
+        }
+
+        val step = verticalStep()
+        val choose = ShipGamepad.dpadRightPressed()
+        ShipGamepad.drainPresses()
+
+        if (context == 1 || context == 3) {
+            // An open card is its BUTTONS: D-pad up/down walk them (tabs included), lit through the same
+            // state hover uses, and D-pad right presses the one selected. The bill of materials scrolls
+            // on the right stick or the wheel.
+            val buttons = children().filterIsInstance<AbstractButton>().filter { it.active && it.visible }
+            if (buttons.isEmpty()) return
+            if (step != 0) {
+                padSel = when {
+                    padSel < 0 -> if (step > 0) 0 else buttons.size - 1
+                    else -> (padSel + step).coerceIn(0, buttons.size - 1)
+                }
+                focused = buttons[padSel]
+            }
+            if (choose) {
+                buttons.getOrNull(padSel)?.onPress(object : InputWithModifiers {
+                    override fun input(): Int = GLFW.GLFW_KEY_ENTER
+                    override fun modifiers(): Int = 0
+                })
+            }
+            return
+        }
+
+        val count = if (onYard) shelf.vessels.size else shelf.rows.size
+        if (count == 0) return
+        if (step != 0) {
+            padSel = when {
+                padSel < 0 -> if (step > 0) 0 else count - 1
+                else -> (padSel + step).coerceIn(0, count - 1)
+            }
+            // The selection drags the list with it, the way keyboard focus is expected to.
+            if (padSel < scroll) scroll = padSel
+            if (padSel >= scroll + VISIBLE_ROWS) scroll = padSel - VISIBLE_ROWS + 1
+            clampScroll()
+        }
+        if (choose && padSel >= 0) {
+            if (onYard) {
+                shelf.vessels.getOrNull(padSel)?.let { openVessel = it.slug }
+            } else {
+                shelf.rows.getOrNull(padSel)?.let { openCard = it.shipName }
+            }
+            scroll = 0
+            rebuild()
+        }
+    }
+
+    /** Pad-driven selection: an index into whichever list is in front of you. -1 = the pad has not taken it. */
+    private var padSel = -1
+    private var padContext = 0
+    private var padVertHeld = 0
+    private var stickHeld = 0
+
+    /** One selection step per press, repeating on a short beat while held. 0 when this tick moves nothing. */
+    private fun verticalStep(): Int {
+        val direction = when {
+            ShipGamepad.dpadUp() -> -1
+            ShipGamepad.dpadDown() -> 1
+            else -> {
+                padVertHeld = 0
+                return 0
+            }
+        }
+        if (ShipGamepad.dpadUpPressed() || ShipGamepad.dpadDownPressed()) padVertHeld = 0
+        val fires = padVertHeld == 0 ||
+            (padVertHeld >= PAD_REPEAT_DELAY && (padVertHeld - PAD_REPEAT_DELAY) % PAD_REPEAT_EVERY == 0)
+        padVertHeld++
+        return if (fires) direction else 0
+    }
+
     private fun clampScroll() {
         // Counted off the SAME list each view paints, not the full bill -- a card usually shows only what is
         // still owed, and clamping against the longer list would scroll past the end into blank rows.
@@ -560,6 +699,14 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
 
         private const val PANEL_W = 250
         private const val PANEL_H = 214
+
+        /** Ticks a held D-pad direction waits before repeating, and the gap between repeats after that. */
+        private const val PAD_REPEAT_DELAY = 6
+        private const val PAD_REPEAT_EVERY = 3
+
+        /** Right-stick scroll: deflection under this is rest, and one notch scrolls every few ticks held. */
+        private const val STICK_DEADZONE = 0.4f
+        private const val STICK_EVERY = 3
         private const val LIST_TOP = 53
         private const val ROW_H = 18
         private const val VISIBLE_ROWS = 8

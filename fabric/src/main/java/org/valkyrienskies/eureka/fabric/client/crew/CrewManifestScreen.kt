@@ -22,7 +22,9 @@ import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmIconButton
+import org.valkyrienskies.mod.client.ShipGamepad
 import java.util.UUID
+import kotlin.math.abs
 
 /**
  * The ship's crew, berth by berth.
@@ -351,6 +353,167 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         return true
     }
 
+    // region the pad drives the screen
+
+    /**
+     * Controller support, read straight off the hardware (VS2's ShipGamepad, polled at the head of this
+     * same tick) because a controller mod's screen handling never reaches a custom screen.
+     *
+     * The scheme: the RIGHT STICK is the scroll wheel, and the D-PAD is the hover -- up/down walk the
+     * selection through whatever is in front of you (crew rows; the card's two buttons; the station
+     * dropdown's free entries), painted through the exact same highlight the mouse hover uses. D-pad
+     * RIGHT is the click on whatever is selected, and D-pad LEFT is the way back out (fold the dropdown,
+     * leave the card -- which is also the lock-in gesture, exactly as Back is).
+     */
+    override fun tick() {
+        super.tick()
+        padScroll()
+        padNavigate()
+        // The presses this screen answered must not double as deck actions the moment it closes.
+        ShipGamepad.drainPresses()
+    }
+
+    /** Pad-driven selection: a berth slot on the roster, a control index on the card, an entry in the menu. */
+    private var padSel = -1
+    private var padContext = 0
+    private var padVertHeld = 0
+    private var stickHeld = 0
+
+    private fun padScroll() {
+        val deflect = ShipGamepad.rightStickY()
+        if (abs(deflect) < STICK_DEADZONE) {
+            stickHeld = 0
+            return
+        }
+        if (stickHeld % STICK_EVERY == 0) {
+            // Stick up (negative) scrolls up, exactly as a wheel-up does. Coordinates are unused by our
+            // scroll handling, which branches on screen state instead.
+            mouseScrolled(0.0, 0.0, 0.0, if (deflect < 0) 1.0 else -1.0)
+        }
+        stickHeld++
+    }
+
+    /** One selection step per press, repeating on a short beat while held. 0 when this tick moves nothing. */
+    private fun verticalStep(): Int {
+        val direction = when {
+            ShipGamepad.dpadUp() -> -1
+            ShipGamepad.dpadDown() -> 1
+            else -> {
+                padVertHeld = 0
+                return 0
+            }
+        }
+        if (ShipGamepad.dpadUpPressed() || ShipGamepad.dpadDownPressed()) padVertHeld = 0
+        val fires = padVertHeld == 0 ||
+            (padVertHeld >= PAD_REPEAT_DELAY && (padVertHeld - PAD_REPEAT_DELAY) % PAD_REPEAT_EVERY == 0)
+        padVertHeld++
+        return if (fires) direction else 0
+    }
+
+    private fun padNavigate() {
+        // The selection is meaningful only within one view; entering or leaving the card or the dropdown
+        // drops it rather than letting a row index masquerade as a button index.
+        val context = when {
+            stationMenuOpen -> 2
+            openCard != null -> 1
+            else -> 0
+        }
+        if (context != padContext) {
+            padContext = context
+            padSel = -1
+        }
+
+        val step = verticalStep()
+        val choose = ShipGamepad.dpadRightPressed()
+        val back = ShipGamepad.dpadLeftPressed()
+        if (step == 0 && !choose && !back) return
+
+        when (context) {
+            2 -> padMenu(step, choose, back)
+            1 -> padCard(step, choose, back)
+            else -> padRoster(step, choose)
+        }
+    }
+
+    private fun padRoster(step: Int, choose: Boolean) {
+        val manned = snapshot.rows.map { it.slot }.sorted()
+        if (manned.isEmpty()) return
+        if (step != 0) {
+            val current = manned.indexOf(padSel)
+            padSel = when {
+                padSel < 0 -> if (step > 0) manned.first() else manned.last()
+                current < 0 -> manned.first()
+                else -> manned[(current + step).coerceIn(0, manned.size - 1)]
+            }
+            // The selection drags the list with it, the way keyboard focus is expected to.
+            if (padSel < scroll) scroll = padSel
+            if (padSel >= scroll + VISIBLE_ROWS) scroll = padSel - VISIBLE_ROWS + 1
+            clampScroll()
+        }
+        if (choose && padSel >= 0) {
+            snapshot.rows.firstOrNull { it.slot == padSel }?.let { openCard(it) }
+        }
+    }
+
+    private fun padCard(step: Int, choose: Boolean, back: Boolean) {
+        if (back) {
+            closeCard()
+            return
+        }
+        val card = detail ?: return
+        val hasStation = card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()
+        val last = if (hasStation) 1 else 0
+        if (step != 0) padSel = (if (padSel < 0) 0 else padSel + step).coerceIn(0, last)
+        if (choose) {
+            when {
+                // The first press only takes the selection -- an unaimed "choose" must not re-assign a duty.
+                padSel < 0 -> padSel = 0
+                padSel == 0 -> cycleDuty()
+                else -> {
+                    stationMenuOpen = true
+                    stationMenuScroll = 0
+                }
+            }
+        }
+    }
+
+    private fun padMenu(step: Int, choose: Boolean, back: Boolean) {
+        if (back) {
+            stationMenuOpen = false
+            return
+        }
+        val card = detail ?: return
+        // Only the entries a click would answer: "--" and the free guns. Manned guns stay visible to the
+        // eye but are stepped over, exactly as they refuse the mouse.
+        val selectable = (0 until stationMenuEntries(card)).filter { index ->
+            index == 0 || card.gunOptions.getOrNull(index - 1)?.occupant?.isEmpty() == true
+        }
+        if (selectable.isEmpty()) return
+        if (step != 0) {
+            val current = selectable.indexOf(padSel)
+            padSel = when {
+                padSel < 0 -> if (step > 0) selectable.first() else selectable.last()
+                current < 0 -> selectable.first()
+                else -> selectable[(current + step).coerceIn(0, selectable.size - 1)]
+            }
+            if (padSel < stationMenuScroll) stationMenuScroll = padSel
+            if (padSel >= stationMenuScroll + STATION_MENU_ROWS) stationMenuScroll = padSel - STATION_MENU_ROWS + 1
+        }
+        if (choose && padSel >= 0) {
+            if (padSel == 0) {
+                detail = card.copy(stationLabel = "")
+                stationMenuOpen = false
+            } else {
+                card.gunOptions.getOrNull(padSel - 1)?.takeIf { it.occupant.isEmpty() }?.let { option ->
+                    detail = card.copy(stationLabel = option.label)
+                    stationMenuOpen = false
+                }
+            }
+        }
+    }
+
+    // endregion
+
     override fun keyPressed(keyEvent: KeyEvent): Boolean {
         // Enter commits a rename rather than closing the screen, which is what a focused text field implies.
         if (keyEvent.key() == GLFW.GLFW_KEY_ENTER || keyEvent.key() == GLFW.GLFW_KEY_KP_ENTER) {
@@ -427,7 +590,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val locked = berth >= snapshot.berths
         val row = if (locked) null else snapshot.rows.firstOrNull { it.slot == berth }
         val hovered = openCard == null && row != null &&
-            mouseX >= left && mouseX <= left + PANEL_W && mouseY >= y && mouseY < y + ROW_H
+            (
+                (mouseX >= left && mouseX <= left + PANEL_W && mouseY >= y && mouseY < y + ROW_H) ||
+                    berth == padSel
+                )
 
         guiGraphics.fill(
             left + 4, y + 1, left + PANEL_W - 4, y + ROW_H - 1,
@@ -647,7 +813,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, ASSIGNMENT_TEXT, x, footY + 4, DIM)
 
         val bx = dutyButtonX()
-        val hovered = mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= footY && mouseY < footY + DUTY_BTN_H
+        val hovered = (mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= footY && mouseY < footY + DUTY_BTN_H) ||
+            (!stationMenuOpen && padSel == 0)
         guiGraphics.fill(bx, footY, bx + DUTY_BTN_W, footY + DUTY_BTN_H, if (hovered) ACCENT else ROW_LOCKED)
         val label = dutyName(card.duty)
         guiGraphics.drawString(
@@ -662,7 +829,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             val sy = stationRowY()
             small(guiGraphics, STATION_TEXT, x, sy + 4, DIM)
             val stationHovered =
-                mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= sy && mouseY < sy + DUTY_BTN_H
+                (mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= sy && mouseY < sy + DUTY_BTN_H) ||
+                    (!stationMenuOpen && padSel == 1)
             guiGraphics.fill(bx, sy, bx + DUTY_BTN_W, sy + DUTY_BTN_H, if (stationHovered) ACCENT else ROW_LOCKED)
             val stationName = if (card.stationLabel.isEmpty()) UNSTATIONED_TEXT else Component.literal(card.stationLabel)
             guiGraphics.drawString(
@@ -752,8 +920,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             val current = if (option == null) card.stationLabel.isEmpty() else label == card.stationLabel
 
             val hovered = selectable &&
-                mouseX >= x && mouseX < x + STATION_MENU_W &&
-                mouseY >= rowY && mouseY < rowY + STATION_MENU_ROW_H
+                (
+                    (mouseX >= x && mouseX < x + STATION_MENU_W && mouseY >= rowY && mouseY < rowY + STATION_MENU_ROW_H) ||
+                        index == padSel
+                    )
             if (hovered) guiGraphics.fill(x, rowY, x + STATION_MENU_W, rowY + STATION_MENU_ROW_H, ACCENT)
 
             val nameText = if (option == null) UNSTATIONED_TEXT else Component.literal(label)
@@ -945,6 +1115,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STATION_MENU_W = 110
         private const val STATION_MENU_ROW_H = 12
         private const val STATION_MENU_ROWS = 6
+
+        /** Ticks a held D-pad direction waits before repeating, and the gap between repeats after that. */
+        private const val PAD_REPEAT_DELAY = 6
+        private const val PAD_REPEAT_EVERY = 3
+
+        /** Right-stick scroll: deflection under this is rest, and one notch scrolls every few ticks held. */
+        private const val STICK_DEADZONE = 0.4f
+        private const val STICK_EVERY = 3
 
         /**
          * Pixels reserved at the right of the header for the berth counter.

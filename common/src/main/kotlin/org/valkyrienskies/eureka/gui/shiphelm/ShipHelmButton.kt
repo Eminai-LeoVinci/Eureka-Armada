@@ -28,10 +28,12 @@ class ShipHelmButton(
     override fun renderContents(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int, partialTicks: Float) {
         if (!isHovered) isPressed = false
 
+        // Focus lights the button exactly as hover does: it is how a controller's D-pad selection shows
+        // itself on screens that walk the buttons by focus rather than by moving a pointer.
         val fill = when {
             !active -> DIM_BG
             isPressed -> BG_PRESSED
-            isHovered -> BG_HOVER
+            isHovered || isFocused -> BG_HOVER
             else -> BG
         }
         val border = if (active) BORDER else DIM_BORDER

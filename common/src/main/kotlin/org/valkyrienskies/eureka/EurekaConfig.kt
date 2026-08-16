@@ -193,6 +193,17 @@ object EurekaConfig {
                 "you hold, and the action fires when it closes. Default 2.0."
         )
         var pathHoldSeconds = 2.0
+
+        @JsonSchema(
+            description = "Whether the ship hotkeys (record, fly route, show routes, follow, crew) require " +
+                "Sneak to be held. Keep it on for a keyboard -- the Sneak chord is what stops R, P, H, F and " +
+                "C firing ship actions during ordinary play. Turn it OFF for a controller profile: bind the " +
+                "actions to spare buttons in your controller mod and each fires on a plain press, no " +
+                "crouch-chord needed. With it off, pressing the bare KEYBOARD keys fires them too, so this " +
+                "belongs on the machine the controller is plugged into. Broadside never needed Sneak either " +
+                "way. Default true."
+        )
+        var hotkeysNeedSneak = true
     }
 
     /**

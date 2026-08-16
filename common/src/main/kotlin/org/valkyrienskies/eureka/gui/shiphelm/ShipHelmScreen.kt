@@ -422,6 +422,25 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     private fun pctBoxWhich(box: EditBox): Int = if (box === assemblerFloaterBox) 0 else 1
 
+    /**
+     * The bumpers walk the category tab strip, exactly as clicking the tabs does -- a view change on this
+     * client and nothing else. Read straight off the hardware (VS2's ShipGamepad), because a controller
+     * mod's screen handling never reaches a custom screen. Submarines join the cycle when their tab is
+     * live.
+     */
+    override fun containerTick() {
+        super.containerTick()
+        val step = when {
+            org.valkyrienskies.mod.client.ShipGamepad.bumperRightPressed() -> 1
+            org.valkyrienskies.mod.client.ShipGamepad.bumperLeftPressed() -> -1
+            else -> return
+        }
+        val tabs = mutableListOf(ControlProfile.BOAT, ControlProfile.AIRSHIP)
+        if (submarineTab.active) tabs.add(ControlProfile.SUBMARINE)
+        val index = tabs.indexOf(viewedTab).coerceAtLeast(0)
+        viewedTab = tabs[(index + step + tabs.size) % tabs.size]
+    }
+
     private fun updateButtons() {
         val newPos = (Minecraft.getInstance().hitResult as? BlockHitResult)?.blockPos
         if (newPos != null) pos = newPos

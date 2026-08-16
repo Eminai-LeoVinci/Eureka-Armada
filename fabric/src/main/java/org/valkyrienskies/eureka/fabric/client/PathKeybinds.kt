@@ -7,6 +7,7 @@ import com.mojang.blaze3d.platform.InputConstants
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFW
@@ -15,6 +16,7 @@ import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.path.ClientPathState
+import org.valkyrienskies.mod.client.ShipGamepad
 import kotlin.math.max
 
 /**
@@ -39,15 +41,31 @@ import kotlin.math.max
  * | SHIFT+P | fly the line / pause / resume | release the ship from its route |
  * | CTRL+SHIFT+P | replay the recording / pause / resume | release the ship from its route |
  *
- * ## CTRL is a modifier, not a fifth binding
- * Deliberately. A new [KeyMapping] only reaches a profile whose `options.txt` has never seen it, so shipping
- * one means every existing install has to be told to go and bind it by hand. A modifier on a key that is
- * already bound arrives working. It also keeps the pair honest: the two are the same gesture on the same key
- * asking for two modes of the same thing, and the hold means "let go" for both.
+ * ## CTRL is a modifier, not a fifth binding -- but a controller gets one anyway
+ * A new [KeyMapping] only reaches a profile whose `options.txt` has never seen it, so shipping one means every
+ * existing install has to be told to go and bind it by hand. A modifier on a key that is already bound arrives
+ * working. It also keeps the pair honest: the two are the same gesture on the same key asking for two modes of
+ * the same thing, and the hold means "let go" for both.
+ *
+ * The exception is [replay], UNBOUND by default, which is CTRL for anyone who has no CTRL: a raw window scan
+ * can never see a gamepad, so a controller player binds this and holds it with Play. Being unbound, it costs
+ * existing keyboard installs nothing -- which is the whole objection to a fifth binding answered.
  *
  * This is what freed up SHIFT+S and SHIFT+C, and getting rid of `S` in particular was worth doing on its own:
  * it is vanilla's walk-backwards key, and sneak-walking backwards along a deck near a ledge is exactly what
  * people do, so a stop key living there was one slip away from firing every time.
+ *
+ * ## Controllers
+ * Four things make the whole file gamepad-clean. Sneak is taken from the binding, the shift flag, or the
+ * crouch POSE ([sneakHeld]) -- the last is true whenever the player is visibly crouched, however a controller
+ * mod expressed it. Crouched and on foot, the D-pad is read straight off the hardware (VS2's `ShipGamepad`,
+ * no keybind delivery required): D-Left crew, D-Up follow, D-Down broadside. While crouching, a press that
+ * reaches one of our bindings by ANY route CLAIMS its whole button (the crouch layer in
+ * [suppressVanillaCollisions]): a pad button usually carries a vanilla action of its own, both halves arrive
+ * on one physical press, and crouch is what says which one was meant. And for pads driving the actions
+ * through bound buttons instead, `hotkeysNeedSneak` (client config) drops the Sneak requirement entirely --
+ * though without crouch armed, a double-bound button fires BOTH its meanings, so that mode wants the ship
+ * actions on buttons of their own.
  *
  * The destructive half is never something you can arrive at by accident, because a hold is not a thing hands do
  * by mistake, and [PathHud] draws a ring round the crosshair while it counts so it is never a surprise either.
@@ -72,6 +90,7 @@ object PathKeybinds {
     private lateinit var follow: KeyMapping
     private lateinit var crew: KeyMapping
     private lateinit var broadside: KeyMapping
+    private lateinit var replay: KeyMapping
 
     /**
      * One key's worth of "is this a tap or a hold?".
@@ -118,6 +137,8 @@ object PathKeybinds {
         // `G` for guns, and the ONLY binding here with no sneak on it -- see the note on `tick`. Unbound in
         // vanilla, and it goes through the same collision scan as the rest if anything else takes it.
         broadside = bind("broadside", GLFW.GLFW_KEY_G)
+        // The controller's CTRL, unbound by default -- see the class note. Held with Play, never pressed alone.
+        replay = bind("replay", GLFW.GLFW_KEY_UNKNOWN)
 
         recordGesture = Gesture(record)
         playGesture = Gesture(play)
@@ -142,20 +163,102 @@ object PathKeybinds {
      * Only CLICKS are drained. Movement and other held keys read `isDown`, which is untouched.
      */
     private fun suppressVanillaCollisions(client: Minecraft) {
-        if (client.player == null || client.screen != null) return
-        if (!client.options.keyShift.isDown) return
+        if (client.player == null) return
+
+        // A controller mod's D-pad actions are NATIVE -- chat on up, a radial on right -- not keybinds,
+        // so no click drain can reach them, and each opens a SCREEN over the very combo being pressed:
+        // the layer below goes quiet the moment any screen is up, so crouch+D-Up became "chat opens,
+        // follow dies". Close what the pad's own press opened (vanilla chat or anything of the
+        // controller mod's) and carry on with the tick. The few-tick grace catches taps, whose screens
+        // arrive after the button is already back up -- and the pad reads below consume LATCHED presses,
+        // so a press that spent a few frames hidden under such a screen still lands when it clears.
+        if (padGuard > 0) padGuard--
+        if (ShipGamepad.dpadUp() || ShipGamepad.dpadDown() ||
+            ShipGamepad.dpadLeft() || ShipGamepad.dpadRight()
+        ) {
+            padGuard = 5
+        }
+        val screen = client.screen
+        if (screen != null) {
+            if (padGuard > 0 && sneakHeld(client) &&
+                (screen is ChatScreen || screen.javaClass.name.startsWith("dev.isxander"))
+            ) {
+                client.setScreen(null)
+            }
+            if (client.screen != null) return
+        }
+        if (!sneakHeld(client)) return
 
         for (mapping in client.options.keyMappings) {
             if (mapping === record || mapping === play || mapping === show ||
-                mapping === follow || mapping === crew || mapping === broadside
+                mapping === follow || mapping === crew || mapping === broadside || mapping === replay
             ) continue
+            // An unbound mapping can never be pressed, but it WOULD `same` every other unbound one -- and
+            // `replay` ships unbound -- so skip them before the scan rather than trusting the match.
+            if (mapping.isUnbound) continue
             // `same` compares the bound key, so this re-evaluates after any rebind with no state to keep.
             if (ours.none { mapping.same(it) }) continue
             while (mapping.consumeClick()) Unit
         }
+
+        // The crouch layer, for controllers. A pad button often carries a vanilla action of its own -- D-pad
+        // Left ships meaning Pick Block -- and a controller mod pressing both halves of a double-bound button
+        // on one physical press is invisible to the key scan above, because the two are bound to different
+        // KEYS. So while crouching, a press that reaches one of our bindings claims the WHOLE button: the ship
+        // action is consumed here at the head of the tick (parked in a pending flag for `tick` to act on), and
+        // every other click still queued this tick -- vanilla's or another mod's -- is taken to be the other
+        // half of that button and drained before handleKeybinds can fire it. Crouching is what arms the layer,
+        // which is exactly the chord it has always meant: crouch says "the next press is for the ship".
+        //
+        // The D-pad half reads the hardware itself (VS2's ShipGamepad) rather than any keybind, so it works
+        // whether or not a controller mod deigns to deliver emulated presses: crouched and on foot, D-Left is
+        // the crew, D-Up follows the ship you're looking at, D-Down orders the broadside. Standing only --
+        // while mounted the wheel owns the D-pad (zoom and altitude, handled VS2-side), and a seated player
+        // cannot crouch anyway. The keybind route feeds the same pending flags, so a press that arrives by
+        // BOTH routes (pad read + a delivered keybind) is still exactly one action.
+        if (client.player?.vehicle == null) {
+            // Consume-latched reads, not edges: a press whose edge tick was spent hidden under the
+            // controller mod's popup is still here to be taken once the popup is gone.
+            if (ShipGamepad.consumeLeftPress()) pendingCrew = true
+            if (ShipGamepad.consumeUpPress()) pendingFollow = true
+            if (ShipGamepad.consumeDownPress()) pendingBroadside = true
+        }
+        while (follow.consumeClick()) pendingFollow = true
+        while (crew.consumeClick()) pendingCrew = true
+        while (show.consumeClick()) pendingShow = true
+        val claimed = pendingFollow || pendingCrew || pendingShow || pendingBroadside ||
+            record.isDown || play.isDown
+        if (!claimed) return
+        for (mapping in client.options.keyMappings) {
+            if (ours.any { it === mapping }) continue
+            while (mapping.consumeClick()) Unit
+        }
     }
 
-    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow, crew, broadside) }
+    /**
+     * Ship actions claimed at the head of the tick by the crouch layer, acted on at the tail. Flags rather
+     * than acting immediately, so both routes into an action -- the layer and the plain end-of-tick read --
+     * land in one place, in the same order, once.
+     */
+    private var pendingFollow = false
+    private var pendingCrew = false
+    private var pendingShow = false
+    private var pendingBroadside = false
+
+    /** Ticks since the D-pad was last held -- the window in which a popup appearing is the pad's own echo. */
+    private var padGuard = 0
+
+    private val ours: List<KeyMapping> by lazy { listOf(record, play, show, follow, crew, broadside, replay) }
+
+    /**
+     * Whether sneak is held, by any device. The binding is what a keyboard physically holds; the shift flag
+     * is what most input paths set; the crouch POSE is the one read that is true whenever the player is
+     * visibly crouched, however a controller mod chose to express it -- toggle-sneak included, where no
+     * input is held and (depending on the mod) no flag may be either.
+     */
+    private fun sneakHeld(client: Minecraft): Boolean =
+        client.options.keyShift.isDown || client.player?.isShiftKeyDown == true ||
+            client.player?.isCrouching == true
 
     /** 1.21.11: KeyMapping's 3rd arg is a Category keyed by Identifier, registered once and shared. */
     private val category: KeyMapping.Category by lazy { KeyMapping.Category.register(CATEGORY_ID) }
@@ -185,10 +288,10 @@ object PathKeybinds {
             PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_BROADSIDE)
         }
 
-        // Every path hotkey is a SHIFT combination, so nothing here can fire during ordinary play. Read through
-        // the sneak BINDING rather than the raw shift key, so a player who has rebound sneak gets hotkeys that
-        // still match the key they actually think of as shift.
-        val sneaking = client.options.keyShift.isDown
+        // Every path hotkey is a SHIFT combination, so nothing here can fire during ordinary play -- unless
+        // this client has said so: a controller profile turns hotkeysNeedSneak off and binds the actions to
+        // buttons of their own, where the chord was the only thing the gate was buying.
+        val sneaking = sneakHeld(client) || !EurekaConfig.CLIENT.hotkeysNeedSneak
 
         // The two gestures run whether or not sneak is still down, because letting go of shift first is a
         // perfectly ordinary way to end a chord and the tap has to survive it. `sneaking` only gates whether
@@ -220,23 +323,39 @@ object PathKeybinds {
         // made before sneak went down would still be sitting there the next time something did read it.
         drainClicks(record, play)
 
-        if (!sneaking) {
+        // Claims made by the crouch layer at the head of the tick land regardless of whether sneak survived
+        // to the tail -- letting go of crouch a fraction after the button is an ordinary way to end a chord,
+        // and a claim already SPENT the press, so dropping it here would eat the input outright.
+        var doFollow = pendingFollow
+        var doCrew = pendingCrew
+        var doShow = pendingShow
+        val doBroadside = pendingBroadside
+        pendingFollow = false
+        pendingCrew = false
+        pendingShow = false
+        pendingBroadside = false
+
+        if (sneaking) {
+            if (follow.consumeClick()) doFollow = true
+            if (crew.consumeClick()) doCrew = true
+            if (show.consumeClick()) doShow = true
+        } else if (!doFollow && !doCrew && !doShow && !doBroadside) {
             drainClicks(show, follow, crew)
             return
         }
 
-        // A single press, not a hold: it needs the crosshair on a target, and asking someone to hold a key steady
-        // on a ship that is moving relative to them would be the fiddliest part of the whole feature. It is also
-        // self-undoing -- pressing it again on the ship you are already chasing breaks off -- so a misfire costs
-        // one more press rather than needing a different key to put right.
-        if (follow.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
-
-        // Also a single press, for the same reasons as follow: it wants the crosshair on a person, and signing
-        // someone on is undone by pressing it at them again. The server decides whether this press meant
-        // "recruit" or "show me the roster" -- it is the only side that can see what the crosshair is on.
-        if (crew.consumeClick()) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_CREW)
-
-        if (show.consumeClick()) toggleShowAll(client)
+        // Single presses, not holds: each needs the crosshair on a target, and asking someone to hold a key
+        // steady on a ship that is moving relative to them would be the fiddliest part of the whole feature.
+        // Each is also self-undoing -- following the ship you already chase breaks off, signing on someone is
+        // undone by pressing it at them again -- so a misfire costs one more press, not a different key. The
+        // server decides what a crew press meant ("recruit" or "show me the roster"): it is the only side that
+        // can see what the crosshair is on.
+        if (doFollow) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
+        if (doCrew) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_CREW)
+        if (doShow) toggleShowAll(client)
+        // The pad's broadside, claimed under crouch on deck: the same order the G key gives, and the server
+        // applies the same refusals (aboard, guns, gunners).
+        if (doBroadside) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_BROADSIDE)
     }
 
     /**
@@ -283,14 +402,16 @@ object PathKeybinds {
     }
 
     /**
-     * Whether either CTRL key is down.
+     * Whether the replay modifier is held: either CTRL key, or the bindable [replay] stand-in for pads.
      *
-     * Read from the window rather than through a [KeyMapping], because vanilla has no binding for it, and not
-     * through `Screen.hasControlDown` because 1.21.11 removed that alongside `hasShiftDown` (see
-     * `PATH_RECORDING_NOTES.md`). `InputConstants.isKeyDown` is what those helpers called anyway.
+     * CTRL is read from the window rather than through a [KeyMapping], because vanilla has no binding for it,
+     * and not through `Screen.hasControlDown` because 1.21.11 removed that alongside `hasShiftDown` (see
+     * `PATH_RECORDING_NOTES.md`). `InputConstants.isKeyDown` is what those helpers called anyway -- and it is
+     * also why CTRL alone could never serve a controller, which no window scan can see.
      */
     private fun isControlDown(client: Minecraft): Boolean =
-        InputConstants.isKeyDown(client.window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
+        replay.isDown ||
+            InputConstants.isKeyDown(client.window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
             InputConstants.isKeyDown(client.window, GLFW.GLFW_KEY_RIGHT_CONTROL)
 
     private fun reset() {
@@ -300,6 +421,9 @@ object PathKeybinds {
         playGesture.held = 0
         playGesture.fired = false
         playGesture.ctrl = false
+        pendingFollow = false
+        pendingCrew = false
+        pendingShow = false
         PathHud.setHoldProgress(0.0f)
     }
 
@@ -356,4 +480,5 @@ object PathKeybinds {
     private fun drainClicks(vararg mappings: KeyMapping) {
         for (mapping in mappings) while (mapping.consumeClick()) Unit
     }
+
 }
