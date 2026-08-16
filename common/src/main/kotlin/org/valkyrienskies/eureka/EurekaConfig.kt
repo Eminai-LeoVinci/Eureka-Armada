@@ -1160,6 +1160,36 @@ object EurekaConfig {
         )
         var shipFireBurnSecondsMax = 20.0
 
+        // The fire party (see the crew package's FireBrigade). Note the whole watch only sees fires while
+        // shipFireSpreads is OFF -- the containment bookkeeping it reads from is what tracks them -- so with
+        // vanilla spreading on, the crew stand by while the ship burns, which is arguably also realistic.
+
+        @JsonSchema(
+            description = "How far along the deck, in blocks of horizontal distance, a firefighter notices a " +
+                "fire from wherever they happen to be standing. Default 28.0."
+        )
+        var fireWatchHorizontalBlocks = 28.0
+
+        @JsonSchema(
+            description = "How far above or below them, in blocks, a firefighter notices a fire. Deliberately " +
+                "much shorter than the horizontal reach so a flame at the masthead does not send the whole " +
+                "party up the rigging -- burning sails are nobody's job. Default 12.0."
+        )
+        var fireWatchVerticalBlocks = 12.0
+
+        @JsonSchema(
+            description = "Within this many blocks of the flame, in any direction, a firefighter is close " +
+                "enough to put it out -- a fire one deck below their feet is doused through the planks. " +
+                "Default 4.0."
+        )
+        var fireWatchDouseBlocks = 4.0
+
+        @JsonSchema(
+            description = "Seconds a firefighter pauses after dousing a fire before making for the next one. " +
+                "Default 2.0."
+        )
+        var fireWatchRestSeconds = 2.0
+
         @JsonSchema(
             description = "How many sets of ship plans a player can keep with shipwrights before buying more. " +
                 "Plans are held per player and readable at every bench in the world, not per bench. Default 3."

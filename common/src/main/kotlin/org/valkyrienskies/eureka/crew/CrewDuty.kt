@@ -27,7 +27,7 @@ enum class CrewDuty(val id: String) {
     /** Mans one gun. Fires it when the ship is ordered to fire, and only then -- see `CrewDuties.broadside`. */
     GUNNER("gunner"),
 
-    /** Watches for fire and puts it out. See `CrewDuties.fireWatch`. */
+    /** Watches for fire and runs to put it out. See `FireBrigade`. */
     FIREFIGHTER("firefighter");
 
     /** The next duty round the cycle, which is how the manifest's assignment button steps through them. */
