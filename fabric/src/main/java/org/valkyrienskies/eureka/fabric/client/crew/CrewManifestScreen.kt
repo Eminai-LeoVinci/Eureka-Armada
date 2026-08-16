@@ -55,6 +55,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var openCard: UUID? = null
     private var detail: CrewManifest.Detail? = null
 
+    /** Whether the Station dropdown is unfolded over the card. */
+    private var stationMenuOpen = false
+
+    /** First visible entry of the dropdown when it holds more guns than fit. */
+    private var stationMenuScroll = 0
+
+    /**
+     * The station label the SERVER last confirmed for the open card. What the dropdown picks is provisional
+     * -- held only in [detail] -- until the card is left (Back, or closing the screen), at which point
+     * [commitPendingStation] sends the difference. That is the lock-in gesture: choose freely, and the order
+     * goes out when you step away from the card.
+     */
+    private var stationBaseline: String? = null
+
     /** Kept across widget rebuilds so a refresh mid-type does not swallow what has been typed. */
     private var nameValue = ""
     private var nameBox: EditBox? = null
@@ -154,11 +168,37 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun closeCard() {
+        // Leaving the card is the lock-in: whatever the dropdown settled on goes to the server now.
+        commitPendingStation()
         openCard = null
         detail = null
         nameBox = null
         dismissArmed = false
+        stationMenuOpen = false
+        stationBaseline = null
         rebuildWidgets()
+    }
+
+    /**
+     * Send the station the dropdown settled on, if it differs from what the server last confirmed.
+     *
+     * One send per card visit, at lock-in -- picking three guns in a row costs nothing until the player backs
+     * out. Idempotent: the baseline is advanced immediately, so the screen-close path and the Back path
+     * cannot double-send.
+     */
+    private fun commitPendingStation() {
+        val card = detail ?: return
+        val baseline = stationBaseline ?: return
+        if (card.duty == CrewDuty.GUNNER && card.stationLabel != baseline) {
+            PathNetworkingFabric.sendCrewStation(snapshot.helm, card.villager, card.stationLabel)
+        }
+        stationBaseline = card.stationLabel
+    }
+
+    /** Closing the whole screen (ESC, E, another screen) locks in the same way backing out does. */
+    override fun removed() {
+        commitPendingStation()
+        super.removed()
     }
 
     /**
@@ -229,6 +269,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         detail = next
         nameValue = next.name
         nameBox?.value = next.name
+        // The server's word on the station is the new baseline, and any half-made dropdown choice yields to
+        // it -- a fresh card arriving mid-pick means something real changed underneath the menu.
+        stationBaseline = next.stationLabel
+        stationMenuOpen = false
     }
 
     // endregion
@@ -241,14 +285,29 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val mx = mouseButtonEvent.x.toInt()
         val my = mouseButtonEvent.y.toInt()
 
-        // The card's own hand-drawn control, tested before the card swallows the click. Only live once the
+        // The card's own hand-drawn controls, tested before the card swallows the click. Only live once the
         // detail has arrived -- there is no duty to cycle while the card still says "Reading the articles".
         if (openCard != null) {
-            if (detail != null) {
+            val card = detail
+            if (card != null) {
+                // The dropdown, while open, owns the click entirely: an entry may select, anywhere else
+                // folds it away, and nothing underneath it may fire through it.
+                if (stationMenuOpen) {
+                    handleStationMenuClick(card, mx, my)
+                    return true
+                }
                 val bx = dutyButtonX()
                 val by = dutyRowY()
                 if (mx >= bx && mx < bx + DUTY_BTN_W && my >= by && my < by + DUTY_BTN_H) {
                     cycleDuty()
+                    return true
+                }
+                val sy = stationRowY()
+                if (card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty() &&
+                    mx >= bx && mx < bx + DUTY_BTN_W && my >= sy && my < sy + DUTY_BTN_H
+                ) {
+                    stationMenuOpen = true
+                    stationMenuScroll = 0
                     return true
                 }
             }
@@ -278,7 +337,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
-        if (openCard != null) return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
+        if (openCard != null) {
+            val card = detail
+            if (stationMenuOpen && card != null) {
+                val max = (stationMenuEntries(card) - STATION_MENU_ROWS).coerceAtLeast(0)
+                stationMenuScroll = (stationMenuScroll - scrollY.toInt()).coerceIn(0, max)
+                return true
+            }
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
+        }
         scroll -= scrollY.toInt()
         clampScroll()
         return true
@@ -561,6 +628,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         drawDuties(guiGraphics, card, mouseX, mouseY)
+        if (stationMenuOpen) drawStationMenu(guiGraphics, card, mouseX, mouseY)
     }
 
     /**
@@ -588,22 +656,34 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             if (hovered) 0xFFFFFFFF.toInt() else TEXT, false
         )
 
-        small(guiGraphics, STATION_TEXT, x, footY + DUTY_BTN_H + 6, DIM)
-        val station = stationLine(card)
-        small(
-            guiGraphics, station,
-            cardX() + CARD_W - CARD_PAD - (font.width(station) * SMALL).toInt(), footY + DUTY_BTN_H + 6,
-            SUBTLE
-        )
+        if (card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()) {
+            // A gunner's Station line is a CONTROL: the button unfolds the gun list, and whatever it settles
+            // on is locked in when the card is left. Same visual shape as the duty button above it.
+            val sy = stationRowY()
+            small(guiGraphics, STATION_TEXT, x, sy + 4, DIM)
+            val stationHovered =
+                mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= sy && mouseY < sy + DUTY_BTN_H
+            guiGraphics.fill(bx, sy, bx + DUTY_BTN_W, sy + DUTY_BTN_H, if (stationHovered) ACCENT else ROW_LOCKED)
+            val stationName = if (card.stationLabel.isEmpty()) UNSTATIONED_TEXT else Component.literal(card.stationLabel)
+            guiGraphics.drawString(
+                font, stationName,
+                bx + (DUTY_BTN_W - font.width(stationName)) / 2, sy + 3,
+                if (stationHovered) 0xFFFFFFFF.toInt() else TEXT, false
+            )
+        } else {
+            small(guiGraphics, STATION_TEXT, x, footY + DUTY_BTN_H + 6, DIM)
+            val station = stationLine(card)
+            small(
+                guiGraphics, station,
+                cardX() + CARD_W - CARD_PAD - (font.width(station) * SMALL).toInt(), footY + DUTY_BTN_H + 6,
+                SUBTLE
+            )
+        }
     }
 
     /**
-     * What this crew member's duty amounts to aboard THIS ship.
-     *
-     * Deliberately the vessel's tally rather than a particular gun. Guns have no bow-relative numbers yet, so
-     * naming one would mean inventing an order and then having to change it -- whereas "four of six guns
-     * manned" is the number a captain acts on, and it answers both questions at once: buy another berth, or
-     * bolt on another cannon.
+     * What this crew member's duty amounts to aboard THIS ship, when there is no station to offer them --
+     * the fire watch's tally, an off-duty note, or a gun deck with no guns.
      */
     private fun stationLine(card: CrewManifest.Detail): Component = when (card.duty) {
         CrewDuty.GUNNER ->
@@ -620,6 +700,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** Top of the assignment row. Everything in the card's footer is measured from here. */
     private fun dutyRowY(): Int = cardY() + CARD_H - CARD_PAD - BACK_BTN_H - 44
 
+    /** Top of the station button, sitting under the duty button with the same breathing room as above it. */
+    private fun stationRowY(): Int = dutyRowY() + DUTY_BTN_H + 6
+
     private fun dutyButtonX(): Int = cardX() + CARD_W - CARD_PAD - DUTY_BTN_W
 
     /**
@@ -635,6 +718,87 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         detail = card.copy(duty = next)
         PathNetworkingFabric.sendCrewDuty(snapshot.helm, card.villager, next)
     }
+
+    // region station dropdown
+
+    private fun stationMenuX(): Int = cardX() + CARD_W - CARD_PAD - STATION_MENU_W
+    private fun stationMenuY(): Int = stationRowY() + DUTY_BTN_H
+    private fun stationMenuEntries(card: CrewManifest.Detail): Int = card.gunOptions.size + 1
+    private fun stationMenuVisible(card: CrewManifest.Detail): Int =
+        minOf(stationMenuEntries(card), STATION_MENU_ROWS)
+
+    /**
+     * The gun list, unfolded under the Station button: "—" to stand down, then every gun in reading order.
+     * Manned guns are listed rather than hidden -- a captain deciding where to put somebody wants to see the
+     * whole battery and who holds what -- but only free ones (and "—") answer a click. Scrolls when the
+     * battery outgrows it. The choice made here is provisional until the card is left; see [stationBaseline].
+     */
+    private fun drawStationMenu(guiGraphics: GuiGraphics, card: CrewManifest.Detail, mouseX: Int, mouseY: Int) {
+        val x = stationMenuX()
+        val y = stationMenuY()
+        val visible = stationMenuVisible(card)
+        val max = (stationMenuEntries(card) - STATION_MENU_ROWS).coerceAtLeast(0)
+        stationMenuScroll = stationMenuScroll.coerceIn(0, max)
+
+        panel(guiGraphics, x - 1, y - 1, STATION_MENU_W + 2, visible * STATION_MENU_ROW_H + 2)
+
+        for (row in 0 until visible) {
+            val index = stationMenuScroll + row
+            val rowY = y + row * STATION_MENU_ROW_H
+            val option = if (index == 0) null else card.gunOptions.getOrNull(index - 1) ?: continue
+            val label = option?.label ?: ""
+            val occupant = option?.occupant ?: ""
+            val selectable = option == null || occupant.isEmpty()
+            val current = if (option == null) card.stationLabel.isEmpty() else label == card.stationLabel
+
+            val hovered = selectable &&
+                mouseX >= x && mouseX < x + STATION_MENU_W &&
+                mouseY >= rowY && mouseY < rowY + STATION_MENU_ROW_H
+            if (hovered) guiGraphics.fill(x, rowY, x + STATION_MENU_W, rowY + STATION_MENU_ROW_H, ACCENT)
+
+            val nameText = if (option == null) UNSTATIONED_TEXT else Component.literal(label)
+            val nameColor = when {
+                hovered -> 0xFFFFFFFF.toInt()
+                current -> ACCENT
+                selectable -> TEXT
+                else -> DIM
+            }
+            small(guiGraphics, nameText, x + 4, rowY + 3, nameColor)
+            if (occupant.isNotEmpty()) {
+                small(
+                    guiGraphics, Component.literal(occupant),
+                    x + STATION_MENU_W - 4 - (font.width(occupant) * SMALL).toInt(), rowY + 3, DIM
+                )
+            }
+        }
+        // More entries above or below: say so, in the quietest way that still says it.
+        if (stationMenuScroll > 0) small(guiGraphics, MORE_ABOVE, x + STATION_MENU_W - 10, y + 1, SUBTLE)
+        if (stationMenuScroll < max) {
+            small(guiGraphics, MORE_BELOW, x + STATION_MENU_W - 10, y + visible * STATION_MENU_ROW_H - 7, SUBTLE)
+        }
+    }
+
+    private fun handleStationMenuClick(card: CrewManifest.Detail, mx: Int, my: Int) {
+        val x = stationMenuX()
+        val y = stationMenuY()
+        val visible = stationMenuVisible(card)
+        if (mx < x || mx >= x + STATION_MENU_W || my < y || my >= y + visible * STATION_MENU_ROW_H) {
+            stationMenuOpen = false
+            return
+        }
+        val index = stationMenuScroll + (my - y) / STATION_MENU_ROW_H
+        if (index == 0) {
+            detail = card.copy(stationLabel = "")
+            stationMenuOpen = false
+            return
+        }
+        val option = card.gunOptions.getOrNull(index - 1) ?: return
+        if (option.occupant.isNotEmpty()) return // manned by somebody else; the menu stays open
+        detail = card.copy(stationLabel = option.label)
+        stationMenuOpen = false
+    }
+
+    // endregion
 
     private fun drawOffer(
         guiGraphics: GuiGraphics, x: Int, y: Int, offer: CrewManifest.Offer, mouseX: Int, mouseY: Int
@@ -750,6 +914,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val STATION_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station")
         private val NO_GUNS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station_no_guns")
         private val OFF_DUTY_TEXT: Component = Component.translatable("gui.vs_eureka.crew_station_none")
+        private val UNSTATIONED_TEXT: Component = Component.translatable("gui.vs_eureka.crew_unstationed")
+        private val MORE_ABOVE: Component = Component.literal("▲")
+        private val MORE_BELOW: Component = Component.literal("▼")
         private val UNEMPLOYED_TEXT: Component = Component.translatable("entity.vs_eureka.villager.unemployed")
         private val INFO_GLYPH: Component = Component.literal("i")
         private val ARROW_TEXT: Component = Component.literal("→")
@@ -773,6 +940,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         /** Wide enough for "Firefighter", so the control does not resize as it is cycled through. */
         private const val DUTY_BTN_W = 76
         private const val DUTY_BTN_H = 14
+
+        /** The station dropdown: room for a label on the left and an occupant's name on the right. */
+        private const val STATION_MENU_W = 110
+        private const val STATION_MENU_ROW_H = 12
+        private const val STATION_MENU_ROWS = 6
 
         /**
          * Pixels reserved at the right of the header for the berth counter.

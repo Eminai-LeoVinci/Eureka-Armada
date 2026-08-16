@@ -34,6 +34,7 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
     // block entity's own delegates, because that order IS the slot index.
     private val data = blockEntity?.data?.clone() ?: KtContainerData()
     var powderChargeOrdinal by data
+    var gunLabelCode by data
 
     /** This gun's powder measure, as the client sees it. */
     val powderCharge: PowderCharge get() = PowderCharge.of(powderChargeOrdinal)

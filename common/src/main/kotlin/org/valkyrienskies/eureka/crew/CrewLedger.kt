@@ -73,7 +73,25 @@ class CrewLedger : SavedData() {
          * which also means it survives its holder walking ashore, dying and being rebuilt from a snapshot, or
          * being struck by lightning and rekeyed, none of which are decisions to stop being a gunner.
          */
-        val duty: CrewDuty = CrewDuty.NONE
+        val duty: CrewDuty = CrewDuty.NONE,
+        /**
+         * The gun this gunner is seated at: the packed SHIPYARD position of the cannon's breech, or null.
+         *
+         * A live address, valid only while that exact cannon block stands. It dies with the gun (that is the
+         * "relieved when destroyed" rule) and it dies with the ASSEMBLY -- a rebuilt ship gets fresh shipyard
+         * coordinates, which is the ship bottle's old lesson -- so anything that packs the ship up clears this
+         * and leans on [stationLabel] to find the gun again.
+         */
+        val station: Long? = null,
+        /**
+         * The gun's bow-relative label ("L2") at the moment of assignment. The durable half of the binding.
+         *
+         * Survives stand-down precisely because the position cannot: labels are re-derived from geometry, so
+         * after a disassemble/reassemble or a bottle cycle the same label finds the same gun on the new
+         * addresses and the gunner re-seats himself. Cleared only when the gunner is genuinely relieved --
+         * the gun destroyed, the duty changed, or the captain unassigning the station.
+         */
+        val stationLabel: String? = null
     )
 
     private val crews = LinkedHashMap<Key, MutableList<Berth>>()
@@ -187,9 +205,57 @@ class CrewLedger : SavedData() {
         return crews[key]?.firstOrNull { it.villager == villager }?.duty ?: CrewDuty.NONE
     }
 
-    /** Put [villager] on [duty], taking them off whatever they were doing. Silent if they are not on any crew. */
+    /**
+     * Put [villager] on [duty], taking them off whatever they were doing. Silent if they are not on any crew.
+     *
+     * Any station goes with the old duty, label included: a duty change is an order to do something ELSE, so
+     * there is no gun to remember. [GunStations] notices the cleared address on its next pass and unseats them.
+     */
     fun setDuty(villager: UUID, duty: CrewDuty) {
-        edit(villager) { it.copy(duty = duty) }
+        edit(villager) { it.copy(duty = duty, station = null, stationLabel = null) }
+    }
+
+    /** The berth [villager] holds, in full, or null. The station machinery reads bindings through this. */
+    fun berthOf(villager: UUID): Berth? {
+        val key = byVillager[villager] ?: return null
+        return crews[key]?.firstOrNull { it.villager == villager }
+    }
+
+    /** Seat [villager] at a gun: the live shipyard address and the label that outlives it. */
+    fun setStation(villager: UUID, station: Long, label: String) {
+        edit(villager) { it.copy(station = station, stationLabel = label) }
+    }
+
+    /** Relieve [villager] of their gun entirely -- destroyed, unassigned, or re-tasked. */
+    fun clearStation(villager: UUID) {
+        edit(villager) { it.copy(station = null, stationLabel = null) }
+    }
+
+    /**
+     * Drop only the live address, keeping the label, when the ship is packed up under the gunner.
+     *
+     * This is the stand-down half of the binding: the shipyard position is about to stop meaning anything,
+     * but the LABEL still names a gun on the ship that will exist again, and keeping it is what lets the
+     * gunner walk back to his own gun after the reassembly.
+     */
+    fun standDownStation(villager: UUID) {
+        edit(villager) { it.copy(station = null) }
+    }
+
+    /**
+     * Every villager on ANY crew currently bound to a station or a remembered label.
+     *
+     * The reconcile pass starts from this rather than from ships, so a gunner whose ship is unloaded costs
+     * one map read a second and a binding can never be orphaned by its ship's absence.
+     */
+    fun stationedBerths(): List<Berth> {
+        val out = ArrayList<Berth>()
+        for (berths in crews.values) {
+            for (berth in berths) {
+                if (berth.station != null || berth.stationLabel != null) out.add(berth)
+            }
+        }
+        return out
     }
 
     /** Whether [villager]'s berth is waiting for them to be rebuilt rather than found. */
@@ -370,6 +436,8 @@ class CrewLedger : SavedData() {
                 // Same treatment, and the same reasoning: most of a crew has no duty, so writing NONE would
                 // put a line in the file for every berth in the world to say nothing at all.
                 if (berth.duty != CrewDuty.NONE) member.putString(DUTY_KEY, berth.duty.id)
+                berth.station?.let { member.putLong(STATION_KEY, it) }
+                berth.stationLabel?.let { member.putString(STATION_LABEL_KEY, it) }
                 members.add(member)
             }
             entry.put(BERTHS_KEY, members)
@@ -401,6 +469,8 @@ class CrewLedger : SavedData() {
         private const val SNAPSHOT_KEY = "snapshot"
         private const val ASHORE_KEY = "ashore"
         private const val DUTY_KEY = "duty"
+        private const val STATION_KEY = "station"
+        private const val STATION_LABEL_KEY = "station_label"
         private const val TOMBSTONES_KEY = "tombstones"
 
         private val TYPE: SavedDataType<CrewLedger> = SavedDataType(
@@ -446,7 +516,9 @@ class CrewLedger : SavedData() {
                     val snapshot = member.getCompound(SNAPSHOT_KEY).orElse(null)
                     val ashore = member.getBoolean(ASHORE_KEY).orElse(false)
                     val duty = CrewDuty.byId(member.getString(DUTY_KEY).orElse(CrewDuty.NONE.id))
-                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty))
+                    val station = member.getLong(STATION_KEY).orElse(null)
+                    val stationLabel = member.getString(STATION_LABEL_KEY).orElse(null)?.ifEmpty { null }
+                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty, station, stationLabel))
                 }
                 if (berths.isEmpty()) continue
 

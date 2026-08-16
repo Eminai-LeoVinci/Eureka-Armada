@@ -74,6 +74,7 @@ object PathNetworkingFabric {
     private val CREW_RENAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_rename")
     private val CREW_DISMISS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_dismiss")
     private val CREW_DUTY_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_duty")
+    private val CREW_STATION_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_station")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
@@ -88,6 +89,7 @@ object PathNetworkingFabric {
     private val CREW_RENAME_TYPE = CustomPacketPayload.Type<CrewRenamePayload>(CREW_RENAME_RL)
     private val CREW_DISMISS_TYPE = CustomPacketPayload.Type<CrewDismissPayload>(CREW_DISMISS_RL)
     private val CREW_DUTY_TYPE = CustomPacketPayload.Type<CrewDutyPayload>(CREW_DUTY_RL)
+    private val CREW_STATION_TYPE = CustomPacketPayload.Type<CrewStationPayload>(CREW_STATION_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
@@ -113,6 +115,14 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDismissPayload::data) { CrewDismissPayload(it) }
     private val CREW_DUTY_CODEC: StreamCodec<FriendlyByteBuf, CrewDutyPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDutyPayload::data) { CrewDutyPayload(it) }
+    private val CREW_STATION_CODEC: StreamCodec<FriendlyByteBuf, CrewStationPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewStationPayload::data) { CrewStationPayload(it) }
+
+    /** Upper bound on a gun label's wire length -- "L12" is three characters; eight leaves room for absurd fleets. */
+    private const val MAX_GUN_LABEL = 8
+
+    /** Upper bound on an occupant name in the station dropdown; crew names are capped well under this. */
+    private const val MAX_OCCUPANT_NAME = 64
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -167,6 +177,11 @@ object PathNetworkingFabric {
     /** "Put this one on that duty." Carries the duty the button landed on, not "next" -- see the sender. */
     class CrewDutyPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_DUTY_TYPE
+    }
+
+    /** "Seat this one at that gun." Carries the label the button landed on; "" stands them down. */
+    class CrewStationPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_STATION_TYPE
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
@@ -288,6 +303,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playC2S().register(CREW_RENAME_TYPE, CREW_RENAME_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_DISMISS_TYPE, CREW_DISMISS_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_DUTY_TYPE, CREW_DUTY_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_STATION_TYPE, CREW_STATION_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
@@ -408,6 +424,19 @@ object PathNetworkingFabric {
             context.server().execute {
                 val level = player.level() as? ServerLevel ?: return@execute
                 CrewManifest.requestDuty(level, player, helm, villager, duty)
+            }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(CREW_STATION_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val villager = buf.readUUID()
+            // Bounded read first, like every string a client hands us; labels are a handful of characters.
+            val label = buf.readUtf(MAX_GUN_LABEL)
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                CrewManifest.requestStation(level, player, helm, villager, label)
             }
         }
 
@@ -533,6 +562,21 @@ object PathNetworkingFabric {
         ClientPlayNetworking.send(CrewDutyPayload(toArray(buf)))
     }
 
+    /**
+     * Client: seat one crew member at the gun answering to [label], or stand them down with "".
+     *
+     * Absolute for the same reason the duty is: two clicks crossing in flight must land on what the player
+     * is looking at, not one step past it.
+     */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewStation(helm: Long, villager: UUID, label: String) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeUUID(villager)
+        buf.writeUtf(label.take(MAX_GUN_LABEL))
+        ClientPlayNetworking.send(CrewStationPayload(toArray(buf)))
+    }
+
     /** Client: name the wheel at [pos]. An empty name clears it back to blank. */
     @Environment(EnvType.CLIENT)
     fun sendHelmName(pos: BlockPos, name: String) {
@@ -615,6 +659,12 @@ object PathNetworkingFabric {
         buf.writeVarInt(detail.guns)
         buf.writeVarInt(detail.gunners)
         buf.writeVarInt(detail.fireParty)
+        buf.writeUtf(detail.stationLabel)
+        buf.writeVarInt(detail.gunOptions.size)
+        for (option in detail.gunOptions) {
+            buf.writeUtf(option.label)
+            buf.writeUtf(option.occupant.take(MAX_OCCUPANT_NAME))
+        }
         buf.writeVarInt(detail.offers.size)
         for (offer in detail.offers) {
             ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, offer.costA)
@@ -640,6 +690,10 @@ object PathNetworkingFabric {
         val guns = buf.readVarInt()
         val gunners = buf.readVarInt()
         val fireParty = buf.readVarInt()
+        val stationLabel = buf.readUtf(MAX_GUN_LABEL)
+        val gunOptions = List(buf.readVarInt()) {
+            CrewManifest.GunOption(buf.readUtf(MAX_GUN_LABEL), buf.readUtf(MAX_OCCUPANT_NAME))
+        }
         val offers = List(buf.readVarInt()) {
             CrewManifest.Offer(
                 costA = ItemStack.OPTIONAL_STREAM_CODEC.decode(buf),
@@ -651,7 +705,8 @@ object PathNetworkingFabric {
             )
         }
         return CrewManifest.Detail(
-            villager, name, profession, level, xp, offers, aboard, duty, guns, gunners, fireParty
+            villager, name, profession, level, xp, offers, aboard, duty, guns, gunners, fireParty,
+            stationLabel, gunOptions
         )
     }
 

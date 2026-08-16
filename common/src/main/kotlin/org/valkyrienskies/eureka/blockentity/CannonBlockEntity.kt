@@ -3,6 +3,7 @@ package org.valkyrienskies.eureka.blockentity
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.core.NonNullList
+import net.minecraft.server.level.ServerLevel
 import net.minecraft.network.chat.Component
 import net.minecraft.world.ContainerHelper
 import net.minecraft.world.WorldlyContainer
@@ -15,11 +16,14 @@ import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.storage.ValueInput
 import net.minecraft.world.level.storage.ValueOutput
+import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaBlockEntities
+import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.PowderCharge
 import org.valkyrienskies.eureka.gui.cannon.CannonScreenMenu
 import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.util.KtContainerData
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 
 /**
  * A cannon's magazine: three powder slots and one for shot.
@@ -67,6 +71,18 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         get() = PowderCharge.of(powderChargeOrdinal)
         set(value) { powderChargeOrdinal = value.ordinal }
 
+    /**
+     * This gun's bow-relative name ("L1"), packed through [org.valkyrienskies.eureka.cannon.GunLabels.encode];
+     * 0 when it has none. Delegated through [data] like the charge, and refreshed in [createMenu] -- open
+     * time is the one moment the label is wanted, the BE has no ticker, and labels shift only when guns are
+     * added or removed, so computing it per open is both cheapest and always current.
+     *
+     * DECLARATION ORDER MATTERS: [data] hands out slot indices in declaration order, and
+     * [CannonScreenMenu]'s clone mirrors this class field for field. This must stay second, after
+     * [powderChargeOrdinal], as it is there.
+     */
+    var gunLabelCode by data
+
     /** The three powder slots, top to bottom, and the shot slot. */
     var powderA: ItemStack = ItemStack.EMPTY
     var powderB: ItemStack = ItemStack.EMPTY
@@ -97,8 +113,16 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     val loaded: Boolean get() = powderCount >= powderCharge.powder && !shot.isEmpty
 
-    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu =
-        CannonScreenMenu(containerId, inventory, this)
+    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu {
+        // Stamp the gun's current name just before the menu syncs it; see [gunLabelCode].
+        val level = this.level
+        if (level is ServerLevel) {
+            val ship = level.getLoadedShipManagingPos(blockPos) as? LoadedServerShip
+            val label = ship?.let { GunLabels.labelAt(level, it, blockPos) }
+            gunLabelCode = GunLabels.encode(label)
+        }
+        return CannonScreenMenu(containerId, inventory, this)
+    }
 
     override fun getDefaultName(): Component = Component.translatable("gui.vs_eureka.cannon")
 

@@ -36,6 +36,7 @@ import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
 import org.valkyrienskies.eureka.crew.CrewDuties;
+import org.valkyrienskies.eureka.crew.GunStations;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
@@ -127,6 +128,9 @@ public class EurekaModFabric implements ModInitializer {
             // Crew duties: walk any broadside in progress one gun further along, and run the fire watch on its
             // own once-a-second clock. Both self-silence -- no volley and no tracked fire is two map checks.
             CrewDuties.INSTANCE.tick(level);
+            // Gun stations: glue each stationed gunner to his seat (their seats sit in non-ticking shipyard
+            // chunks, so nothing else will), and once a second reconcile the seats against the crew ledger.
+            GunStations.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -142,6 +146,8 @@ public class EurekaModFabric implements ModInitializer {
             // Same reasoning: a volley in flight and a firefighter on their way to a fire are runtime-only, and
             // in single player this singleton outlives the world they belonged to.
             CrewDuties.INSTANCE.reset();
+            // The seat map holds entity references from the stopped server; the ledger rebuilds it next world.
+            GunStations.INSTANCE.reset();
             PathNetworkingFabric.INSTANCE.resetServer();
         });
     }
@@ -213,6 +219,7 @@ public class EurekaModFabric implements ModInitializer {
                 EurekaEntities.INSTANCE.getCANNON_SHOT().get(),
                 ThrownItemRenderer::new
             );
+
 
             // Top-center piloted-ship speed overlay, toggled by the helm menu's "Display Speed" checkbox.
             HudRenderCallback.EVENT.register(

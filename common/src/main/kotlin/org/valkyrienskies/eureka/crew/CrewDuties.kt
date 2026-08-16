@@ -14,6 +14,7 @@ import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.cannon.CannonFire
+import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -72,19 +73,26 @@ object CrewDuties {
             return
         }
 
-        val gunners = onDuty(level, ship, CrewDuty.GUNNER)
-        if (gunners.isEmpty()) {
+        // One crewman per cannon, for real: a gun speaks only when a gunner is SEATED at it. The ledger's
+        // station bindings are the muster -- an unstationed gunner is a hand on deck, not a gun crew, and a
+        // stationed one whose villager has died has already had the berth struck and the binding with it.
+        val ledger = CrewLedger.get(level.server)
+        val stations = ledger.stationedBerths().mapNotNullTo(HashSet()) { it.station }
+        // Label order, not readiness order: L1 down the port side, then starboard, then the chasers -- a
+        // rolling broadside that reads as the gun line it is. Falls back to the plain scan on a ship whose
+        // wheel has no articles (no labels), where nothing can be stationed anyway.
+        val labeled = GunLabels.labeled(level, ship)
+        val manned = (if (labeled.isEmpty()) guns else labeled.map { it.gun })
+            .filter { it.blockPos.asLong() in stations }
+        if (manned.isEmpty()) {
             PathMessages.send(
                 player,
-                "Nobody is at the guns. Open the crew manifest and assign a gunner.",
+                "Nobody is stationed at a gun. Open the crew manifest and assign gunners their stations.",
                 PathMessages.Kind.ERROR
             )
             return
         }
 
-        // One crewman per cannon. ShipGuns puts the loaded, cooled guns first, so a short-handed crew mans the
-        // ones that can actually shoot rather than whichever happened to be found first.
-        val manned = guns.take(minOf(gunners.size, guns.size))
         val now = level.gameTime
         val ready = manned.filter { it.loaded && it.readyAt <= now }
 
@@ -106,13 +114,8 @@ object CrewDuties {
             )
         )
 
-        val idle = gunners.size - manned.size
         val unmanned = guns.size - manned.size
-        val note = when {
-            unmanned > 0 -> " $unmanned unmanned."
-            idle > 0 -> " $idle gunner${if (idle == 1) "" else "s"} idle."
-            else -> ""
-        }
+        val note = if (unmanned > 0) " $unmanned unmanned." else ""
         ShipCrew.tellOthers(level, ship, player, "${ShipCrew.name(ship)} is firing.", PathMessages.Kind.WARN)
         PathMessages.send(
             player,

@@ -111,6 +111,7 @@
   "gui.vs_eureka.crew_station_no_guns": "No guns aboard",
   "gui.vs_eureka.crew_station_watch": "%s on the fire watch",
   "gui.vs_eureka.crew_station_none": "Nothing to do",
+  "gui.vs_eureka.crew_unstationed": "—",
   "gui.vs_eureka.crew_level.1": "Novice",
   "gui.vs_eureka.crew_level.2": "Apprentice",
   "gui.vs_eureka.crew_level.3": "Journeyman",

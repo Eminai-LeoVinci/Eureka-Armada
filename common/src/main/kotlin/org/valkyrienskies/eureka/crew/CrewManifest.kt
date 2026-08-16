@@ -12,6 +12,7 @@ import net.minecraft.world.item.trading.MerchantOffer
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -105,15 +106,30 @@ object CrewManifest {
         /**
          * The ship's own tally, carried on the card so the Station line can say something true.
          *
-         * These describe the VESSEL, not this crew member, and that is deliberate. Until guns carry their
-         * bow-relative numbers there is no non-arbitrary way to say WHICH gun somebody is at -- but "four of
-         * six guns manned" is the fact a captain actually acts on, and it answers both questions a gunner's
-         * card raises: do I need another berth, or another cannon?
+         * These describe the VESSEL, not this crew member: "four of six guns manned" is the fact a captain
+         * actually acts on, and it answers both questions a gunner's card raises -- do I need another berth,
+         * or another cannon?
          */
         val guns: Int,
         val gunners: Int,
-        val fireParty: Int
+        val fireParty: Int,
+
+        /** The gun THIS crew member is stationed at ("L2"), or "" for none. The Station button's value. */
+        val stationLabel: String,
+
+        /**
+         * Every gun the vessel currently deals a name to, in reading order (port bow-to-stern, starboard,
+         * bow, stern chasers) -- the entries of the Station dropdown. Empty when the wheel has no articles
+         * to name a bow from, which is also exactly when nobody can be stationed.
+         */
+        val gunOptions: List<GunOption>
     )
+
+    /**
+     * One entry of the Station dropdown: a gun's name, and who mans it -- "" for a free gun. THIS crew
+     * member's own gun reads as free (see [detailFor]), so an assignment can always be re-picked or dropped.
+     */
+    data class GunOption(val label: String, val occupant: String)
 
     // endregion
 
@@ -262,7 +278,9 @@ object CrewManifest {
                 duty = berth.duty,
                 guns = muster.guns,
                 gunners = muster.gunners,
-                fireParty = muster.fireParty
+                fireParty = muster.fireParty,
+                stationLabel = berth.stationLabel ?: "",
+                gunOptions = muster.optionsFor(villager)
             )
         }
 
@@ -278,12 +296,27 @@ object CrewManifest {
             duty = berth.duty,
             guns = muster.guns,
             gunners = muster.gunners,
-            fireParty = muster.fireParty
+            fireParty = muster.fireParty,
+            stationLabel = berth.stationLabel ?: "",
+            gunOptions = muster.optionsFor(villager)
         )
     }
 
-    /** What a vessel has to work with: guns bolted on, and hands told off to the two duties. */
-    private data class Muster(val guns: Int, val gunners: Int, val fireParty: Int)
+    /** One named gun with whoever holds it, before the card's own point of view is applied. */
+    private data class StationSlot(val label: String, val occupantId: UUID?, val occupantName: String)
+
+    /** What a vessel has to work with: guns bolted on, hands told off to the duties, and the guns' names. */
+    private data class Muster(
+        val guns: Int,
+        val gunners: Int,
+        val fireParty: Int,
+        val slots: List<StationSlot>
+    ) {
+        /** The dropdown as [viewer]'s card should see it: their own gun reads free, everyone else's manned. */
+        fun optionsFor(viewer: UUID): List<GunOption> = slots.map { slot ->
+            GunOption(slot.label, if (slot.occupantId == viewer) "" else slot.occupantName)
+        }
+    }
 
     /**
      * Count [station]'s vessel once, for a card that needs all three numbers.
@@ -296,7 +329,7 @@ object CrewManifest {
      * counted only its own captain's would report four of six guns manned on a ship where all six are.
      */
     private fun musterOf(level: ServerLevel, station: ShipHelmBlockEntity): Muster {
-        val ship = CrewStations.shipOf(level, station) ?: return Muster(0, 0, 0)
+        val ship = CrewStations.shipOf(level, station) ?: return Muster(0, 0, 0, emptyList())
         val ledger = CrewLedger.get(level.server)
         var gunners = 0
         var fireParty = 0
@@ -307,7 +340,16 @@ object CrewManifest {
                 CrewDuty.NONE -> Unit
             }
         }
-        return Muster(ShipGuns.count(level, ship), gunners, fireParty)
+        // The labels ARE the gun census (one label per gun); the plain count only backstops a wheel whose
+        // articles somehow can't name a bow, where the tally lines still deserve a true number. Occupancy
+        // comes off the same ledger bindings the broadside fires by, so the dropdown and the guns agree.
+        val stationed = ledger.stationedBerths()
+        val slots = GunLabels.labeled(level, ship).map { named ->
+            val holder = stationed.firstOrNull { it.station == named.gun.blockPos.asLong() }
+            StationSlot(named.label, holder?.villager, holder?.name ?: "")
+        }
+        val guns = if (slots.isEmpty()) ShipGuns.count(level, ship) else slots.size
+        return Muster(guns, gunners, fireParty, slots)
     }
 
     private fun offerOf(offer: MerchantOffer): Offer = Offer(
@@ -423,8 +465,82 @@ object CrewManifest {
         val berth = berthOf(level, player, station, villager) ?: return
         if (berth.duty == duty) return
 
+        // setDuty clears any station with the old duty; the seat has to follow the paperwork.
         CrewLedger.get(level.server).setDuty(villager, duty)
+        GunStations.unseat(level, villager)
         PathMessages.send(player, orderFor(berth.name, duty), PathMessages.Kind.GOOD)
+
+        sender(player, build(level, player, station))
+        detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+    }
+
+    /**
+     * Seat one gunner at a named gun -- or, with an empty [label], stand them down from whatever gun they held.
+     *
+     * Same gates as every card action ([stationAt] + [berthOf]), plus two of its own: only a GUNNER can hold a
+     * gun, and no gun holds two gunners. The mount itself happens immediately rather than at the next
+     * reconcile, so the click is answered by a villager visibly taking their seat.
+     */
+    fun requestStation(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, label: String) {
+        val station = stationAt(level, player, helm) ?: return
+        val berth = berthOf(level, player, station, villager) ?: return
+        val ledger = CrewLedger.get(level.server)
+
+        if (label.isEmpty()) {
+            if (berth.station != null || berth.stationLabel != null) {
+                ledger.clearStation(villager)
+                GunStations.unseat(level, villager)
+                PathMessages.send(player, "${berth.name} stands down from the guns.", PathMessages.Kind.GOOD)
+            }
+            sender(player, build(level, player, station))
+            detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+            return
+        }
+
+        if (berth.duty != CrewDuty.GUNNER) {
+            PathMessages.send(player, "Make ${berth.name} a gunner first.", PathMessages.Kind.ERROR)
+            return
+        }
+        val ship = CrewStations.shipOf(level, station) ?: return
+        val gun = GunLabels.byLabel(level, ship, label)
+        if (gun == null) {
+            // The client's label list is a snapshot; the gun may have been shot away since. Refresh the card.
+            PathMessages.send(player, "No gun answers to $label.", PathMessages.Kind.ERROR)
+            detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+            return
+        }
+        val gunPos = gun.blockPos.asLong()
+        // A gun nobody can stand behind is a gun nobody can be assigned to: the deck must offer footing
+        // within a block of the breech (slab steps included) and a clear one-by-two above it.
+        val footingProblem = GunStations.footingProblem(level, gun.blockPos)
+        if (footingProblem != null) {
+            PathMessages.send(
+                player,
+                "${berth.name} can't man $label -- $footingProblem.",
+                PathMessages.Kind.ERROR
+            )
+            detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+            return
+        }
+
+        val occupant = ledger.stationedBerths().firstOrNull { it.station == gunPos && it.villager != villager }
+        if (occupant != null) {
+            PathMessages.send(player, "$label is already manned by ${occupant.name}.", PathMessages.Kind.ERROR)
+            // The client cycled optimistically; hand back the truth so the card doesn't keep the label.
+            detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+            return
+        }
+
+        ledger.setStation(villager, gunPos, label)
+        if (GunStations.stationNow(level, villager, gun.blockPos)) {
+            PathMessages.send(player, "${berth.name} takes station at $label.", PathMessages.Kind.GOOD)
+        } else {
+            // Loudly, and with the books put back -- a binding that half-happened is what made the first
+            // round of this feature undiagnosable.
+            ledger.clearStation(villager)
+            GunStations.unseat(level, villager)
+            PathMessages.send(player, "${berth.name} could not take station at $label.", PathMessages.Kind.ERROR)
+        }
 
         sender(player, build(level, player, station))
         detailFor(level, player, station, villager)?.let { detailSender(player, it) }

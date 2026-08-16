@@ -8,6 +8,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.player.Inventory
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.cannon.GunLabels
 
 /**
  * The magazine, drawn in code rather than from an atlas.
@@ -100,6 +101,14 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
      */
     override fun renderLabels(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
         guiGraphics.drawString(font, title, titleLabelX, titleLabelY, TITLE, false)
+
+        // Which gun this is, by its bow-relative name -- upper right, quiet. Absent for a gun on the ground
+        // or on a ship whose wheel holds no articles, which is exactly when it has no name to show.
+        GunLabels.decode(menu.gunLabelCode)?.let { label ->
+            guiGraphics.drawString(
+                font, label, imageWidth - 8 - font.width(label), titleLabelY, DIM, false
+            )
+        }
 
         centered(guiGraphics, SHOT_LABEL, CannonScreenMenu.SHOT_X + 8, CannonScreenMenu.SLOT_Y - 12, DIM)
 
