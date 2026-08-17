@@ -129,6 +129,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var elevSide = CrewOperations.Side.BOTH
     private var elevIndex = 2
 
+    /** The power row's knobs, independent of the elevation row's for the same reason it is. */
+    private var powerSide = CrewOperations.Side.BOTH
+    private var powerLevel = 0
+
     /** The CARD's ammo dropdown -- the ops one's twin, listing the same holds but arming ONE gun. */
     private var cardAmmoMenuOpen = false
     private var cardAmmoMenuScroll = 0
@@ -1012,13 +1016,23 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         drawSides(guiGraphics, STOP_ELEV_SIDE, top + OPS_ROW_ELEV, elevSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
         drawAngles(guiGraphics, top + OPS_ROW_ELEV, mouseX, mouseY)
 
+        // Power: the elevation row's twin, one line down -- the same order-and-arguments shape, setting
+        // the battery's powder measure. Locked gunners' guns keep theirs, exactly as they do the angle.
+        opsButton(guiGraphics, STOP_PWR, OPS_POWER_TEXT, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_PWR_SIDE, top + OPS_ROW_PWR, powerSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
+        drawPowers(guiGraphics, top + OPS_ROW_PWR, mouseX, mouseY)
+
         opsButton(guiGraphics, STOP_REFUEL, OPS_REFUEL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_FUEL_LIST, OPS_FUEL_LIST_TEXT, mouseX, mouseY)
 
+        // Bottom-left corner, under everything: a summary reads last, and the rows above needed its room.
         val line = when {
             holds == null -> OPS_READING_TEXT
             else -> Component.translatable(
-                "gui.vs_eureka.crew_ops_holds_line", holds.gunpowder, holds.ammo.size, holds.fuels.size
+                "gui.vs_eureka.crew_ops_holds_line",
+                holds.gunpowder,
+                holds.ammo.size, if (holds.ammo.size == 1) OPS_TYPE_TEXT else OPS_TYPES_TEXT,
+                holds.fuels.size, if (holds.fuels.size == 1) OPS_TYPE_TEXT else OPS_TYPES_TEXT
             )
         }
         small(guiGraphics, line, left + 8, top + OPS_HOLDS_Y, DIM)
@@ -1101,6 +1115,37 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         CrewOperations.Side.STARBOARD -> OPS_SIDE_STBD_TEXT
     }
 
+    /** The three powder measures, drawn as the angle steps are: one segment per 1x/2x/3x. */
+    private fun drawPowers(guiGraphics: GuiGraphics, y: Int, mouseX: Int, mouseY: Int) {
+        val rect = opsStopRect(STOP_PWR_LEVEL) ?: return
+        val (gx, gy, gw, gh) = rect
+        if (padContext == 3 && padSel == STOP_PWR_LEVEL) {
+            guiGraphics.fill(gx - 1, gy - 1, gx + gw + 1, gy, ACCENT)
+            guiGraphics.fill(gx - 1, gy + gh, gx + gw + 1, gy + gh + 1, ACCENT)
+            guiGraphics.fill(gx - 1, gy, gx, gy + gh, ACCENT)
+            guiGraphics.fill(gx + gw, gy, gx + gw + 1, gy + gh, ACCENT)
+        }
+        for (index in 0..2) {
+            val sx = gx + index * (ELEV_SEG_W + SEG_GAP)
+            val active = index == powerLevel
+            val hovered = mouseX >= sx && mouseX < sx + ELEV_SEG_W && mouseY >= y && mouseY < y + OPS_CTRL_H
+            guiGraphics.fill(
+                sx, y, sx + ELEV_SEG_W, y + OPS_CTRL_H,
+                when {
+                    active -> ACCENT
+                    hovered -> ROW_HOVER
+                    else -> ROW_LOCKED
+                }
+            )
+            val text = POWER_LABELS[index]
+            small(
+                guiGraphics, text,
+                sx + (ELEV_SEG_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
+                if (active) 0xFFFFFFFF.toInt() else TEXT
+            )
+        }
+    }
+
     /** The five elevation steps, drawn exactly as the side segments are, one per 22.5 degrees. */
     private fun drawAngles(guiGraphics: GuiGraphics, y: Int, mouseX: Int, mouseY: Int) {
         val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return
@@ -1154,6 +1199,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_ELEV_SIDE -> intArrayOf(left + OPS_ELEV_SIDES_X, top + OPS_ROW_ELEV, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_ELEV_ANGLE -> intArrayOf(left + OPS_ELEV_ANGLES_X, top + OPS_ROW_ELEV, ELEV_SEG_W * 5 + SEG_GAP * 4, OPS_CTRL_H)
         STOP_LAY -> intArrayOf(left + 8, top + OPS_ROW_ELEV, OPS_ELEV_BTN_W, OPS_CTRL_H)
+        STOP_PWR -> intArrayOf(left + 8, top + OPS_ROW_PWR, OPS_ELEV_BTN_W, OPS_CTRL_H)
+        STOP_PWR_SIDE -> intArrayOf(left + OPS_ELEV_SIDES_X, top + OPS_ROW_PWR, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_PWR_LEVEL -> intArrayOf(left + OPS_ELEV_ANGLES_X, top + OPS_ROW_PWR, ELEV_SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_REFUEL -> intArrayOf(left + 8, top + OPS_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
         STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
         else -> null
@@ -1188,6 +1236,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_ELEV_SIDE -> elevSide = pickSide(elevSide, STOP_ELEV_SIDE, mouseX)
             STOP_ELEV_ANGLE -> elevIndex = pickAngle(mouseX)
             STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, elevSide, elevIndex)
+            STOP_PWR_SIDE -> powerSide = pickSide(powerSide, STOP_PWR_SIDE, mouseX)
+            STOP_PWR_LEVEL -> powerLevel = pickPower(mouseX)
+            STOP_PWR -> PathNetworkingFabric.sendCrewSetPower(snapshot.helm, powerSide, powerLevel)
             STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
             STOP_FUEL_LIST -> if (stores != null) {
                 fuelPopupOpen = true
@@ -1210,6 +1261,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (mouseX == null) return (elevIndex + 1) % 5
         val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return elevIndex
         return ((mouseX - rect[0]) / (ELEV_SEG_W + SEG_GAP)).coerceIn(0, 4)
+    }
+
+    private fun pickPower(mouseX: Int?): Int {
+        if (mouseX == null) return (powerLevel + 1) % 3
+        val rect = opsStopRect(STOP_PWR_LEVEL) ?: return powerLevel
+        return ((mouseX - rect[0]) / (ELEV_SEG_W + SEG_GAP)).coerceIn(0, 2)
     }
 
     private fun handleOpsClick(mx: Int, my: Int): Boolean {
@@ -2019,6 +2076,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             Component.literal("-45"), Component.literal("-22"), Component.literal("0"),
             Component.literal("+22"), Component.literal("+45")
         )
+
+        /** The three powder measures' labels, ordinal-aligned with PowderCharge. */
+        private val POWER_LABELS = listOf(
+            Component.literal("1x"), Component.literal("2x"), Component.literal("3x")
+        )
+
+        private val OPS_POWER_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_power")
+        private val OPS_TYPE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_type")
+        private val OPS_TYPES_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_types")
         private val MINUS_TEXT: Component = Component.literal("-")
         private val PLUS_TEXT: Component = Component.literal("+")
 
@@ -2064,8 +2130,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_ROW_POWDER = 128
         private const val OPS_ROW_SHOT = 146
         private const val OPS_ROW_ELEV = 164
-        private const val OPS_ROW_REFUEL = 182
-        private const val OPS_HOLDS_Y = 204
+        private const val OPS_ROW_PWR = 182
+        private const val OPS_ROW_REFUEL = 200
+        private const val OPS_HOLDS_Y = 219
 
         private const val OPS_MINUS_X = 64
         private const val OPS_BOX_X = 80
@@ -2132,9 +2199,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STOP_ELEV_SIDE = 13
         private const val STOP_ELEV_ANGLE = 14
         private const val STOP_LAY = 15
-        private const val STOP_REFUEL = 16
-        private const val STOP_FUEL_LIST = 17
-        private const val OPS_STOP_COUNT = 18
+        private const val STOP_PWR = 16
+        private const val STOP_PWR_SIDE = 17
+        private const val STOP_PWR_LEVEL = 18
+        private const val STOP_REFUEL = 19
+        private const val STOP_FUEL_LIST = 20
+        private const val OPS_STOP_COUNT = 21
 
         // endregion
 

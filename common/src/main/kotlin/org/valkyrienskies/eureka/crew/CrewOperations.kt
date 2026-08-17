@@ -394,6 +394,48 @@ object CrewOperations {
         PathMessages.send(player, "$battery laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD)
     }
 
+    /**
+     * Set [side]'s battery to one powder measure -- the bulk twin of the card's charge control, and of
+     * [requestElevation] in shape: [Side.BOTH] reads as ALL, per-side settings are independent, and LOCKED
+     * gunners' guns keep the measure their captain set them.
+     */
+    fun requestPower(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, ordinal: Int) {
+        val op = gate(level, player, helm) ?: return
+        val labeled = GunLabels.labeled(level, op.ship)
+        if (labeled.isEmpty()) {
+            PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
+            return
+        }
+        val guns = sideGuns(labeled, side)
+        if (guns.isEmpty()) {
+            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val charge = PowderCharge.of(ordinal.coerceIn(0, PowderCharge.entries.size - 1))
+        val ledger = CrewLedger.get(level.server)
+        val lockedGuns = ledger.stationedBerths()
+            .filter { it.locked }
+            .mapNotNullTo(HashSet()) { it.station }
+
+        var set = 0
+        for (named in guns) {
+            if (named.gun.blockPos.asLong() in lockedGuns) continue
+            named.gun.powderCharge = charge
+            named.gun.setChanged()
+            set++
+        }
+
+        val battery = when (side) {
+            Side.PORT -> "Port battery"
+            Side.STARBOARD -> "Starboard battery"
+            Side.BOTH -> "Every gun"
+        }
+        val skipped = guns.size - set
+        val kept = if (skipped == 0) "" else " ($skipped locked kept)"
+        PathMessages.send(player, "$battery set to ${charge.powder}x power -- $set guns$kept.", PathMessages.Kind.GOOD)
+    }
+
     /** Set one gunner's cannon to a powder charge, from their card. The card's own optimism confirms here. */
     fun requestGunCharge(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, ordinal: Int) {
         val op = gate(level, player, helm) ?: return

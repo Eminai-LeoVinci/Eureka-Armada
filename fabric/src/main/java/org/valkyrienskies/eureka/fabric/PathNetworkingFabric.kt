@@ -586,6 +586,14 @@ object PathNetworkingFabric {
                         CrewManifest.requestLock(level, player, helm, villager, locked)
                     })
                 }
+                OPS_SET_POWER -> {
+                    val side = readSide(buf) ?: return@registerGlobalReceiver
+                    val ordinal = buf.readByte().toInt()
+                    // Parenthesised: an open brace after toInt() would parse as its trailing lambda.
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestPower(level, player, helm, side, ordinal)
+                    })
+                }
                 else -> null
             }
             if (order == null) return@registerGlobalReceiver
@@ -731,6 +739,7 @@ object PathNetworkingFabric {
     private const val OPS_GUN_ELEVATION: Byte = 8
     private const val OPS_GUN_AMMO: Byte = 9
     private const val OPS_LOCK: Byte = 10
+    private const val OPS_SET_POWER: Byte = 11
 
     /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
     private const val MAX_ITEM_ID = 256
@@ -786,6 +795,14 @@ object PathNetworkingFabric {
         sendOps(helm, OPS_ELEVATION) {
             it.writeByte(side.ordinal)
             it.writeByte(index.coerceIn(0, 4))
+        }
+
+    /** Client: set [side]'s battery ([CrewOperations.Side.BOTH] = all) to powder charge [ordinal], 0..2. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewSetPower(helm: Long, side: CrewOperations.Side, ordinal: Int) =
+        sendOps(helm, OPS_SET_POWER) {
+            it.writeByte(side.ordinal)
+            it.writeByte(ordinal.coerceIn(0, 2))
         }
 
     /** Client: set one gunner's cannon to a powder charge. Absolute, like the duty button. */
