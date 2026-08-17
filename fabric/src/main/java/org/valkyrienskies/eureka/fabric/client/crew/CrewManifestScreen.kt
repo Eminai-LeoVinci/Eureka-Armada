@@ -125,6 +125,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var fuelPopupOpen = false
     private var fuelPopupScroll = 0
 
+    /** The elevation row's own knobs: which guns, and which of the five steps. Level to start. */
+    private var elevSide = CrewOperations.Side.BOTH
+    private var elevIndex = 2
+
+    /** The CARD's ammo dropdown -- the ops one's twin, listing the same holds but arming ONE gun. */
+    private var cardAmmoMenuOpen = false
+    private var cardAmmoMenuScroll = 0
+
     // endregion
 
     override fun init() {
@@ -191,7 +199,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 DISMISS_BTN_W, BACK_BTN_H,
                 if (dismissArmed) DISMISS_CONFIRM_TEXT else DISMISS_TEXT, font
             ) { pressDismiss() }
-        )
+        ).also {
+            // A locked crew member cannot be paid off; the server refuses too, but a live button that only
+            // ever answered with an error would read as broken rather than as protected.
+            it.active = detail?.locked != true
+        }
 
         addRenderableWidget(
             ShipHelmButton(
@@ -265,10 +277,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         openCard = row.villager
         detail = null
         dismissArmed = false
+        cardAmmoMenuOpen = false
         // The row already carries the name, so the field is right the instant the card opens rather than one
         // round trip later. The detail packet only ever adds to what is on screen; it never corrects it.
         nameValue = row.name
         PathNetworkingFabric.sendCrewAsk(snapshot.helm, row.villager)
+        // The holds too: a gunner's ammo dropdown lists what is aboard, and this may be the first card
+        // opened before the Operations tab ever asked.
+        PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
         rebuildWidgets()
     }
 
@@ -280,6 +296,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         nameBox = null
         dismissArmed = false
         stationMenuOpen = false
+        cardAmmoMenuOpen = false
         stationBaseline = null
         rebuildWidgets()
     }
@@ -371,6 +388,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     private fun applyDetail(next: CrewManifest.Detail) {
         if (next.villager != openCard) return
+        val before = detail
         detail = next
         nameValue = next.name
         nameBox?.value = next.name
@@ -378,6 +396,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // it -- a fresh card arriving mid-pick means something real changed underneath the menu.
         stationBaseline = next.stationLabel
         stationMenuOpen = false
+        if (next.locked) cardAmmoMenuOpen = false
+        // Dismiss is a real widget, and its enabled state follows the lock -- a rebuild is how a widget
+        // learns anything. Only when the lock actually moved, so typing in the name box is not disturbed.
+        if (before == null || before.locked != next.locked) rebuildWidgets()
     }
 
     // endregion
@@ -395,12 +417,27 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (openCard != null) {
             val card = detail
             if (card != null) {
-                // The dropdown, while open, owns the click entirely: an entry may select, anywhere else
+                // A dropdown, while open, owns the click entirely: an entry may select, anywhere else
                 // folds it away, and nothing underneath it may fire through it.
+                if (cardAmmoMenuOpen) {
+                    handleCardAmmoClick(card, mx, my)
+                    return true
+                }
                 if (stationMenuOpen) {
                     handleStationMenuClick(card, mx, my)
                     return true
                 }
+
+                // The Lock answers FIRST, and answers even locked -- it is the one way back out.
+                if ((card.duty != CrewDuty.NONE || card.locked) &&
+                    mx >= lockButtonX() && mx < lockButtonX() + LOCK_BTN_W &&
+                    my >= lockButtonY() && my < lockButtonY() + BACK_BTN_H
+                ) {
+                    toggleLock(card)
+                    return true
+                }
+                if (card.locked) return false
+
                 val bx = dutyButtonX()
                 val by = dutyRowY()
                 if (mx >= bx && mx < bx + DUTY_BTN_W && my >= by && my < by + DUTY_BTN_H) {
@@ -414,6 +451,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                     stationMenuOpen = true
                     stationMenuScroll = 0
                     return true
+                }
+                if (gunPanelShown(card)) {
+                    for (row in 0..2) {
+                        val gy = gunRowY(row)
+                        val gx = if (row == 2) cardX() + CARD_W - CARD_PAD - GUN_AMMO_BTN_W else bx
+                        val gw = if (row == 2) GUN_AMMO_BTN_W else DUTY_BTN_W
+                        if (mx >= gx && mx < gx + gw && my >= gy && my < gy + DUTY_BTN_H) {
+                            when (row) {
+                                0 -> cycleCharge(card)
+                                1 -> cycleElevation(card)
+                                else -> openCardAmmoMenu()
+                            }
+                            return true
+                        }
+                    }
                 }
             }
             return false
@@ -446,6 +498,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
         if (openCard != null) {
             val card = detail
+            if (cardAmmoMenuOpen) {
+                val max = ((stores?.ammo?.size ?: 0) - AMMO_MENU_ROWS).coerceAtLeast(0)
+                cardAmmoMenuScroll = (cardAmmoMenuScroll - scrollY.toInt()).coerceIn(0, max)
+                return true
+            }
             if (stationMenuOpen && card != null) {
                 val max = (stationMenuEntries(card) - STATION_MENU_ROWS).coerceAtLeast(0)
                 stationMenuScroll = (stationMenuScroll - scrollY.toInt()).coerceIn(0, max)
@@ -540,6 +597,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val context = when {
             fuelPopupOpen -> 5
             ammoMenuOpen -> 4
+            cardAmmoMenuOpen -> 6
             stationMenuOpen -> 2
             openCard != null -> 1
             activeTab == Tab.OPERATIONS -> 3
@@ -556,12 +614,35 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (step == 0 && !choose && !back) return
 
         when (context) {
+            6 -> padCardAmmo(step, choose, back)
             5 -> padFuel(step, back, choose)
             4 -> padOpsAmmo(step, choose, back)
             3 -> padOps(step, choose, back)
             2 -> padMenu(step, choose, back)
             1 -> padCard(step, choose, back)
             else -> padRoster(step, choose)
+        }
+    }
+
+    private fun padCardAmmo(step: Int, choose: Boolean, back: Boolean) {
+        if (back) {
+            cardAmmoMenuOpen = false
+            return
+        }
+        val card = detail ?: return
+        val holds = stores ?: return
+        if (holds.ammo.isEmpty()) return
+        if (step != 0) {
+            padSel = (if (padSel < 0) (if (step > 0) 0 else holds.ammo.size - 1) else padSel + step)
+                .coerceIn(0, holds.ammo.size - 1)
+            if (padSel < cardAmmoMenuScroll) cardAmmoMenuScroll = padSel
+            if (padSel >= cardAmmoMenuScroll + AMMO_MENU_ROWS) cardAmmoMenuScroll = padSel - AMMO_MENU_ROWS + 1
+        }
+        if (choose && padSel >= 0) {
+            holds.ammo.getOrNull(padSel)?.let { pick ->
+                PathNetworkingFabric.sendCrewGunAmmo(snapshot.helm, card.villager, pick.ball, pick.charge)
+                cardAmmoMenuOpen = false
+            }
         }
     }
 
@@ -643,18 +724,25 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             return
         }
         val card = detail ?: return
-        val hasStation = card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()
-        val last = if (hasStation) 1 else 0
-        if (step != 0) padSel = (if (padSel < 0) 0 else padSel + step).coerceIn(0, last)
+        val stops = cardStops(card)
+        if (stops.isEmpty()) return
+        if (step != 0) padSel = (if (padSel < 0) 0 else padSel + step).coerceIn(0, stops.size - 1)
         if (choose) {
-            when {
+            if (padSel < 0) {
                 // The first press only takes the selection -- an unaimed "choose" must not re-assign a duty.
-                padSel < 0 -> padSel = 0
-                padSel == 0 -> cycleDuty()
-                else -> {
+                padSel = 0
+                return
+            }
+            when (stops.getOrNull(padSel)) {
+                CARD_STOP_DUTY -> cycleDuty()
+                CARD_STOP_STATION -> {
                     stationMenuOpen = true
                     stationMenuScroll = 0
                 }
+                CARD_STOP_CHARGE -> cycleCharge(card)
+                CARD_STOP_ELEVATION -> cycleElevation(card)
+                CARD_STOP_AMMO -> openCardAmmoMenu()
+                CARD_STOP_LOCK -> toggleLock(card)
             }
         }
     }
@@ -716,6 +804,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             }
             if (ammoMenuOpen) {
                 ammoMenuOpen = false
+                return true
+            }
+            if (cardAmmoMenuOpen) {
+                cardAmmoMenuOpen = false
                 return true
             }
             if (renamingCrew) {
@@ -827,12 +919,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         // The job, on the row itself, so a whole crew's assignments read at a glance instead of taking eight
         // cards to find. Drawn in the crew accent because a duty is the one thing on this row the captain
-        // chose; everything else is a fact about the villager.
+        // chose; everything else is a fact about the villager. A locked berth shows a padlock beside it --
+        // drawn as rectangles rather than a font glyph, which a resource pack could re-shape or drop.
+        var dutyRight = left + PANEL_W - 32
+        if (row.locked) {
+            val lx = left + PANEL_W - 38
+            guiGraphics.fill(lx, y + 9, lx + 5, y + 13, ACCENT)          // body
+            guiGraphics.fill(lx + 1, y + 6, lx + 4, y + 9, ACCENT)       // shackle, filled
+            guiGraphics.fill(lx + 2, y + 7, lx + 3, y + 9, ROW_BG)       // shackle's window
+            dutyRight = lx - 3
+        }
         if (row.duty != CrewDuty.NONE) {
             val duty = dutyName(row.duty)
             small(
                 guiGraphics, duty,
-                left + PANEL_W - 32 - (font.width(duty) * SMALL).toInt(), y + 9, ACCENT
+                dutyRight - (font.width(duty) * SMALL).toInt(), y + 9, ACCENT
             )
         }
 
@@ -872,7 +973,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, OPS_GUNNERS_TEXT, left + 8, top + OPS_ROW_G + 4, TEXT)
         opsButton(guiGraphics, STOP_G_MINUS, MINUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_PLUS, PLUS_TEXT, mouseX, mouseY)
-        drawSides(guiGraphics, STOP_G_SIDE, top + OPS_ROW_G, crewSide, sidesForCrew = true, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_G_SIDE, top + OPS_ROW_G, crewSide, OPS_SIDE_BOTH_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
 
         // Fire watch: a count and the order. No sides -- a fire does not care which battery you favour.
@@ -887,7 +988,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // The stores side selector, shared by both restock orders, with the powder count alongside --
         // the readout lives where the orders that spend it are aimed.
         small(guiGraphics, OPS_SIDE_TEXT, left + 8, top + OPS_ROW_SIDE + 4, TEXT)
-        drawSides(guiGraphics, STOP_S_SIDE, top + OPS_ROW_SIDE, storesSide, sidesForCrew = false, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_S_SIDE, top + OPS_ROW_SIDE, storesSide, OPS_SIDE_BOTH_TEXT, mouseX, mouseY)
         val powder = Component.translatable(
             "gui.vs_eureka.crew_ops_powder_count", holds?.gunpowder?.toString() ?: "--"
         )
@@ -901,6 +1002,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         opsButton(guiGraphics, STOP_SHOT, OPS_RESTOCK_SHOT_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_AMMO_MENU, ammoButtonText(), mouseX, mouseY)
+
+        // Elevation: the LABEL is the trigger -- press "Elevation" and the guns are laid per the
+        // selectors beside it. Its first draft was a separate "Lay Guns" button on the row below, which
+        // read as unrelated to the selectors it served; the label-as-button puts the order and its
+        // arguments on one line, the way the Assign rows already work. Sides are independent of the
+        // restock selector on purpose: "port guns up, then resupply everything" is one trip here, not two.
+        opsButton(guiGraphics, STOP_LAY, OPS_ELEVATION_TEXT, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_ELEV_SIDE, top + OPS_ROW_ELEV, elevSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
+        drawAngles(guiGraphics, top + OPS_ROW_ELEV, mouseX, mouseY)
 
         opsButton(guiGraphics, STOP_REFUEL, OPS_REFUEL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_FUEL_LIST, OPS_FUEL_LIST_TEXT, mouseX, mouseY)
@@ -952,7 +1062,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         stop: Int,
         y: Int,
         selected: CrewOperations.Side,
-        sidesForCrew: Boolean,
+        bothLabel: Component,
         mouseX: Int,
         mouseY: Int
     ) {
@@ -976,7 +1086,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                     else -> ROW_LOCKED
                 }
             )
-            val text = sideText(side)
+            val text = if (side == CrewOperations.Side.BOTH) bothLabel else sideText(side)
             small(
                 guiGraphics, text,
                 sx + (SEG_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
@@ -989,6 +1099,37 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         CrewOperations.Side.PORT -> OPS_SIDE_PORT_TEXT
         CrewOperations.Side.BOTH -> OPS_SIDE_BOTH_TEXT
         CrewOperations.Side.STARBOARD -> OPS_SIDE_STBD_TEXT
+    }
+
+    /** The five elevation steps, drawn exactly as the side segments are, one per 22.5 degrees. */
+    private fun drawAngles(guiGraphics: GuiGraphics, y: Int, mouseX: Int, mouseY: Int) {
+        val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return
+        val (gx, gy, gw, gh) = rect
+        if (padContext == 3 && padSel == STOP_ELEV_ANGLE) {
+            guiGraphics.fill(gx - 1, gy - 1, gx + gw + 1, gy, ACCENT)
+            guiGraphics.fill(gx - 1, gy + gh, gx + gw + 1, gy + gh + 1, ACCENT)
+            guiGraphics.fill(gx - 1, gy, gx, gy + gh, ACCENT)
+            guiGraphics.fill(gx + gw, gy, gx + gw + 1, gy + gh, ACCENT)
+        }
+        for (index in 0..4) {
+            val sx = gx + index * (ELEV_SEG_W + SEG_GAP)
+            val active = index == elevIndex
+            val hovered = mouseX >= sx && mouseX < sx + ELEV_SEG_W && mouseY >= y && mouseY < y + OPS_CTRL_H
+            guiGraphics.fill(
+                sx, y, sx + ELEV_SEG_W, y + OPS_CTRL_H,
+                when {
+                    active -> ACCENT
+                    hovered -> ROW_HOVER
+                    else -> ROW_LOCKED
+                }
+            )
+            val text = ANGLE_LABELS[index]
+            small(
+                guiGraphics, text,
+                sx + (ELEV_SEG_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
+                if (active) 0xFFFFFFFF.toInt() else TEXT
+            )
+        }
     }
 
     private fun opsLit(stop: Int, x: Int, y: Int, w: Int, h: Int, mouseX: Int, mouseY: Int): Boolean =
@@ -1010,6 +1151,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_POWDER -> intArrayOf(left + 8, top + OPS_ROW_POWDER, OPS_WIDE_W, OPS_CTRL_H)
         STOP_SHOT -> intArrayOf(left + 8, top + OPS_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
         STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_SHOT, OPS_AMMO_W, OPS_CTRL_H)
+        STOP_ELEV_SIDE -> intArrayOf(left + OPS_ELEV_SIDES_X, top + OPS_ROW_ELEV, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_ELEV_ANGLE -> intArrayOf(left + OPS_ELEV_ANGLES_X, top + OPS_ROW_ELEV, ELEV_SEG_W * 5 + SEG_GAP * 4, OPS_CTRL_H)
+        STOP_LAY -> intArrayOf(left + 8, top + OPS_ROW_ELEV, OPS_ELEV_BTN_W, OPS_CTRL_H)
         STOP_REFUEL -> intArrayOf(left + 8, top + OPS_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
         STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
         else -> null
@@ -1041,6 +1185,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 ammoMenuOpen = true
                 ammoMenuScroll = 0
             }
+            STOP_ELEV_SIDE -> elevSide = pickSide(elevSide, STOP_ELEV_SIDE, mouseX)
+            STOP_ELEV_ANGLE -> elevIndex = pickAngle(mouseX)
+            STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, elevSide, elevIndex)
             STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
             STOP_FUEL_LIST -> if (stores != null) {
                 fuelPopupOpen = true
@@ -1057,6 +1204,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val rect = opsStopRect(stop) ?: return current
         val index = ((mouseX - rect[0]) / (SEG_W + SEG_GAP)).coerceIn(0, SIDE_ORDER.size - 1)
         return SIDE_ORDER[index]
+    }
+
+    private fun pickAngle(mouseX: Int?): Int {
+        if (mouseX == null) return (elevIndex + 1) % 5
+        val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return elevIndex
+        return ((mouseX - rect[0]) / (ELEV_SEG_W + SEG_GAP)).coerceIn(0, 4)
     }
 
     private fun handleOpsClick(mx: Int, my: Int): Boolean {
@@ -1280,37 +1433,243 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         guiGraphics.fill(x, y, cardX() + CARD_W - CARD_PAD, y + 1, SEPARATOR)
         y += 4
-        guiGraphics.drawString(font, SELLS_TEXT, x, y, TEXT, false)
-        y += 12
 
-        // What somebody is selling is the one thing the articles cannot know about them: trades change every
-        // time a player buys, and the written copy is only as fresh as the last time they were in hand. So an
-        // absent crew member's card says where they are instead of showing a stale or empty list, which would
-        // read as "this one has no trades".
-        if (!card.aboard) {
-            small(guiGraphics, ASHORE_TEXT, x, y + 1, DIM)
-            y += 12
-        } else if (card.offers.isEmpty()) {
-            small(guiGraphics, NO_TRADES_TEXT, x, y + 1, DIM)
-            y += 12
+        // A stationed gunner's card spends the trades block on the GUN instead: charge, elevation and the
+        // round chambered, adjustable in place. The trades still exist -- right-click the villager -- but
+        // this card is about the gun they serve, and there is exactly one rectangle to say it in.
+        if (gunPanelShown(card)) {
+            drawGunPanel(guiGraphics, card, mouseX, mouseY)
         } else {
-            // Bounded by where the duty rows start, rather than by the offer count. A master crewman carries
-            // ten trades and the card has never had room for them, but it used to overrun into an inert label;
-            // now it would overrun into the assignment button and bury a control the player has to click.
-            val room = ((dutyRowY() - 6) - y) / OFFER_H
-            val shown = card.offers.take(room.coerceAtLeast(0))
-            for (offer in shown) {
-                drawOffer(guiGraphics, x, y, offer, mouseX, mouseY)
-                y += OFFER_H
-            }
-            val hidden = card.offers.size - shown.size
-            if (hidden > 0) {
-                small(guiGraphics, Component.translatable("gui.vs_eureka.crew_more_trades", hidden), x, y + 1, DIM)
+            guiGraphics.drawString(font, SELLS_TEXT, x, y, TEXT, false)
+            y += 12
+
+            // What somebody is selling is the one thing the articles cannot know about them: trades change
+            // every time a player buys, and the written copy is only as fresh as the last time they were in
+            // hand. So an absent crew member's card says where they are instead of showing a stale or empty
+            // list, which would read as "this one has no trades".
+            if (!card.aboard) {
+                small(guiGraphics, ASHORE_TEXT, x, y + 1, DIM)
+                y += 12
+            } else if (card.offers.isEmpty()) {
+                small(guiGraphics, NO_TRADES_TEXT, x, y + 1, DIM)
+                y += 12
+            } else {
+                // Bounded by where the duty rows start, rather than by the offer count. A master crewman
+                // carries ten trades and the card has never had room for them, but it used to overrun into
+                // an inert label; now it would overrun into the assignment button and bury a control.
+                val room = ((dutyRowY() - 6) - y) / OFFER_H
+                val shown = card.offers.take(room.coerceAtLeast(0))
+                for (offer in shown) {
+                    drawOffer(guiGraphics, x, y, offer, mouseX, mouseY)
+                    y += OFFER_H
+                }
+                val hidden = card.offers.size - shown.size
+                if (hidden > 0) {
+                    small(guiGraphics, Component.translatable("gui.vs_eureka.crew_more_trades", hidden), x, y + 1, DIM)
+                }
             }
         }
 
         drawDuties(guiGraphics, card, mouseX, mouseY)
+        drawLockButton(guiGraphics, card, mouseX, mouseY)
         if (stationMenuOpen) drawStationMenu(guiGraphics, card, mouseX, mouseY)
+        if (cardAmmoMenuOpen) drawCardAmmoMenu(guiGraphics, mouseX, mouseY)
+    }
+
+    /** Whether this card shows the gun panel: a gunner with a cannon that actually resolved. */
+    private fun gunPanelShown(card: CrewManifest.Detail): Boolean =
+        card.duty == CrewDuty.GUNNER && card.chargeOrdinal >= 0
+
+    /** The gun rows' geometry, shared by drawing and hit tests. Index 0 charge, 1 elevation, 2 ammo. */
+    private fun gunRowY(index: Int): Int = cardY() + 66 + index * 18
+
+    private fun drawGunPanel(guiGraphics: GuiGraphics, card: CrewManifest.Detail, mouseX: Int, mouseY: Int) {
+        val x = cardX() + CARD_PAD
+        val header = if (card.stationLabel.isEmpty()) CARD_GUN_TEXT
+        else Component.translatable("gui.vs_eureka.crew_card_gun", card.stationLabel)
+        small(guiGraphics, header, x, cardY() + 55, ACCENT)
+
+        cardGunRow(guiGraphics, card, 0, CARD_CHARGE_TEXT, Component.literal("${card.chargeOrdinal + 1}x"), CARD_STOP_CHARGE, mouseX, mouseY)
+        cardGunRow(
+            guiGraphics, card, 1, CARD_ELEVATION_TEXT,
+            Component.literal(degreesLabel(card.elevationIndex)), CARD_STOP_ELEVATION, mouseX, mouseY
+        )
+        val ammoText = when {
+            card.ammoBall < 0 -> CARD_AMMO_EMPTY_TEXT
+            else -> {
+                val ball = Cannonball.entries.getOrNull(card.ammoBall)
+                val charge = CannonCharge.entries.getOrNull(card.ammoCharge)
+                if (ball == null || charge == null) CARD_AMMO_EMPTY_TEXT
+                else Component.literal("${ammoName(ball, charge)} x ${card.ammoCount} ▾")
+            }
+        }
+        cardGunRow(guiGraphics, card, 2, CARD_AMMO_TEXT, ammoText, CARD_STOP_AMMO, mouseX, mouseY)
+    }
+
+    private fun cardGunRow(
+        guiGraphics: GuiGraphics,
+        card: CrewManifest.Detail,
+        index: Int,
+        label: Component,
+        value: Component,
+        stop: Int,
+        mouseX: Int,
+        mouseY: Int
+    ) {
+        val x = cardX() + CARD_PAD
+        val y = gunRowY(index)
+        small(guiGraphics, label, x, y + 4, DIM)
+
+        // The ammo row is wider than the footer buttons: a round's name plus a count needs the room.
+        val bx = if (stop == CARD_STOP_AMMO) cardX() + CARD_W - CARD_PAD - GUN_AMMO_BTN_W else dutyButtonX()
+        val bw = if (stop == CARD_STOP_AMMO) GUN_AMMO_BTN_W else DUTY_BTN_W
+        val lit = !card.locked && (
+            (mouseX >= bx && mouseX < bx + bw && mouseY >= y && mouseY < y + DUTY_BTN_H) ||
+                padStopSelected(stop)
+            )
+        guiGraphics.fill(bx, y, bx + bw, y + DUTY_BTN_H, if (lit) ACCENT else ROW_LOCKED)
+        small(
+            guiGraphics, value,
+            bx + (bw - (font.width(value) * SMALL).toInt()) / 2, y + 4,
+            when {
+                lit -> 0xFFFFFFFF.toInt()
+                card.locked -> DIM
+                else -> TEXT
+            }
+        )
+    }
+
+    private fun degreesLabel(index: Int): String {
+        val degrees = (index.coerceIn(0, 4) - 2) * 22.5
+        return if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees)
+    }
+
+    /** Lock or Unlock, centred between Dismiss and Back -- the one control a locked card still answers. */
+    private fun drawLockButton(guiGraphics: GuiGraphics, card: CrewManifest.Detail, mouseX: Int, mouseY: Int) {
+        // No duty means nothing to freeze -- unless a lock is already on, in which case the way OUT must
+        // exist whatever the paperwork says.
+        if (card.duty == CrewDuty.NONE && !card.locked) return
+        val x = lockButtonX()
+        val y = lockButtonY()
+        val lit = (mouseX >= x && mouseX < x + LOCK_BTN_W && mouseY >= y && mouseY < y + BACK_BTN_H) ||
+            padStopSelected(CARD_STOP_LOCK)
+        guiGraphics.fill(x, y, x + LOCK_BTN_W, y + BACK_BTN_H, if (lit) ACCENT else ROW_LOCKED)
+        val text = if (card.locked) CARD_UNLOCK_TEXT else CARD_LOCK_TEXT
+        small(
+            guiGraphics, text,
+            x + (LOCK_BTN_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
+            if (lit) 0xFFFFFFFF.toInt() else TEXT
+        )
+    }
+
+    private fun lockButtonX(): Int = cardX() + (CARD_W - LOCK_BTN_W) / 2
+    private fun lockButtonY(): Int = cardY() + CARD_H - CARD_PAD - BACK_BTN_H
+
+    /** Whether the pad's card selection is resting on [stop], through the per-card stop list. */
+    private fun padStopSelected(stop: Int): Boolean {
+        if (padContext != 1) return false
+        val card = detail ?: return false
+        return cardStops(card).getOrNull(padSel) == stop
+    }
+
+    /**
+     * The card's pad stops, built per card state: a locked card offers ONLY the way out of being locked,
+     * and the gun rows exist only when there is a gun. This list replaces the old hardcoded "duty then
+     * maybe station" walk.
+     */
+    private fun cardStops(card: CrewManifest.Detail): List<Int> {
+        if (card.locked) return listOf(CARD_STOP_LOCK)
+        val stops = mutableListOf(CARD_STOP_DUTY)
+        if (card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()) stops.add(CARD_STOP_STATION)
+        if (gunPanelShown(card)) {
+            stops.add(CARD_STOP_CHARGE)
+            stops.add(CARD_STOP_ELEVATION)
+            stops.add(CARD_STOP_AMMO)
+        }
+        if (card.duty != CrewDuty.NONE) stops.add(CARD_STOP_LOCK)
+        return stops
+    }
+
+    private fun cycleCharge(card: CrewManifest.Detail) {
+        if (card.locked) return
+        val next = (card.chargeOrdinal + 1) % 3
+        detail = card.copy(chargeOrdinal = next)
+        PathNetworkingFabric.sendCrewGunCharge(snapshot.helm, card.villager, next)
+    }
+
+    private fun cycleElevation(card: CrewManifest.Detail) {
+        if (card.locked) return
+        val next = (card.elevationIndex.coerceIn(0, 4) + 1) % 5
+        detail = card.copy(elevationIndex = next)
+        PathNetworkingFabric.sendCrewGunElevation(snapshot.helm, card.villager, next)
+    }
+
+    private fun toggleLock(card: CrewManifest.Detail) {
+        val next = !card.locked
+        detail = card.copy(locked = next)
+        if (next) {
+            stationMenuOpen = false
+            cardAmmoMenuOpen = false
+        }
+        padSel = -1
+        PathNetworkingFabric.sendCrewLock(snapshot.helm, card.villager, next)
+    }
+
+    private fun openCardAmmoMenu() {
+        if (stores?.ammo?.isNotEmpty() == true) {
+            cardAmmoMenuOpen = true
+            cardAmmoMenuScroll = 0
+        }
+    }
+
+    /**
+     * The card's ammo list: the ops dropdown's twin, opened under the ammo row, arming this ONE gun.
+     * Unlike the station dropdown a choice here commits IMMEDIATELY -- it moves items, and cargo moving
+     * on Back would be the least expected moment for it.
+     */
+    private fun drawCardAmmoMenu(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
+        val holds = stores ?: return
+        val x = cardX() + CARD_W - CARD_PAD - GUN_AMMO_BTN_W
+        val y = gunRowY(2) + DUTY_BTN_H
+        val visible = minOf(holds.ammo.size, AMMO_MENU_ROWS)
+        if (visible == 0) return
+        panel(guiGraphics, x, y, GUN_AMMO_BTN_W, visible * AMMO_MENU_ROW_H + 2)
+
+        for (row in 0 until visible) {
+            val index = cardAmmoMenuScroll + row
+            val entry = holds.ammo.getOrNull(index) ?: break
+            val rowY = y + 1 + row * AMMO_MENU_ROW_H
+            val hovered = (padContext == 6 && padSel == index) ||
+                (mouseX >= x && mouseX < x + GUN_AMMO_BTN_W && mouseY >= rowY && mouseY < rowY + AMMO_MENU_ROW_H)
+            if (hovered) guiGraphics.fill(x + 1, rowY, x + GUN_AMMO_BTN_W - 1, rowY + AMMO_MENU_ROW_H, ACCENT)
+            small(
+                guiGraphics,
+                Component.literal("${ammoName(entry.ball, entry.charge)} x ${entry.count}"),
+                x + 4, rowY + 3,
+                if (hovered) 0xFFFFFFFF.toInt() else TEXT
+            )
+        }
+        if (cardAmmoMenuScroll > 0) small(guiGraphics, MORE_ABOVE, x + GUN_AMMO_BTN_W - 10, y + 3, DIM)
+        if (cardAmmoMenuScroll + visible < holds.ammo.size) {
+            small(guiGraphics, MORE_BELOW, x + GUN_AMMO_BTN_W - 10, y + visible * AMMO_MENU_ROW_H - 8, DIM)
+        }
+    }
+
+    private fun handleCardAmmoClick(card: CrewManifest.Detail, mx: Int, my: Int) {
+        val holds = stores
+        if (holds != null) {
+            val x = cardX() + CARD_W - CARD_PAD - GUN_AMMO_BTN_W
+            val menuY = gunRowY(2) + DUTY_BTN_H
+            if (mx >= x && mx < x + GUN_AMMO_BTN_W && my >= menuY) {
+                val row = (my - menuY) / AMMO_MENU_ROW_H
+                if (row < AMMO_MENU_ROWS) {
+                    holds.ammo.getOrNull(cardAmmoMenuScroll + row)?.let { pick ->
+                        PathNetworkingFabric.sendCrewGunAmmo(snapshot.helm, card.villager, pick.ball, pick.charge)
+                    }
+                }
+            }
+        }
+        cardAmmoMenuOpen = false
     }
 
     /**
@@ -1329,14 +1688,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, ASSIGNMENT_TEXT, x, footY + 4, DIM)
 
         val bx = dutyButtonX()
-        val hovered = (mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= footY && mouseY < footY + DUTY_BTN_H) ||
-            (!stationMenuOpen && padSel == 0)
+        val hovered = !card.locked && (
+            (mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= footY && mouseY < footY + DUTY_BTN_H) ||
+                (!stationMenuOpen && padStopSelected(CARD_STOP_DUTY))
+            )
         guiGraphics.fill(bx, footY, bx + DUTY_BTN_W, footY + DUTY_BTN_H, if (hovered) ACCENT else ROW_LOCKED)
         val label = dutyName(card.duty)
         guiGraphics.drawString(
             font, label,
             bx + (DUTY_BTN_W - font.width(label)) / 2, footY + 3,
-            if (hovered) 0xFFFFFFFF.toInt() else TEXT, false
+            when {
+                hovered -> 0xFFFFFFFF.toInt()
+                card.locked -> DIM
+                else -> TEXT
+            },
+            false
         )
 
         if (card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()) {
@@ -1344,15 +1710,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             // on is locked in when the card is left. Same visual shape as the duty button above it.
             val sy = stationRowY()
             small(guiGraphics, STATION_TEXT, x, sy + 4, DIM)
-            val stationHovered =
+            val stationHovered = !card.locked && (
                 (mouseX >= bx && mouseX < bx + DUTY_BTN_W && mouseY >= sy && mouseY < sy + DUTY_BTN_H) ||
-                    (!stationMenuOpen && padSel == 1)
+                    (!stationMenuOpen && padStopSelected(CARD_STOP_STATION))
+                )
             guiGraphics.fill(bx, sy, bx + DUTY_BTN_W, sy + DUTY_BTN_H, if (stationHovered) ACCENT else ROW_LOCKED)
             val stationName = if (card.stationLabel.isEmpty()) UNSTATIONED_TEXT else Component.literal(card.stationLabel)
             guiGraphics.drawString(
                 font, stationName,
                 bx + (DUTY_BTN_W - font.width(stationName)) / 2, sy + 3,
-                if (stationHovered) 0xFFFFFFFF.toInt() else TEXT, false
+                when {
+                    stationHovered -> 0xFFFFFFFF.toInt()
+                    card.locked -> DIM
+                    else -> TEXT
+                },
+                false
             )
         } else {
             small(guiGraphics, STATION_TEXT, x, footY + DUTY_BTN_H + 6, DIM)
@@ -1632,6 +2004,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val OPS_AMMO_NONE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_ammo_none")
         private val OPS_READING_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_reading")
         private val COUNT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_count")
+        private val OPS_ELEVATION_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_elevation")
+        private val OPS_SIDE_ALL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_all")
+        private val CARD_GUN_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_gun_unnamed")
+        private val CARD_CHARGE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_charge")
+        private val CARD_ELEVATION_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_elevation")
+        private val CARD_AMMO_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_ammo")
+        private val CARD_AMMO_EMPTY_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_ammo_empty")
+        private val CARD_LOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_lock")
+        private val CARD_UNLOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_unlock")
+
+        /** The five elevation steps' labels, index-aligned with the ELEVATION property. */
+        private val ANGLE_LABELS = listOf(
+            Component.literal("-45"), Component.literal("-22"), Component.literal("0"),
+            Component.literal("+22"), Component.literal("+45")
+        )
         private val MINUS_TEXT: Component = Component.literal("-")
         private val PLUS_TEXT: Component = Component.literal("+")
 
@@ -1676,6 +2063,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_ROW_SIDE = 110
         private const val OPS_ROW_POWDER = 128
         private const val OPS_ROW_SHOT = 146
+        private const val OPS_ROW_ELEV = 164
         private const val OPS_ROW_REFUEL = 182
         private const val OPS_HOLDS_Y = 204
 
@@ -1696,6 +2084,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val SEG_W = 32
         private const val SEG_GAP = 2
 
+        /** The five elevation steps' segments: narrower, since "-45" is as wide as a label gets. */
+        private const val ELEV_SEG_W = 22
+        private const val OPS_ELEV_SIDES_X = 64
+        private const val OPS_ELEV_ANGLES_X = 172
+
+        /** The Elevation label-button: the row's trigger, sized to its own word. */
+        private const val OPS_ELEV_BTN_W = 52
+
         private const val AMMO_MENU_ROWS = 6
         private const val AMMO_MENU_ROW_H = 12
 
@@ -1704,6 +2100,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val FUEL_POPUP_W = 220
         private const val FUEL_POPUP_H = 110
         private const val FUEL_ROWS = 7
+
+        /** The card's pad stops -- IDs, not positions; [cardStops] builds the per-card walk order. */
+        private const val CARD_STOP_DUTY = 0
+        private const val CARD_STOP_STATION = 1
+        private const val CARD_STOP_CHARGE = 2
+        private const val CARD_STOP_ELEVATION = 3
+        private const val CARD_STOP_AMMO = 4
+        private const val CARD_STOP_LOCK = 5
+
+        /** The Lock/Unlock button, sized for the longer word so it does not resize when pressed. */
+        private const val LOCK_BTN_W = 56
+
+        /** The card's ammo control and its dropdown: a round's name plus a count needs the room. */
+        private const val GUN_AMMO_BTN_W = 150
 
         /** The pad's walk order over the Operations rows; indexes into [opsStopRect]. */
         private const val STOP_G_MINUS = 0
@@ -1719,9 +2129,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STOP_POWDER = 10
         private const val STOP_SHOT = 11
         private const val STOP_AMMO_MENU = 12
-        private const val STOP_REFUEL = 13
-        private const val STOP_FUEL_LIST = 14
-        private const val OPS_STOP_COUNT = 15
+        private const val STOP_ELEV_SIDE = 13
+        private const val STOP_ELEV_ANGLE = 14
+        private const val STOP_LAY = 15
+        private const val STOP_REFUEL = 16
+        private const val STOP_FUEL_LIST = 17
+        private const val OPS_STOP_COUNT = 18
 
         // endregion
 

@@ -518,6 +518,10 @@ object CrewManifest {
     fun requestDuty(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, duty: CrewDuty) {
         val station = stationAt(level, player, helm) ?: return
         val berth = berthOf(level, player, station, villager) ?: return
+        if (berth.locked) {
+            lockedRefusal(player, berth.name)
+            return
+        }
         if (berth.duty == duty) return
 
         // setDuty clears any station with the old duty; the seat has to follow the paperwork.
@@ -539,6 +543,10 @@ object CrewManifest {
     fun requestStation(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, label: String) {
         val station = stationAt(level, player, helm) ?: return
         val berth = berthOf(level, player, station, villager) ?: return
+        if (berth.locked) {
+            lockedRefusal(player, berth.name)
+            return
+        }
         val ledger = CrewLedger.get(level.server)
 
         if (label.isEmpty()) {
@@ -621,10 +629,44 @@ object CrewManifest {
             )
             return
         }
+        // A lock is a do-not-touch, and dismissal is the most destructive touch there is.
+        berthOf(level, player, station, villager)?.let { berth ->
+            if (berth.locked) {
+                lockedRefusal(player, berth.name)
+                return
+            }
+        }
         val name = dismiss(level, player, station, villager) ?: return
         val crewName = station.helmName?.string ?: "the articles"
         PathMessages.send(player, "Paid off $name from $crewName.", PathMessages.Kind.GOOD)
         sender(player, build(level, player, station))
+    }
+
+    /**
+     * Set or lift the captain's lock on one crew member -- the ONE order a locked berth still answers.
+     *
+     * The lock's whole meaning lives in the guards it trips elsewhere: duty, station and dismissal refuse
+     * here; the card's gun controls refuse in CrewOperations; and every bulk order steps around locked
+     * berths. This function itself is small on purpose -- it writes the flag and hands back fresh state,
+     * and the rest of the system already knows what the flag means.
+     */
+    fun requestLock(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, locked: Boolean) {
+        val station = stationAt(level, player, helm) ?: return
+        val berth = berthOf(level, player, station, villager) ?: return
+        if (berth.locked == locked) return
+        CrewLedger.get(level.server).setLocked(villager, locked)
+        PathMessages.send(
+            player,
+            if (locked) "${berth.name} is locked in -- orders will pass them over."
+            else "${berth.name} is unlocked.",
+            PathMessages.Kind.GOOD
+        )
+        sender(player, build(level, player, station))
+        detailFor(level, player, station, villager)?.let { detailSender(player, it) }
+    }
+
+    private fun lockedRefusal(player: ServerPlayer, name: String) {
+        PathMessages.send(player, "$name is locked -- unlock them first.", PathMessages.Kind.ERROR)
     }
 
     // endregion
@@ -664,6 +706,18 @@ object CrewManifest {
         val standing = ShipCrew.standingOn(player) ?: return null
         return if (standing in ArmadaGroup.idsOf(level, ship)) station else null
     }
+
+    /**
+     * The card-action authorisation, opened to the rest of the crew package: CrewOperations' gun controls
+     * answer to exactly the gate every action here does, and duplicating the check would be two gates that
+     * could drift apart.
+     */
+    internal fun berthFor(
+        level: ServerLevel,
+        player: ServerPlayer,
+        station: ShipHelmBlockEntity,
+        villager: UUID
+    ): CrewLedger.Berth? = berthOf(level, player, station, villager)
 
     /**
      * [villager]'s berth if they are on the crew [station] names for [player], or null.

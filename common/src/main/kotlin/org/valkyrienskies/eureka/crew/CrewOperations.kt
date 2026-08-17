@@ -1,5 +1,6 @@
 package org.valkyrienskies.eureka.crew
 
+import net.minecraft.core.BlockPos
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
@@ -7,13 +8,19 @@ import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
+import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaItems
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.CannonBlock
+import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.cannon.GunLabels
+import org.valkyrienskies.eureka.cannon.PowderCharge
 import org.valkyrienskies.eureka.item.Cannonball
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.path.PathMessages
@@ -342,6 +349,113 @@ object CrewOperations {
     }
 
     /**
+     * Lay [side]'s battery to one elevation. [Side.BOTH] reads as ALL here, chasers included -- "everything
+     * to twenty-two and a half" is an order about the ship, not about a broadside.
+     *
+     * Per-side layings are independent by construction: this writes only the guns it addresses, so laying
+     * port to +22.5 and then starboard to +45 leaves port exactly where it was put. LOCKED gunners' guns
+     * are stepped over -- their elevation is a setting, and settings are theirs.
+     */
+    fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int) {
+        val op = gate(level, player, helm) ?: return
+        val labeled = GunLabels.labeled(level, op.ship)
+        if (labeled.isEmpty()) {
+            PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
+            return
+        }
+        val guns = sideGuns(labeled, side)
+        if (guns.isEmpty()) {
+            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val clamped = index.coerceIn(0, MAX_ELEVATION)
+        val ledger = CrewLedger.get(level.server)
+        val lockedGuns = ledger.stationedBerths()
+            .filter { it.locked }
+            .mapNotNullTo(HashSet()) { it.station }
+
+        var laid = 0
+        for (named in guns) {
+            if (named.gun.blockPos.asLong() in lockedGuns) continue
+            layGun(level, named.gun, clamped)
+            laid++
+        }
+
+        // One line, no per-gun sound: thirty lantern clanks is noise, and this is an order acknowledged.
+        val degrees = EurekaProperties.elevationDegrees(clamped)
+        val battery = when (side) {
+            Side.PORT -> "Port battery"
+            Side.STARBOARD -> "Starboard battery"
+            Side.BOTH -> "Every gun"
+        }
+        val skipped = guns.size - laid
+        val kept = if (skipped == 0) "" else " ($skipped locked kept)"
+        PathMessages.send(player, "$battery laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD)
+    }
+
+    /** Set one gunner's cannon to a powder charge, from their card. The card's own optimism confirms here. */
+    fun requestGunCharge(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, ordinal: Int) {
+        val op = gate(level, player, helm) ?: return
+        val (_, gun) = cardGun(op, villager) ?: return
+        gun.powderCharge = PowderCharge.of(ordinal.coerceIn(0, PowderCharge.entries.size - 1))
+        gun.setChanged()
+        pushDetail(op, villager)
+    }
+
+    /** Lay one gunner's cannon to an elevation, from their card. */
+    fun requestGunElevation(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID, index: Int) {
+        val op = gate(level, player, helm) ?: return
+        val (_, gun) = cardGun(op, villager) ?: return
+        layGun(level, gun, index.coerceIn(0, MAX_ELEVATION))
+        pushDetail(op, villager)
+    }
+
+    /**
+     * Arm one gunner's cannon with a chosen round, from their card: the single-gun form of the shot
+     * restock's unlocked path. A different chambered round goes back to the holds first (overflow drops
+     * at the gun, never vanishes), then the gun fills with the chosen kind from the holds.
+     */
+    fun requestGunAmmo(
+        level: ServerLevel,
+        player: ServerPlayer,
+        helm: Long,
+        villager: UUID,
+        ball: Cannonball,
+        charge: CannonCharge
+    ) {
+        val op = gate(level, player, helm) ?: return
+        val (berth, gun) = cardGun(op, villager) ?: return
+        val chosen = ItemStack(EurekaItems.cannonball(ball, charge))
+
+        if (!gun.shot.isEmpty && !ItemStack.isSameItemSameComponents(gun.shot, chosen)) {
+            val out = gun.shot
+            gun.shot = ItemStack.EMPTY
+            gun.setChanged()
+            val rest = ShipStores.deposit(level, op.ship, out)
+            if (!rest.isEmpty) dropAtGun(level, op.ship, gun, rest)
+        }
+
+        val need = CannonBlockEntity.MAGAZINE_CAPACITY - gun.shot.count
+        var got = 0
+        if (need > 0) {
+            got = ShipStores.withdraw(
+                level, op.ship, { ItemStack.isSameItemSameComponents(it, chosen) }, need
+            )
+            if (got > 0) {
+                if (gun.shot.isEmpty) gun.shot = chosen.copyWithCount(got) else gun.shot.grow(got)
+                gun.setChanged()
+            }
+        }
+
+        if (got == 0 && gun.shot.isEmpty) {
+            PathMessages.send(player, "The holds have no ${chosen.hoverName.string} for ${berth.name}'s gun.", PathMessages.Kind.WARN)
+        }
+        pushDetail(op, villager)
+        pushStores(op)
+    }
+
+    /**
      * Stoke every engine aboard, evenly, best fuel first.
      *
      * Every fuel kind in the holds is ranked by how long one of it burns, and spent in that order --
@@ -472,6 +586,52 @@ object CrewOperations {
         return dealt
     }
 
+    /**
+     * The card's gun-control gate, shared by charge, elevation and ammo: the berth must be [player]'s to
+     * command (CrewManifest's own authorisation), unlocked, and stationed at a cannon that still stands.
+     * Refusals speak, and the no-gun case also refreshes the card so a stale one corrects itself.
+     */
+    private fun cardGun(op: Op, villager: UUID): Pair<CrewLedger.Berth, CannonBlockEntity>? {
+        val berth = CrewManifest.berthFor(op.level, op.player, op.station, villager) ?: return null
+        if (berth.locked) {
+            PathMessages.send(op.player, "${berth.name} is locked -- unlock them first.", PathMessages.Kind.ERROR)
+            return null
+        }
+        val gun = berth.station?.let { op.level.getBlockEntity(BlockPos.of(it)) as? CannonBlockEntity }
+        if (gun == null) {
+            PathMessages.send(op.player, "${berth.name} has no gun to lay.", PathMessages.Kind.ERROR)
+            pushDetail(op, villager)
+            return null
+        }
+        return berth to gun
+    }
+
+    private fun pushDetail(op: Op, villager: UUID) {
+        CrewManifest.detailFor(op.level, op.player, op.station, villager)?.let {
+            CrewManifest.detailSender(op.player, it)
+        }
+    }
+
+    /**
+     * Re-pose both halves of one cannon to an elevation index. The block-entity sits on the REAR block, so
+     * the parts walk forward from it -- the same loop the crouch-click gesture runs, minus its sound: bulk
+     * callers speak once for the battery, and the card's caller answers with the card itself.
+     */
+    private fun layGun(level: ServerLevel, gun: CannonBlockEntity, index: Int) {
+        val state = gun.blockState
+        if (state.block !is CannonBlock) return
+        val facing = state.getValue(BlockStateProperties.HORIZONTAL_FACING)
+        for (part in CannonPart.entries) {
+            val pos = gun.blockPos.relative(facing, part.ordinal)
+            val there = level.getBlockState(pos)
+            if (there.block !is CannonBlock) continue
+            level.setBlock(pos, there.setValue(EurekaProperties.ELEVATION, index), Block.UPDATE_CLIENTS)
+        }
+    }
+
+    private fun formatDegrees(degrees: Double): String =
+        if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees)
+
     /** What the holds would not take back lands at the gun -- visible, retrievable, never voided. */
     private fun dropAtGun(level: ServerLevel, ship: LoadedServerShip, gun: CannonBlockEntity, stack: ItemStack) {
         val world = ship.shipToWorld.transformPosition(
@@ -484,6 +644,9 @@ object CrewOperations {
 
     private const val PORT_GROUP = "L"
     private const val STARBOARD_GROUP = "R"
+
+    /** The top of the ELEVATION property's range: index 4, +45 degrees. */
+    private const val MAX_ELEVATION = 4
 
     // endregion
 }

@@ -547,6 +547,45 @@ object PathNetworkingFabric {
                 OPS_REFUEL -> { level: ServerLevel ->
                     CrewOperations.requestRefuel(level, player, helm)
                 }
+                OPS_ELEVATION -> {
+                    val side = readSide(buf) ?: return@registerGlobalReceiver
+                    val index = buf.readByte().toInt()
+                    // Parenthesised: an open brace after toInt() would parse as its trailing lambda.
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestElevation(level, player, helm, side, index)
+                    })
+                }
+                OPS_GUN_CHARGE -> {
+                    val villager = buf.readUUID()
+                    val ordinal = buf.readByte().toInt()
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestGunCharge(level, player, helm, villager, ordinal)
+                    })
+                }
+                OPS_GUN_ELEVATION -> {
+                    val villager = buf.readUUID()
+                    val index = buf.readByte().toInt()
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestGunElevation(level, player, helm, villager, index)
+                    })
+                }
+                OPS_GUN_AMMO -> {
+                    val villager = buf.readUUID()
+                    val ball = Cannonball.entries.getOrNull(buf.readByte().toInt())
+                        ?: return@registerGlobalReceiver
+                    val charge = CannonCharge.entries.getOrNull(buf.readByte().toInt())
+                        ?: return@registerGlobalReceiver
+                    { level: ServerLevel ->
+                        CrewOperations.requestGunAmmo(level, player, helm, villager, ball, charge)
+                    }
+                }
+                OPS_LOCK -> {
+                    val villager = buf.readUUID()
+                    val locked = buf.readBoolean()
+                    ({ level: ServerLevel ->
+                        CrewManifest.requestLock(level, player, helm, villager, locked)
+                    })
+                }
                 else -> null
             }
             if (order == null) return@registerGlobalReceiver
@@ -741,6 +780,47 @@ object PathNetworkingFabric {
     @Environment(EnvType.CLIENT)
     fun sendCrewRefuel(helm: Long) = sendOps(helm, OPS_REFUEL) {}
 
+    /** Client: lay [side]'s battery ([CrewOperations.Side.BOTH] = all) to elevation [index], 0..4. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewSetElevation(helm: Long, side: CrewOperations.Side, index: Int) =
+        sendOps(helm, OPS_ELEVATION) {
+            it.writeByte(side.ordinal)
+            it.writeByte(index.coerceIn(0, 4))
+        }
+
+    /** Client: set one gunner's cannon to a powder charge. Absolute, like the duty button. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewGunCharge(helm: Long, villager: UUID, ordinal: Int) =
+        sendOps(helm, OPS_GUN_CHARGE) {
+            it.writeUUID(villager)
+            it.writeByte(ordinal.coerceIn(0, 2))
+        }
+
+    /** Client: lay one gunner's cannon to elevation [index], 0..4. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewGunElevation(helm: Long, villager: UUID, index: Int) =
+        sendOps(helm, OPS_GUN_ELEVATION) {
+            it.writeUUID(villager)
+            it.writeByte(index.coerceIn(0, 4))
+        }
+
+    /** Client: arm one gunner's cannon with the chosen round from the holds. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewGunAmmo(helm: Long, villager: UUID, ball: Cannonball, charge: CannonCharge) =
+        sendOps(helm, OPS_GUN_AMMO) {
+            it.writeUUID(villager)
+            it.writeByte(ball.ordinal)
+            it.writeByte(charge.ordinal)
+        }
+
+    /** Client: set or lift the lock on one crew member. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewLock(helm: Long, villager: UUID, locked: Boolean) =
+        sendOps(helm, OPS_LOCK) {
+            it.writeUUID(villager)
+            it.writeBoolean(locked)
+        }
+
     /** A count byte's honest ceiling; berth caps live far below it. */
     private const val MAX_OPS_COUNT = 127
 
@@ -827,6 +907,7 @@ object PathNetworkingFabric {
             buf.writeVarInt(row.level)
             buf.writeUtf(row.name)
             buf.writeByte(row.duty.ordinal)
+            buf.writeBoolean(row.locked)
         }
         return toArray(buf)
     }
@@ -847,7 +928,8 @@ object PathNetworkingFabric {
                 villagerType = buf.readUtf(),
                 level = buf.readVarInt(),
                 name = buf.readUtf(),
-                duty = CrewDuty.byOrdinal(buf.readByte().toInt())
+                duty = CrewDuty.byOrdinal(buf.readByte().toInt()),
+                locked = buf.readBoolean()
             )
         }
         return CrewManifest.Snapshot(ship, helm, berths, maxBerths, rows)
@@ -888,6 +970,12 @@ object PathNetworkingFabric {
             buf.writeVarInt(offer.maxUses)
             buf.writeBoolean(offer.outOfStock)
         }
+        buf.writeBoolean(detail.locked)
+        buf.writeByte(detail.chargeOrdinal)
+        buf.writeByte(detail.elevationIndex)
+        buf.writeByte(detail.ammoBall)
+        buf.writeByte(detail.ammoCharge)
+        buf.writeVarInt(detail.ammoCount)
         return toArray(buf)
     }
 
@@ -918,9 +1006,15 @@ object PathNetworkingFabric {
                 outOfStock = buf.readBoolean()
             )
         }
+        val locked = buf.readBoolean()
+        val chargeOrdinal = buf.readByte().toInt()
+        val elevationIndex = buf.readByte().toInt()
+        val ammoBall = buf.readByte().toInt()
+        val ammoCharge = buf.readByte().toInt()
+        val ammoCount = buf.readVarInt()
         return CrewManifest.Detail(
             villager, name, profession, level, xp, offers, aboard, duty, guns, gunners, fireParty,
-            stationLabel, gunOptions
+            stationLabel, gunOptions, locked, chargeOrdinal, elevationIndex, ammoBall, ammoCharge, ammoCount
         )
     }
 
