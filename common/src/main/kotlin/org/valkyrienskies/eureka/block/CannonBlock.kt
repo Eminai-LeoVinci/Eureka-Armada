@@ -14,6 +14,7 @@ import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -37,6 +38,7 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
 import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.cannon.CannonFire
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
@@ -253,6 +255,30 @@ class CannonBlock : BaseEntityBlock(
         // here is what silently killed both empty-hand gestures at once -- a right-click on a cannon simply
         // did nothing, with no error to show for it.
         if (stack.isEmpty) return InteractionResult.TRY_WITH_EMPTY_HAND
+
+        // Powder or shot in hand loads the gun where it stands. Serving a six-gun broadside by opening six
+        // magazines was most of the work of firing one, and the gesture a gun crew actually makes is to walk
+        // the round up to the piece -- so a right-click with either is that, and the screen is left for
+        // rearranging what is already aboard.
+        if (stack.`is`(Items.GUNPOWDER) || stack.item is CannonballItem) {
+            if (level.isClientSide) return InteractionResult.SUCCESS
+
+            val facing = state.getValue(HORIZONTAL_FACING)
+            val breech = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+            val magazine = level.getBlockEntity(breech) as? CannonBlockEntity ?: return InteractionResult.PASS
+
+            val loaded = magazine.load(stack, !player.hasInfiniteMaterials())
+            if (loaded == 0) {
+                // Full, or a round of another kind already up the spout. Consumed rather than passed, so the
+                // click never falls through to placing the block against the gun.
+                return InteractionResult.CONSUME
+            }
+
+            level.playSound(
+                null, breech, SoundEvents.ARMOR_EQUIP_GENERIC.value(), SoundSource.BLOCKS, 0.6f, 1.4f
+            )
+            return InteractionResult.CONSUME
+        }
 
         // Anything else in hand does whatever it normally does, so a block can still be placed against a gun
         // rather than every click being swallowed by it.

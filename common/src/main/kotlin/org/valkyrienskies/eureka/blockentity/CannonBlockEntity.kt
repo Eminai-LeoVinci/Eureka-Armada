@@ -264,6 +264,46 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         else -> false
     }
 
+    /**
+     * Load what is in a hand straight into the magazine, and answer how much went in.
+     *
+     * The point of the gesture is to serve a gun deck without opening six screens, so it fills the way a
+     * gun crew would: powder into whichever charges have room, in order, and shot into the shot slot. A
+     * round of a DIFFERENT kind than the one already loaded is refused rather than merged -- the slot holds
+     * one nature of round, and quietly mixing them would change what the gun fires without saying so.
+     *
+     * [consume] is false in creative, where the hand is bottomless and shrinking it is wrong.
+     */
+    fun load(stack: ItemStack, consume: Boolean): Int {
+        if (stack.isEmpty) return 0
+        val slots = if (stack.`is`(Items.GUNPOWDER)) POWDER_SLOTS else SHOT_SLOTS
+        var moved = 0
+
+        for (slot in slots) {
+            val left = stack.count - moved
+            if (left <= 0) break
+            if (!canPlaceItem(slot, stack)) continue
+
+            val current = getItem(slot)
+            val room = when {
+                current.isEmpty -> MAGAZINE_CAPACITY
+                ItemStack.isSameItemSameComponents(current, stack) -> MAGAZINE_CAPACITY - current.count
+                else -> 0
+            }
+            if (room <= 0) continue
+
+            val take = minOf(room, left)
+            if (current.isEmpty) setItem(slot, stack.copyWithCount(take)) else current.grow(take)
+            moved += take
+        }
+
+        if (moved > 0) {
+            if (consume) stack.shrink(moved)
+            setChanged()
+        }
+        return moved
+    }
+
     // Hoppers may feed a gun from any side but the bottom, and may not empty it. A gun deck should be
     // suppliable by machinery -- that is most of what makes a big broadside practical -- but a hopper
     // under a cannon quietly unloading it would be a trap rather than a feature.
@@ -281,6 +321,9 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         const val POWDER_B = 1
         const val POWDER_C = 2
         const val SHOT = 3
+
+        private val POWDER_SLOTS = intArrayOf(POWDER_A, POWDER_B, POWDER_C)
+        private val SHOT_SLOTS = intArrayOf(SHOT)
 
         /** Rounds a gun can hold, regardless of how few a player can carry in one slot. */
         const val MAGAZINE_CAPACITY = 64
