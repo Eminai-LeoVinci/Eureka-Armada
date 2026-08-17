@@ -25,8 +25,12 @@ import org.valkyrienskies.eureka.crew.CrewDuties
 import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
+import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.crew.ShipCrews
+import org.valkyrienskies.eureka.crew.ShipStores
+import org.valkyrienskies.eureka.item.Cannonball
+import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.fabric.client.ClientCrewMarkers
 import org.valkyrienskies.eureka.fabric.client.PathHud
 import org.valkyrienskies.eureka.fabric.client.crew.CrewManifestScreen
@@ -75,6 +79,8 @@ object PathNetworkingFabric {
     private val CREW_DISMISS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_dismiss")
     private val CREW_DUTY_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_duty")
     private val CREW_STATION_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_station")
+    private val CREW_OPS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_ops")
+    private val CREW_STORES_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_stores")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
@@ -90,6 +96,8 @@ object PathNetworkingFabric {
     private val CREW_DISMISS_TYPE = CustomPacketPayload.Type<CrewDismissPayload>(CREW_DISMISS_RL)
     private val CREW_DUTY_TYPE = CustomPacketPayload.Type<CrewDutyPayload>(CREW_DUTY_RL)
     private val CREW_STATION_TYPE = CustomPacketPayload.Type<CrewStationPayload>(CREW_STATION_RL)
+    private val CREW_OPS_TYPE = CustomPacketPayload.Type<CrewOpsPayload>(CREW_OPS_RL)
+    private val CREW_STORES_TYPE = CustomPacketPayload.Type<CrewStoresPayload>(CREW_STORES_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
@@ -117,6 +125,10 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewDutyPayload::data) { CrewDutyPayload(it) }
     private val CREW_STATION_CODEC: StreamCodec<FriendlyByteBuf, CrewStationPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewStationPayload::data) { CrewStationPayload(it) }
+    private val CREW_OPS_CODEC: StreamCodec<FriendlyByteBuf, CrewOpsPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewOpsPayload::data) { CrewOpsPayload(it) }
+    private val CREW_STORES_CODEC: StreamCodec<FriendlyByteBuf, CrewStoresPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewStoresPayload::data) { CrewStoresPayload(it) }
 
     /** Upper bound on a gun label's wire length -- "L12" is three characters; eight leaves room for absurd fleets. */
     private const val MAX_GUN_LABEL = 8
@@ -182,6 +194,21 @@ object PathNetworkingFabric {
     /** "Seat this one at that gun." Carries the label the button landed on; "" stands them down. */
     class CrewStationPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_STATION_TYPE
+    }
+
+    /**
+     * Every order the Operations tab can give, multiplexed onto one channel: an action byte after the
+     * helm, then that action's few arguments. One payload rather than one per order because they are the
+     * same shape end to end -- same gate, same tiny arguments, same "answer with fresh state" -- and the
+     * byte-blob codec erases any type safety separate channels would pretend to add.
+     */
+    class CrewOpsPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_OPS_TYPE
+    }
+
+    /** What the holds hold, for the Operations tab's readouts: powder, shot by kind, fuel by burn. */
+    class CrewStoresPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_STORES_TYPE
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
@@ -304,6 +331,8 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playC2S().register(CREW_DISMISS_TYPE, CREW_DISMISS_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_DUTY_TYPE, CREW_DUTY_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_STATION_TYPE, CREW_STATION_CODEC)
+        PayloadTypeRegistry.playC2S().register(CREW_OPS_TYPE, CREW_OPS_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_STORES_TYPE, CREW_STORES_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
@@ -321,6 +350,15 @@ object PathNetworkingFabric {
         CrewManifest.detailSender = { player, detail ->
             if (ServerPlayNetworking.canSend(player, CREW_DETAIL_TYPE)) {
                 ServerPlayNetworking.send(player, CrewDetailPayload(encodeDetail(detail, player.registryAccess())))
+                true
+            } else {
+                false
+            }
+        }
+
+        CrewOperations.storesSender = { player, helm, stores ->
+            if (ServerPlayNetworking.canSend(player, CREW_STORES_TYPE)) {
+                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores)))
                 true
             } else {
                 false
@@ -463,7 +501,65 @@ object PathNetworkingFabric {
                 HelmNames.renameShip(level, player, pos, name)
             }
         }
+
+        ServerPlayNetworking.registerGlobalReceiver(CREW_OPS_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val helm = buf.readLong()
+            val action = buf.readByte()
+
+            // Arguments decode on the netty thread, like every receiver here; anything malformed -- an
+            // ordinal off the end of an enum, an unknown action -- is silence, not an exception. The work
+            // itself hops to the server thread with the level re-resolved inside.
+            val order: ((ServerLevel) -> Unit)? = when (action) {
+                OPS_STORES -> { level: ServerLevel ->
+                    CrewOperations.requestStores(level, player, helm)
+                }
+                OPS_ASSIGN_GUNNERS -> {
+                    val count = buf.readByte().toInt()
+                    val side = readSide(buf) ?: return@registerGlobalReceiver
+                    { level: ServerLevel ->
+                        CrewOperations.requestAssignGunners(level, player, helm, count, side)
+                    }
+                }
+                OPS_ASSIGN_FIREFIGHTERS -> {
+                    val count = buf.readByte().toInt()
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestAssignFirefighters(level, player, helm, count)
+                    })
+                }
+                OPS_RESTOCK_POWDER -> {
+                    val side = readSide(buf) ?: return@registerGlobalReceiver
+                    { level: ServerLevel ->
+                        CrewOperations.requestRestockPowder(level, player, helm, side)
+                    }
+                }
+                OPS_RESTOCK_SHOT -> {
+                    val side = readSide(buf) ?: return@registerGlobalReceiver
+                    val ball = Cannonball.entries.getOrNull(buf.readByte().toInt())
+                        ?: return@registerGlobalReceiver
+                    val charge = CannonCharge.entries.getOrNull(buf.readByte().toInt())
+                        ?: return@registerGlobalReceiver
+                    { level: ServerLevel ->
+                        CrewOperations.requestRestockShot(level, player, helm, side, ball, charge)
+                    }
+                }
+                OPS_REFUEL -> { level: ServerLevel ->
+                    CrewOperations.requestRefuel(level, player, helm)
+                }
+                else -> null
+            }
+            if (order == null) return@registerGlobalReceiver
+
+            context.server().execute {
+                val level = player.level() as? ServerLevel ?: return@execute
+                order(level)
+            }
+        }
     }
+
+    private fun readSide(buf: FriendlyByteBuf): CrewOperations.Side? =
+        CrewOperations.Side.entries.getOrNull(buf.readByte().toInt())
 
     @Environment(EnvType.CLIENT)
     fun registerClient() {
@@ -501,6 +597,11 @@ object PathNetworkingFabric {
             // field that may be mid-swap.
             val detail = decodeDetail(payload.data, context.client().connection!!.registryAccess())
             context.client().execute { CrewManifestScreen.acceptDetail(detail) }
+        }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_STORES_TYPE) { payload, context ->
+            val (helm, stores) = decodeStores(payload.data)
+            context.client().execute { CrewManifestScreen.acceptStores(helm, stores) }
         }
         ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
@@ -576,6 +677,119 @@ object PathNetworkingFabric {
         buf.writeUtf(label.take(MAX_GUN_LABEL))
         ClientPlayNetworking.send(CrewStationPayload(toArray(buf)))
     }
+
+    // region crew operations wire
+
+    // The Operations tab's action bytes. Ordinals are the wire format; append only.
+    private const val OPS_STORES: Byte = 0
+    private const val OPS_ASSIGN_GUNNERS: Byte = 1
+    private const val OPS_ASSIGN_FIREFIGHTERS: Byte = 2
+    private const val OPS_RESTOCK_POWDER: Byte = 3
+    private const val OPS_RESTOCK_SHOT: Byte = 4
+    private const val OPS_ELEVATION: Byte = 5
+    private const val OPS_REFUEL: Byte = 6
+    private const val OPS_GUN_CHARGE: Byte = 7
+    private const val OPS_GUN_ELEVATION: Byte = 8
+    private const val OPS_GUN_AMMO: Byte = 9
+    private const val OPS_LOCK: Byte = 10
+
+    /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
+    private const val MAX_ITEM_ID = 256
+
+    /** One writer for every Operations order: the helm, the action byte, then that action's arguments. */
+    @Environment(EnvType.CLIENT)
+    private inline fun sendOps(helm: Long, action: Byte, write: (FriendlyByteBuf) -> Unit) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeByte(action.toInt())
+        write(buf)
+        ClientPlayNetworking.send(CrewOpsPayload(toArray(buf)))
+    }
+
+    /** Client: ask what the holds hold. Answered by a [CrewStoresPayload], or by silence. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewStoresAsk(helm: Long) = sendOps(helm, OPS_STORES) {}
+
+    /** Client: lay out the gun crew -- [count] gunners in total over [side]'s guns. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewAssignGunners(helm: Long, count: Int, side: CrewOperations.Side) =
+        sendOps(helm, OPS_ASSIGN_GUNNERS) {
+            it.writeByte(count.coerceIn(0, MAX_OPS_COUNT))
+            it.writeByte(side.ordinal)
+        }
+
+    /** Client: post the fire watch -- [count] firefighters in total. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewAssignFirefighters(helm: Long, count: Int) =
+        sendOps(helm, OPS_ASSIGN_FIREFIGHTERS) { it.writeByte(count.coerceIn(0, MAX_OPS_COUNT)) }
+
+    /** Client: run powder to [side]'s battery from the holds. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRestockPowder(helm: Long, side: CrewOperations.Side) =
+        sendOps(helm, OPS_RESTOCK_POWDER) { it.writeByte(side.ordinal) }
+
+    /** Client: run the chosen round to [side]'s battery from the holds. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRestockShot(helm: Long, side: CrewOperations.Side, ball: Cannonball, charge: CannonCharge) =
+        sendOps(helm, OPS_RESTOCK_SHOT) {
+            it.writeByte(side.ordinal)
+            it.writeByte(ball.ordinal)
+            it.writeByte(charge.ordinal)
+        }
+
+    /** Client: stoke every engine aboard from the holds, best fuel first. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRefuel(helm: Long) = sendOps(helm, OPS_REFUEL) {}
+
+    /** A count byte's honest ceiling; berth caps live far below it. */
+    private const val MAX_OPS_COUNT = 127
+
+    private fun encodeStores(helm: Long, stores: ShipStores.Stores): ByteArray {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(helm)
+        buf.writeVarInt(stores.gunpowder)
+        buf.writeVarInt(stores.ammo.size)
+        for (ammo in stores.ammo) {
+            buf.writeByte(ammo.ball.ordinal)
+            buf.writeByte(ammo.charge.ordinal)
+            buf.writeVarInt(ammo.count)
+        }
+        buf.writeVarInt(stores.fuels.size)
+        for (fuel in stores.fuels) {
+            buf.writeUtf(fuel.itemId.take(MAX_ITEM_ID))
+            buf.writeVarInt(fuel.count)
+            buf.writeVarInt(fuel.burnTicks)
+        }
+        return toArray(buf)
+    }
+
+    private fun decodeStores(data: ByteArray): Pair<Long, ShipStores.Stores> {
+        val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
+        val helm = buf.readLong()
+        val gunpowder = buf.readVarInt()
+
+        val ammoCount = buf.readVarInt().coerceIn(0, MAX_AMMO_KINDS)
+        val ammo = ArrayList<ShipStores.AmmoCount>(ammoCount)
+        repeat(ammoCount) {
+            val ball = Cannonball.entries.getOrNull(buf.readByte().toInt())
+            val charge = CannonCharge.entries.getOrNull(buf.readByte().toInt())
+            val count = buf.readVarInt()
+            if (ball != null && charge != null) ammo.add(ShipStores.AmmoCount(ball, charge, count))
+        }
+
+        val fuelCount = buf.readVarInt().coerceIn(0, ShipStores.MAX_FUEL_KINDS)
+        val fuels = ArrayList<ShipStores.FuelCount>(fuelCount)
+        repeat(fuelCount) {
+            fuels.add(ShipStores.FuelCount(buf.readUtf(MAX_ITEM_ID), buf.readVarInt(), buf.readVarInt()))
+        }
+
+        return helm to ShipStores.Stores(gunpowder, ammo, fuels)
+    }
+
+    /** Decode bound on shot kinds; the item set is 15 today, and a hostile length is clamped, not trusted. */
+    private const val MAX_AMMO_KINDS = 64
+
+    // endregion
 
     /** Client: name the wheel at [pos]. An empty name clears it back to blank. */
     @Environment(EnvType.CLIENT)

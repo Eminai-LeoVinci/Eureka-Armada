@@ -317,6 +317,32 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
         return index == 0 && FuelRegistry.INSTANCE.get(stack, fuelValues) > 0
     }
 
+    /**
+     * Stoke the firebox from a hand, and answer how much went in. The mirror of
+     * `CannonBlockEntity.load`, for the same caller: ship-wide restocking, which walks up with a stack
+     * and needs to know what it spent.
+     *
+     * One slot, so the rules are short: fuel only, and a slot already holding a DIFFERENT fuel refuses
+     * rather than merges -- an engine mid-burn on blaze rods should not have its reserve quietly swapped
+     * for planks. [consume] is false in creative, where the hand is bottomless.
+     */
+    fun load(stack: ItemStack, consume: Boolean): Int {
+        if (stack.isEmpty || !canPlaceItem(0, stack)) return 0
+
+        val room = when {
+            fuel.isEmpty -> stack.maxStackSize
+            ItemStack.isSameItemSameComponents(fuel, stack) -> stack.maxStackSize - fuel.count
+            else -> 0
+        }
+        if (room <= 0) return 0
+
+        val take = minOf(room, stack.count)
+        if (fuel.isEmpty) fuel = stack.copyWithCount(take) else fuel.grow(take)
+        if (consume) stack.shrink(take)
+        setChanged()
+        return take
+    }
+
     // endregion Container Stuff
 
     companion object {

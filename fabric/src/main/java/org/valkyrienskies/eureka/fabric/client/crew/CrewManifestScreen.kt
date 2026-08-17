@@ -17,11 +17,17 @@ import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.item.ItemStack
 import org.lwjgl.glfw.GLFW
+import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
+import org.valkyrienskies.eureka.crew.CrewOperations
+import org.valkyrienskies.eureka.crew.ShipStores
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmIconButton
+import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmTab
+import org.valkyrienskies.eureka.item.Cannonball
+import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.mod.client.ShipGamepad
 import java.util.UUID
 import kotlin.math.abs
@@ -90,30 +96,71 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      */
     private var dismissArmed = false
 
+    /** The book's two faces. */
+    private enum class Tab { OPERATIONS, ROSTER }
+
+    /** Which face is showing. Operations first: fleet-scale orders are what a captain opens this FOR. */
+    private var activeTab = Tab.OPERATIONS
+
+    // region Operations state
+
+    /** What the holds last reported, or null before the first stores payload has landed. */
+    private var stores: ShipStores.Stores? = null
+
+    /** The count boxes' values, kept as fields so widget rebuilds keep what was typed. */
+    private var gunnerCount = 0
+    private var fireCount = 0
+    private var gunnerCountBox: EditBox? = null
+    private var fireCountBox: EditBox? = null
+
+    /** Which battery crew assignment deals to, and which one the stores orders serve. Independent knobs. */
+    private var crewSide = CrewOperations.Side.BOTH
+    private var storesSide = CrewOperations.Side.BOTH
+
+    /** The round the shot restock will load. Defaults to the holds' most plentiful when stores arrive. */
+    private var selectedAmmo: Pair<Cannonball, CannonCharge>? = null
+    private var ammoMenuOpen = false
+    private var ammoMenuScroll = 0
+
+    private var fuelPopupOpen = false
+    private var fuelPopupScroll = 0
+
+    // endregion
+
     override fun init() {
         left = (width - PANEL_W) / 2
         top = (height - PANEL_H) / 2
         clampScroll()
 
-        // The crew's name is edited in place: clicking the heading swaps it for a box over the same pixels,
-        // which is the only spot in this panel wide enough for a name and the one a player would aim at.
-        // Built only while actually renaming, for the same reason the card's widgets are -- see below.
-        if (openCard == null && renamingCrew) {
-            crewNameBox = addRenderableWidget(
-                EditBox(font, left + 6, top + 3, PANEL_W - 12 - BERTHS_GUTTER, NAME_BOX_H, RENAME_TEXT)
-            ).also {
-                it.setMaxLength(CrewManifest.MAX_NAME_LENGTH)
-                it.value = crewNameValue
-                it.setResponder { typed -> crewNameValue = typed }
-                it.isFocused = true
-                this.focused = it
-            }
-            return
-        }
-
-        // Clicking the heading still starts a rename -- it is the most direct thing to aim at -- but a button
-        // says the rename EXISTS, which a click target does not. It also has somewhere to put the price.
         if (openCard == null) {
+            // The card covers the whole panel, tabs included, so the strip is built only when no card is
+            // open -- nothing under a card invites leaving it mid-edit, and Back keeps its meaning.
+            addTab(0, TAB_OPERATIONS_TEXT, Tab.OPERATIONS)
+            addTab(1, TAB_ROSTER_TEXT, Tab.ROSTER)
+
+            if (activeTab == Tab.OPERATIONS) {
+                initOperations()
+                return
+            }
+
+            // The crew's name is edited in place: clicking the heading swaps it for a box over the same
+            // pixels, which is the only spot in this panel wide enough for a name and the one a player
+            // would aim at. Built only while actually renaming, same reason the card's widgets are.
+            if (renamingCrew) {
+                crewNameBox = addRenderableWidget(
+                    EditBox(font, left + 6, top + 3, PANEL_W - 12 - BERTHS_GUTTER, NAME_BOX_H, RENAME_TEXT)
+                ).also {
+                    it.setMaxLength(CrewManifest.MAX_NAME_LENGTH)
+                    it.value = crewNameValue
+                    it.setResponder { typed -> crewNameValue = typed }
+                    it.isFocused = true
+                    this.focused = it
+                }
+                return
+            }
+
+            // Clicking the heading still starts a rename -- it is the most direct thing to aim at -- but a
+            // button says the rename EXISTS, which a click target does not.
             addRenderableWidget(
                 ShipHelmButton(
                     left + 6, top + PANEL_H - 16, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
@@ -155,6 +202,62 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     override fun isPauseScreen(): Boolean = false
+
+    // region the tab strip and the Operations tab's widgets
+
+    private fun addTab(index: Int, text: Component, tab: Tab) {
+        addRenderableWidget(
+            ShipHelmTab(
+                left + TAB_MARGIN + (TAB_W + TAB_GAP) * index, top + TAB_Y, TAB_W, TAB_H, text, font,
+                ACCENT, { if (activeTab == tab) ShipHelmTab.State.ACTIVE else ShipHelmTab.State.IDLE }
+            ) { switchTab(tab) }
+        )
+    }
+
+    private fun switchTab(next: Tab) {
+        if (activeTab == next) return
+        activeTab = next
+        ammoMenuOpen = false
+        fuelPopupOpen = false
+        if (renamingCrew) commitCrewRename(send = false)
+        padSel = -1
+        rebuildWidgets()
+        // Fresh counts every time the tab comes up: the holds change while the book is shut.
+        if (next == Tab.OPERATIONS) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
+    }
+
+    /** The Operations tab's real widgets: just the two count boxes. Every other control is painted. */
+    private fun initOperations() {
+        gunnerCountBox = addRenderableWidget(
+            countBox(left + OPS_BOX_X, top + OPS_ROW_G, gunnerCount) { gunnerCount = it }
+        )
+        fireCountBox = addRenderableWidget(
+            countBox(left + OPS_BOX_X, top + OPS_ROW_F, fireCount) { fireCount = it }
+        )
+        // First look at the holds: asked once, not polled -- every action answers with a fresh tally.
+        if (stores == null) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
+    }
+
+    private fun countBox(x: Int, y: Int, value: Int, write: (Int) -> Unit): EditBox =
+        EditBox(font, x, y, OPS_BOX_W, OPS_CTRL_H, COUNT_TEXT).also { box ->
+            box.setMaxLength(3)
+            box.setFilter { text -> text.isEmpty() || text.all { c -> c.isDigit() } }
+            box.value = value.toString()
+            box.setResponder { typed -> write((typed.toIntOrNull() ?: 0).coerceIn(0, snapshot.maxBerths)) }
+        }
+
+    /** The steppers' shared arithmetic; writes the field AND the box so both stay one value. */
+    private fun adjustCount(gunners: Boolean, delta: Int) {
+        if (gunners) {
+            gunnerCount = (gunnerCount + delta).coerceIn(0, snapshot.maxBerths)
+            gunnerCountBox?.value = gunnerCount.toString()
+        } else {
+            fireCount = (fireCount + delta).coerceIn(0, snapshot.maxBerths)
+            fireCountBox?.value = fireCount.toString()
+        }
+    }
+
+    // endregion
 
     // region opening and closing a card
 
@@ -316,6 +419,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             return false
         }
 
+        if (activeTab == Tab.OPERATIONS) return handleOpsClick(mx, my)
+
         // Clicking anywhere off the box while renaming commits it, the way a name field is expected to behave.
         if (renamingCrew) {
             commitCrewRename(send = true)
@@ -323,8 +428,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         // The heading is the crew's name, and clicking it edits it. Bounded to the left of the berth counter
-        // so aiming at the count never starts a rename.
-        if (mx >= left && mx <= left + PANEL_W - BERTHS_GUTTER && my >= top + 2 && my < top + LIST_TOP - 4) {
+        // and above the tab strip, so aiming at the count or a tab never starts a rename.
+        if (mx >= left && mx <= left + PANEL_W - BERTHS_GUTTER && my >= top + 2 && my < top + HEADER_BOTTOM) {
             beginCrewRename()
             return true
         }
@@ -348,6 +453,18 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             }
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
         }
+        if (activeTab == Tab.OPERATIONS) {
+            val holds = stores
+            if (fuelPopupOpen && holds != null) {
+                val max = (holds.fuels.size - FUEL_ROWS).coerceAtLeast(0)
+                fuelPopupScroll = (fuelPopupScroll - scrollY.toInt()).coerceIn(0, max)
+            } else if (ammoMenuOpen && holds != null) {
+                val max = (holds.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
+                ammoMenuScroll = (ammoMenuScroll - scrollY.toInt()).coerceIn(0, max)
+            }
+            // Swallowed either way: there is no list behind the Operations rows to scroll into.
+            return true
+        }
         scroll -= scrollY.toInt()
         clampScroll()
         return true
@@ -367,6 +484,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      */
     override fun tick() {
         super.tick()
+        // The bumpers walk the tab strip, exactly as they do on the helm menu -- but only while the strip
+        // is actually on screen: under a card or a popup they are inert, so backing out stays one gesture.
+        if (openCard == null && !renamingCrew && !ammoMenuOpen && !fuelPopupOpen) {
+            if (ShipGamepad.bumperLeftPressed() || ShipGamepad.bumperRightPressed()) {
+                switchTab(if (activeTab == Tab.OPERATIONS) Tab.ROSTER else Tab.OPERATIONS)
+            }
+        }
         padScroll()
         padNavigate()
         // The presses this screen answered must not double as deck actions the moment it closes.
@@ -411,11 +535,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun padNavigate() {
-        // The selection is meaningful only within one view; entering or leaving the card or the dropdown
-        // drops it rather than letting a row index masquerade as a button index.
+        // The selection is meaningful only within one view; entering or leaving the card, a dropdown or a
+        // tab drops it rather than letting a row index masquerade as a button index.
         val context = when {
+            fuelPopupOpen -> 5
+            ammoMenuOpen -> 4
             stationMenuOpen -> 2
             openCard != null -> 1
+            activeTab == Tab.OPERATIONS -> 3
             else -> 0
         }
         if (context != padContext) {
@@ -429,9 +556,64 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (step == 0 && !choose && !back) return
 
         when (context) {
+            5 -> padFuel(step, back, choose)
+            4 -> padOpsAmmo(step, choose, back)
+            3 -> padOps(step, choose, back)
             2 -> padMenu(step, choose, back)
             1 -> padCard(step, choose, back)
             else -> padRoster(step, choose)
+        }
+    }
+
+    /** The Operations rows, walked top to bottom. Choose is the click; back only clears the selection. */
+    private fun padOps(step: Int, choose: Boolean, back: Boolean) {
+        if (back) {
+            padSel = -1
+            return
+        }
+        if (step != 0) {
+            padSel = (if (padSel < 0) (if (step > 0) 0 else OPS_STOP_COUNT - 1) else padSel + step)
+                .coerceIn(0, OPS_STOP_COUNT - 1)
+        }
+        if (choose) {
+            if (padSel < 0) {
+                padSel = 0
+            } else {
+                opsActivate(padSel, null)
+            }
+        }
+    }
+
+    private fun padOpsAmmo(step: Int, choose: Boolean, back: Boolean) {
+        if (back) {
+            ammoMenuOpen = false
+            return
+        }
+        val holds = stores ?: return
+        if (holds.ammo.isEmpty()) return
+        if (step != 0) {
+            padSel = (if (padSel < 0) (if (step > 0) 0 else holds.ammo.size - 1) else padSel + step)
+                .coerceIn(0, holds.ammo.size - 1)
+            if (padSel < ammoMenuScroll) ammoMenuScroll = padSel
+            if (padSel >= ammoMenuScroll + AMMO_MENU_ROWS) ammoMenuScroll = padSel - AMMO_MENU_ROWS + 1
+        }
+        if (choose && padSel >= 0) {
+            holds.ammo.getOrNull(padSel)?.let { pick ->
+                selectedAmmo = pick.ball to pick.charge
+                ammoMenuOpen = false
+            }
+        }
+    }
+
+    private fun padFuel(step: Int, back: Boolean, choose: Boolean) {
+        if (back || choose) {
+            fuelPopupOpen = false
+            return
+        }
+        val holds = stores ?: return
+        if (step != 0) {
+            val max = (holds.fuels.size - FUEL_ROWS).coerceAtLeast(0)
+            fuelPopupScroll = (fuelPopupScroll + step).coerceIn(0, max)
         }
     }
 
@@ -526,8 +708,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 return true
             }
         }
-        // Escape steps back out of whatever is innermost: a rename, then a card, then the manifest.
+        // Escape steps back out of whatever is innermost: a popup, then a rename, then a card, then out.
         if (keyEvent.key() == GLFW.GLFW_KEY_ESCAPE) {
+            if (fuelPopupOpen) {
+                fuelPopupOpen = false
+                return true
+            }
+            if (ammoMenuOpen) {
+                ammoMenuOpen = false
+                return true
+            }
             if (renamingCrew) {
                 commitCrewRename(send = false)
                 return true
@@ -555,8 +745,17 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // NOT renderBackground: 1.21.11 calls it for us ahead of this, and calling it again draws the dim twice.
         panel(guiGraphics, left, top, PANEL_W, PANEL_H)
         drawHeader(guiGraphics)
-        drawList(guiGraphics, mouseX, mouseY)
+        if (activeTab == Tab.OPERATIONS && openCard == null) {
+            drawOperations(guiGraphics, mouseX, mouseY)
+        } else {
+            drawList(guiGraphics, mouseX, mouseY)
+        }
         if (openCard != null) drawCard(guiGraphics, mouseX, mouseY)
+        // The count boxes are real widgets, which super paints LAST -- over the fuel popup, whose panel
+        // covers their pixels. Hiding them while it is up is the honest fix; a popup owns the screen.
+        val boxesVisible = !fuelPopupOpen
+        gunnerCountBox?.visible = boxesVisible
+        fireCountBox?.visible = boxesVisible
         super.render(guiGraphics, mouseX, mouseY, partialTicks)
     }
 
@@ -572,7 +771,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         )
         guiGraphics.drawString(font, berths, left + PANEL_W - 8 - font.width(berths), top + 6, ACCENT, false)
 
-        guiGraphics.fill(left + 4, top + LIST_TOP - 3, left + PANEL_W - 4, top + LIST_TOP - 2, ACCENT)
+        // The tab baseline: the strip's ACTIVE tab opens onto this line, exactly as the helm menu's does.
+        guiGraphics.fill(left + 4, top + TAB_BASELINE_Y, left + PANEL_W - 4, top + TAB_BASELINE_Y + 1, ACCENT)
     }
 
     private fun drawList(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
@@ -654,6 +854,322 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val thumbY = trackTop + travel * scroll / (snapshot.maxBerths - VISIBLE_ROWS)
         guiGraphics.fill(x, thumbY, x + 3, thumbY + thumbH, ACCENT)
     }
+
+    // region the Operations tab
+
+    /**
+     * The Operations rows: painted and hand-tested like the roster, for the roster's reasons -- and one
+     * more. Every control here is also a numbered PAD STOP, walked with the D-pad; a painted row asks
+     * "am I stop N or under the mouse" in one expression, where a widget would need focus plumbing for
+     * each of fifteen controls.
+     */
+    private fun drawOperations(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
+        val holds = stores
+
+        small(guiGraphics, OPS_CREW_TEXT, left + 8, top + OPS_CREW_LABEL_Y, DIM)
+
+        // Gunners: [-] [count] [+], the battery to deal to, and the order itself.
+        small(guiGraphics, OPS_GUNNERS_TEXT, left + 8, top + OPS_ROW_G + 4, TEXT)
+        opsButton(guiGraphics, STOP_G_MINUS, MINUS_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_G_PLUS, PLUS_TEXT, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_G_SIDE, top + OPS_ROW_G, crewSide, sidesForCrew = true, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_G_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
+
+        // Fire watch: a count and the order. No sides -- a fire does not care which battery you favour.
+        small(guiGraphics, OPS_FIRE_TEXT, left + 8, top + OPS_ROW_F + 4, TEXT)
+        opsButton(guiGraphics, STOP_F_MINUS, MINUS_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_F_PLUS, PLUS_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_F_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
+
+        guiGraphics.fill(left + 8, top + OPS_SEP_Y, left + PANEL_W - 8, top + OPS_SEP_Y + 1, SEPARATOR)
+        small(guiGraphics, OPS_STORES_TEXT, left + 8, top + OPS_STORES_LABEL_Y, DIM)
+
+        // The stores side selector, shared by both restock orders, with the powder count alongside --
+        // the readout lives where the orders that spend it are aimed.
+        small(guiGraphics, OPS_SIDE_TEXT, left + 8, top + OPS_ROW_SIDE + 4, TEXT)
+        drawSides(guiGraphics, STOP_S_SIDE, top + OPS_ROW_SIDE, storesSide, sidesForCrew = false, mouseX, mouseY)
+        val powder = Component.translatable(
+            "gui.vs_eureka.crew_ops_powder_count", holds?.gunpowder?.toString() ?: "--"
+        )
+        small(
+            guiGraphics, powder,
+            left + PANEL_W - 8 - (font.width(powder) * SMALL).toInt(), top + OPS_ROW_SIDE + 4,
+            if (holds == null) DIM else ACCENT
+        )
+
+        opsButton(guiGraphics, STOP_POWDER, OPS_RESTOCK_POWDER_TEXT, mouseX, mouseY)
+
+        opsButton(guiGraphics, STOP_SHOT, OPS_RESTOCK_SHOT_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_AMMO_MENU, ammoButtonText(), mouseX, mouseY)
+
+        opsButton(guiGraphics, STOP_REFUEL, OPS_REFUEL_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_FUEL_LIST, OPS_FUEL_LIST_TEXT, mouseX, mouseY)
+
+        val line = when {
+            holds == null -> OPS_READING_TEXT
+            else -> Component.translatable(
+                "gui.vs_eureka.crew_ops_holds_line", holds.gunpowder, holds.ammo.size, holds.fuels.size
+            )
+        }
+        small(guiGraphics, line, left + 8, top + OPS_HOLDS_Y, DIM)
+
+        // Popups last, over everything, exactly as the station dropdown is.
+        if (ammoMenuOpen) drawAmmoMenu(guiGraphics, mouseX, mouseY)
+        if (fuelPopupOpen) drawFuelPopup(guiGraphics)
+    }
+
+    /** What the shot dropdown's button reads: the chosen round and how many the holds hold of it. */
+    private fun ammoButtonText(): Component {
+        val holds = stores ?: return OPS_READING_TEXT
+        if (holds.ammo.isEmpty()) return OPS_AMMO_NONE_TEXT
+        val chosen = selectedAmmo ?: return OPS_AMMO_NONE_TEXT
+        val count = holds.ammo.firstOrNull { it.ball == chosen.first && it.charge == chosen.second }?.count ?: 0
+        return Component.literal("${ammoName(chosen.first, chosen.second)} x $count ▾")
+    }
+
+    private fun ammoName(ball: Cannonball, charge: CannonCharge): String =
+        ItemStack(EurekaItems.cannonball(ball, charge)).hoverName.string
+
+    /** One painted Operations button, lit by mouse or by being the pad's stop. */
+    private fun opsButton(guiGraphics: GuiGraphics, stop: Int, text: Component, mouseX: Int, mouseY: Int) {
+        val rect = opsStopRect(stop) ?: return
+        val (x, y, w, h) = rect
+        val lit = opsLit(stop, x, y, w, h, mouseX, mouseY)
+        guiGraphics.fill(x, y, x + w, y + h, if (lit) ACCENT else ROW_LOCKED)
+        small(
+            guiGraphics, text,
+            x + (w - (font.width(text) * SMALL).toInt()) / 2, y + 4,
+            if (lit) 0xFFFFFFFF.toInt() else TEXT
+        )
+    }
+
+    /**
+     * A three-way battery selector. The selected segment is solid accent; the group grows a thin accent
+     * frame while it is the pad's stop, since "lit" has to mean something different from "selected" here.
+     */
+    private fun drawSides(
+        guiGraphics: GuiGraphics,
+        stop: Int,
+        y: Int,
+        selected: CrewOperations.Side,
+        sidesForCrew: Boolean,
+        mouseX: Int,
+        mouseY: Int
+    ) {
+        val rect = opsStopRect(stop) ?: return
+        val (gx, gy, gw, gh) = rect
+        if (padContext == 3 && padSel == stop) {
+            guiGraphics.fill(gx - 1, gy - 1, gx + gw + 1, gy, ACCENT)
+            guiGraphics.fill(gx - 1, gy + gh, gx + gw + 1, gy + gh + 1, ACCENT)
+            guiGraphics.fill(gx - 1, gy, gx, gy + gh, ACCENT)
+            guiGraphics.fill(gx + gw, gy, gx + gw + 1, gy + gh, ACCENT)
+        }
+        for ((index, side) in SIDE_ORDER.withIndex()) {
+            val sx = gx + index * (SEG_W + SEG_GAP)
+            val active = side == selected
+            val hovered = mouseX >= sx && mouseX < sx + SEG_W && mouseY >= y && mouseY < y + OPS_CTRL_H
+            guiGraphics.fill(
+                sx, y, sx + SEG_W, y + OPS_CTRL_H,
+                when {
+                    active -> ACCENT
+                    hovered -> ROW_HOVER
+                    else -> ROW_LOCKED
+                }
+            )
+            val text = sideText(side)
+            small(
+                guiGraphics, text,
+                sx + (SEG_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
+                if (active) 0xFFFFFFFF.toInt() else TEXT
+            )
+        }
+    }
+
+    private fun sideText(side: CrewOperations.Side): Component = when (side) {
+        CrewOperations.Side.PORT -> OPS_SIDE_PORT_TEXT
+        CrewOperations.Side.BOTH -> OPS_SIDE_BOTH_TEXT
+        CrewOperations.Side.STARBOARD -> OPS_SIDE_STBD_TEXT
+    }
+
+    private fun opsLit(stop: Int, x: Int, y: Int, w: Int, h: Int, mouseX: Int, mouseY: Int): Boolean =
+        (padContext == 3 && padSel == stop) ||
+            (mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h)
+
+    /** Every stop's rectangle, absolute. The single source both the mouse and the pad walk against. */
+    private fun opsStopRect(stop: Int): IntArray? = when (stop) {
+        STOP_G_MINUS -> intArrayOf(left + OPS_MINUS_X, top + OPS_ROW_G, OPS_STEP_W, OPS_CTRL_H)
+        STOP_G_BOX -> intArrayOf(left + OPS_BOX_X, top + OPS_ROW_G, OPS_BOX_W, OPS_CTRL_H)
+        STOP_G_PLUS -> intArrayOf(left + OPS_PLUS_X, top + OPS_ROW_G, OPS_STEP_W, OPS_CTRL_H)
+        STOP_G_SIDE -> intArrayOf(left + OPS_SIDES_X, top + OPS_ROW_G, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_G_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, top + OPS_ROW_G, OPS_ASSIGN_W, OPS_CTRL_H)
+        STOP_F_MINUS -> intArrayOf(left + OPS_MINUS_X, top + OPS_ROW_F, OPS_STEP_W, OPS_CTRL_H)
+        STOP_F_BOX -> intArrayOf(left + OPS_BOX_X, top + OPS_ROW_F, OPS_BOX_W, OPS_CTRL_H)
+        STOP_F_PLUS -> intArrayOf(left + OPS_PLUS_X, top + OPS_ROW_F, OPS_STEP_W, OPS_CTRL_H)
+        STOP_F_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, top + OPS_ROW_F, OPS_ASSIGN_W, OPS_CTRL_H)
+        STOP_S_SIDE -> intArrayOf(left + OPS_S_SIDES_X, top + OPS_ROW_SIDE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_POWDER -> intArrayOf(left + 8, top + OPS_ROW_POWDER, OPS_WIDE_W, OPS_CTRL_H)
+        STOP_SHOT -> intArrayOf(left + 8, top + OPS_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
+        STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_SHOT, OPS_AMMO_W, OPS_CTRL_H)
+        STOP_REFUEL -> intArrayOf(left + 8, top + OPS_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
+        STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
+        else -> null
+    }
+
+    /**
+     * Press one Operations control. [mouseX] carries which SEGMENT of a selector was clicked; null is
+     * the pad, which cycles instead -- the same control, two grips.
+     */
+    private fun opsActivate(stop: Int, mouseX: Int?) {
+        when (stop) {
+            STOP_G_MINUS -> adjustCount(gunners = true, delta = -1)
+            STOP_G_PLUS -> adjustCount(gunners = true, delta = +1)
+            STOP_G_BOX -> gunnerCountBox?.let { this.focused = it }
+            STOP_G_SIDE -> crewSide = pickSide(crewSide, STOP_G_SIDE, mouseX)
+            STOP_G_ASSIGN ->
+                PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide)
+            STOP_F_MINUS -> adjustCount(gunners = false, delta = -1)
+            STOP_F_PLUS -> adjustCount(gunners = false, delta = +1)
+            STOP_F_BOX -> fireCountBox?.let { this.focused = it }
+            STOP_F_ASSIGN ->
+                PathNetworkingFabric.sendCrewAssignFirefighters(snapshot.helm, fireCount)
+            STOP_S_SIDE -> storesSide = pickSide(storesSide, STOP_S_SIDE, mouseX)
+            STOP_POWDER -> PathNetworkingFabric.sendCrewRestockPowder(snapshot.helm, storesSide)
+            STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
+                PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, storesSide, ball, charge)
+            }
+            STOP_AMMO_MENU -> if (stores?.ammo?.isNotEmpty() == true) {
+                ammoMenuOpen = true
+                ammoMenuScroll = 0
+            }
+            STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
+            STOP_FUEL_LIST -> if (stores != null) {
+                fuelPopupOpen = true
+                fuelPopupScroll = 0
+            }
+        }
+    }
+
+    private fun pickSide(current: CrewOperations.Side, stop: Int, mouseX: Int?): CrewOperations.Side {
+        if (mouseX == null) {
+            // The pad cycles the selector in reading order.
+            return SIDE_ORDER[(SIDE_ORDER.indexOf(current) + 1) % SIDE_ORDER.size]
+        }
+        val rect = opsStopRect(stop) ?: return current
+        val index = ((mouseX - rect[0]) / (SEG_W + SEG_GAP)).coerceIn(0, SIDE_ORDER.size - 1)
+        return SIDE_ORDER[index]
+    }
+
+    private fun handleOpsClick(mx: Int, my: Int): Boolean {
+        val holds = stores
+
+        // Popups own the click outright while open, the station dropdown's rule.
+        if (fuelPopupOpen) {
+            fuelPopupOpen = false
+            return true
+        }
+        if (ammoMenuOpen) {
+            if (holds != null) {
+                val x = left + OPS_AMMO_X
+                val menuY = top + OPS_ROW_SHOT + OPS_CTRL_H
+                if (mx >= x && mx < x + OPS_AMMO_W && my >= menuY) {
+                    val index = ammoMenuScroll + (my - menuY) / AMMO_MENU_ROW_H
+                    holds.ammo.getOrNull(index)?.let { pick ->
+                        if ((my - menuY) / AMMO_MENU_ROW_H < AMMO_MENU_ROWS) {
+                            selectedAmmo = pick.ball to pick.charge
+                        }
+                    }
+                }
+            }
+            ammoMenuOpen = false
+            return true
+        }
+
+        for (stop in 0 until OPS_STOP_COUNT) {
+            val rect = opsStopRect(stop) ?: continue
+            if (mx >= rect[0] && mx < rect[0] + rect[2] && my >= rect[1] && my < rect[1] + rect[3]) {
+                opsActivate(stop, mx)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun drawAmmoMenu(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
+        val holds = stores ?: return
+        val x = left + OPS_AMMO_X
+        val y = top + OPS_ROW_SHOT + OPS_CTRL_H
+        val visible = minOf(holds.ammo.size, AMMO_MENU_ROWS)
+        if (visible == 0) return
+        panel(guiGraphics, x, y, OPS_AMMO_W, visible * AMMO_MENU_ROW_H + 2)
+
+        for (row in 0 until visible) {
+            val index = ammoMenuScroll + row
+            val entry = holds.ammo.getOrNull(index) ?: break
+            val rowY = y + 1 + row * AMMO_MENU_ROW_H
+            val hovered = (padContext == 4 && padSel == index) ||
+                (mouseX >= x && mouseX < x + OPS_AMMO_W && mouseY >= rowY && mouseY < rowY + AMMO_MENU_ROW_H)
+            if (hovered) guiGraphics.fill(x + 1, rowY, x + OPS_AMMO_W - 1, rowY + AMMO_MENU_ROW_H, ACCENT)
+            small(
+                guiGraphics,
+                Component.literal("${ammoName(entry.ball, entry.charge)} x ${entry.count}"),
+                x + 4, rowY + 3,
+                if (hovered) 0xFFFFFFFF.toInt() else TEXT
+            )
+        }
+        if (ammoMenuScroll > 0) small(guiGraphics, MORE_ABOVE, x + OPS_AMMO_W - 10, y + 3, DIM)
+        if (ammoMenuScroll + visible < holds.ammo.size) {
+            small(guiGraphics, MORE_BELOW, x + OPS_AMMO_W - 10, y + visible * AMMO_MENU_ROW_H - 8, DIM)
+        }
+    }
+
+    private fun drawFuelPopup(guiGraphics: GuiGraphics) {
+        val holds = stores ?: return
+        val x = left + FUEL_POPUP_X
+        val y = top + FUEL_POPUP_Y
+        panel(guiGraphics, x, y, FUEL_POPUP_W, FUEL_POPUP_H)
+        guiGraphics.drawString(font, OPS_FUEL_TITLE_TEXT, x + 6, y + 5, TEXT, false)
+        guiGraphics.fill(x + 4, y + 16, x + FUEL_POPUP_W - 4, y + 17, SEPARATOR)
+
+        if (holds.fuels.isEmpty()) {
+            small(guiGraphics, OPS_FUEL_NONE_TEXT, x + 6, y + 22, DIM)
+            return
+        }
+
+        for (row in 0 until FUEL_ROWS) {
+            val index = fuelPopupScroll + row
+            val fuel = holds.fuels.getOrNull(index) ?: break
+            val rowY = y + 20 + row * AMMO_MENU_ROW_H
+            small(
+                guiGraphics,
+                Component.literal("${fuelName(fuel.itemId)} x ${fuel.count} -- ${fuel.burnTicks / 20}s"),
+                x + 6, rowY, TEXT
+            )
+        }
+        if (fuelPopupScroll > 0) small(guiGraphics, MORE_ABOVE, x + FUEL_POPUP_W - 10, y + 20, DIM)
+        if (fuelPopupScroll + FUEL_ROWS < holds.fuels.size) {
+            small(guiGraphics, MORE_BELOW, x + FUEL_POPUP_W - 10, y + FUEL_POPUP_H - 10, DIM)
+        }
+    }
+
+    private fun fuelName(itemId: String): String =
+        BuiltInRegistries.ITEM.getOptional(Identifier.parse(itemId)).map { ItemStack(it).hoverName.string }
+            .orElse(itemId)
+
+    /** A fresh count of the holds. Also picks a default round -- the most plentiful -- if none is chosen. */
+    private fun acceptStoresNow(next: ShipStores.Stores) {
+        stores = next
+        val chosen = selectedAmmo
+        val stillThere = chosen != null && next.ammo.any { it.ball == chosen.first && it.charge == chosen.second }
+        if (!stillThere) {
+            selectedAmmo = next.ammo.maxByOrNull { it.count }?.let { it.ball to it.charge }
+        }
+        val maxFuel = (next.fuels.size - FUEL_ROWS).coerceAtLeast(0)
+        fuelPopupScroll = fuelPopupScroll.coerceIn(0, maxFuel)
+        val maxAmmo = (next.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
+        ammoMenuScroll = ammoMenuScroll.coerceIn(0, maxAmmo)
+    }
+
+    // endregion
 
     /**
      * A crew member's head: the actual villager, framed on the shoulders up.
@@ -1065,6 +1581,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             (Minecraft.getInstance().screen as? CrewManifestScreen)?.applyDetail(detail)
         }
 
+        /** A stores tally arriving. Ignored unless the manifest on screen is about that same wheel. */
+        fun acceptStores(helm: Long, stores: ShipStores.Stores) {
+            val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
+            if (screen.snapshot.helm != helm) return
+            screen.acceptStoresNow(stores)
+        }
+
         private val TITLE: Component = Component.translatable("gui.vs_eureka.crew_manifest")
         private val LOCKED_TEXT: Component = Component.translatable("gui.vs_eureka.crew_berth_locked")
         private val LOCKED_HINT: Component = Component.translatable("gui.vs_eureka.crew_berth_hint")
@@ -1087,18 +1610,120 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val UNSTATIONED_TEXT: Component = Component.translatable("gui.vs_eureka.crew_unstationed")
         private val MORE_ABOVE: Component = Component.literal("▲")
         private val MORE_BELOW: Component = Component.literal("▼")
+        private val TAB_OPERATIONS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_operations")
+        private val TAB_ROSTER_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_roster")
+        private val OPS_CREW_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_crew")
+        private val OPS_STORES_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_stores")
+        private val OPS_GUNNERS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_gunners")
+        private val OPS_FIRE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fire_watch")
+        private val OPS_ASSIGN_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_assign")
+        private val OPS_SIDE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_side")
+        private val OPS_SIDE_PORT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_port")
+        private val OPS_SIDE_BOTH_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_both")
+        private val OPS_SIDE_STBD_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_starboard")
+        private val OPS_RESTOCK_POWDER_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_restock_powder")
+        private val OPS_RESTOCK_SHOT_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_restock_shot")
+        private val OPS_REFUEL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_refuel")
+        private val OPS_FUEL_LIST_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fuel_list")
+        private val OPS_FUEL_TITLE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fuel_title")
+        private val OPS_FUEL_NONE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fuel_none")
+        private val OPS_AMMO_NONE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_ammo_none")
+        private val OPS_READING_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_reading")
+        private val COUNT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_count")
+        private val MINUS_TEXT: Component = Component.literal("-")
+        private val PLUS_TEXT: Component = Component.literal("+")
+
+        /** The selectors' reading order, which is also the pad's cycle order. */
+        private val SIDE_ORDER = listOf(
+            CrewOperations.Side.PORT, CrewOperations.Side.BOTH, CrewOperations.Side.STARBOARD
+        )
         private val UNEMPLOYED_TEXT: Component = Component.translatable("entity.vs_eureka.villager.unemployed")
         private val INFO_GLYPH: Component = Component.literal("i")
         private val ARROW_TEXT: Component = Component.literal("→")
 
         // Panel. Wide enough for a name, a profession-and-rank line and the card's trade rows without wrapping;
-        // eight rows tall, which keeps the whole thing on screen at GUI scale 3 on a 1080p display.
+        // eight rows tall, which keeps the whole thing on screen at GUI scale 3 on a 1080p display. Grown 16px
+        // for the tab strip rather than surrendering a roster row -- the roster's scroll and pad behaviour is
+        // settled, and 230 still clears the 360-logical-pixel budget with half again to spare.
         private const val PANEL_W = 300
-        private const val PANEL_H = 214
-        private const val LIST_TOP = 22
+        private const val PANEL_H = 230
+        private const val LIST_TOP = 38
         private const val ROW_H = 22
         private const val VISIBLE_ROWS = 8
         private const val LIST_BOTTOM = LIST_TOP + ROW_H * VISIBLE_ROWS
+
+        /** Where the header's click-to-rename target ends: above the tab strip, not above the old rule. */
+        private const val HEADER_BOTTOM = 16
+
+        // The tab strip, in the helm menu's proportions: two tabs sharing the panel width.
+        private const val TAB_Y = 18
+        private const val TAB_H = 14
+        private const val TAB_BASELINE_Y = TAB_Y + TAB_H
+        private const val TAB_MARGIN = 8
+        private const val TAB_GAP = 4
+        private const val TAB_W = (PANEL_W - 2 * TAB_MARGIN - TAB_GAP) / 2
+
+        // region Operations geometry (panel-relative rows; every control 14px tall)
+
+        private const val OPS_CTRL_H = 14
+        private const val OPS_CREW_LABEL_Y = 42
+        private const val OPS_ROW_G = 52
+        private const val OPS_ROW_F = 72
+        private const val OPS_SEP_Y = 94
+        private const val OPS_STORES_LABEL_Y = 100
+        private const val OPS_ROW_SIDE = 110
+        private const val OPS_ROW_POWDER = 128
+        private const val OPS_ROW_SHOT = 146
+        private const val OPS_ROW_REFUEL = 182
+        private const val OPS_HOLDS_Y = 204
+
+        private const val OPS_MINUS_X = 64
+        private const val OPS_BOX_X = 80
+        private const val OPS_BOX_W = 30
+        private const val OPS_PLUS_X = 114
+        private const val OPS_STEP_W = 12
+        private const val OPS_SIDES_X = 136
+        private const val OPS_S_SIDES_X = 64
+        private const val OPS_ASSIGN_X = 244
+        private const val OPS_ASSIGN_W = 48
+        private const val OPS_WIDE_W = 100
+        private const val OPS_AMMO_X = 116
+        private const val OPS_AMMO_W = 176
+        private const val OPS_FUEL_BTN_W = 50
+
+        private const val SEG_W = 32
+        private const val SEG_GAP = 2
+
+        private const val AMMO_MENU_ROWS = 6
+        private const val AMMO_MENU_ROW_H = 12
+
+        private const val FUEL_POPUP_X = 40
+        private const val FUEL_POPUP_Y = 56
+        private const val FUEL_POPUP_W = 220
+        private const val FUEL_POPUP_H = 110
+        private const val FUEL_ROWS = 7
+
+        /** The pad's walk order over the Operations rows; indexes into [opsStopRect]. */
+        private const val STOP_G_MINUS = 0
+        private const val STOP_G_BOX = 1
+        private const val STOP_G_PLUS = 2
+        private const val STOP_G_SIDE = 3
+        private const val STOP_G_ASSIGN = 4
+        private const val STOP_F_MINUS = 5
+        private const val STOP_F_BOX = 6
+        private const val STOP_F_PLUS = 7
+        private const val STOP_F_ASSIGN = 8
+        private const val STOP_S_SIDE = 9
+        private const val STOP_POWDER = 10
+        private const val STOP_SHOT = 11
+        private const val STOP_AMMO_MENU = 12
+        private const val STOP_REFUEL = 13
+        private const val STOP_FUEL_LIST = 14
+        private const val OPS_STOP_COUNT = 15
+
+        // endregion
 
         private const val CARD_W = 260
 
