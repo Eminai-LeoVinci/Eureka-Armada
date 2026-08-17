@@ -14,6 +14,7 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.ShipGuns
+import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
@@ -183,6 +184,7 @@ object CrewManifest {
             if (berth.villager in present) continue
             CrewMuster.findAnywhere(level.server, berth.villager)?.let { present[berth.villager] = it }
         }
+
 
         // Opening the manifest is the most reliable moment a whole crew is in hand at once, so it is where the
         // written copies are brought up to date. A snapshot that is one look-at-the-articles old is close
@@ -555,7 +557,17 @@ object CrewManifest {
 
     /** Discharge one crew member and hand back a manifest without them. */
     fun requestDismiss(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID) {
-        val station = stationAt(level, player, helm) ?: return
+        // A refusal here is silent by design -- a stale or forged helm deserves no answer -- but a captain
+        // standing at their own wheel deserves to know why nothing happened. Only the reachable-articles
+        // case speaks, because it is the only one a player can act on.
+        val station = stationAt(level, player, helm)
+        if (station == null) {
+            PathMessages.send(
+                player, "Stand aboard the ship whose articles these are to pay anybody off.",
+                PathMessages.Kind.ERROR
+            )
+            return
+        }
         val name = dismiss(level, player, station, villager) ?: return
         val crewName = station.helmName?.string ?: "the articles"
         PathMessages.send(player, "Paid off $name from $crewName.", PathMessages.Kind.GOOD)
@@ -587,8 +599,17 @@ object CrewManifest {
         val dx = player.x - world.x
         val dy = player.y - world.y
         val dz = player.z - world.z
-        if (dx * dx + dy * dy + dz * dz > REACH_SQ) return null
-        return station
+        if (dx * dx + dy * dy + dz * dz <= REACH_SQ) return station
+
+        // Out of reach of the wheel itself is not out of reach of the ARTICLES. A manifest opens from any
+        // wheel aboard -- a second wheel is told the articles are kept elsewhere and still shown them -- so a
+        // reach measured only against the crew station refused every card action on any ship long enough to
+        // have its wheels apart: the list opened, and dismiss, rename and duty all failed silently, which is
+        // exactly the shape of a broken screen. Standing aboard the ship whose articles these are is the
+        // honest gate, and it is the same one the broadside order uses. Armada hulls count as one ship, so a
+        // captain on the consort can still pay off the flagship's crew.
+        val standing = ShipCrew.standingOn(player) ?: return null
+        return if (standing in ArmadaGroup.idsOf(level, ship)) station else null
     }
 
     /**
