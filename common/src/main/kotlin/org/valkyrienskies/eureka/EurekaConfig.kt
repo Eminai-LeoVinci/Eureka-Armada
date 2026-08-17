@@ -1141,6 +1141,14 @@ object EurekaConfig {
 
         @JsonSchema(description = "3x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
         var cannonReloadSeconds3x = 4.0
+
+        @JsonSchema(
+            description = "How many cannonballs stack in an inventory slot, 1 to 99. Applied when items " +
+                "register, so changing it needs a game restart. The guns' own magazines hold 64 a slot " +
+                "regardless -- this is about hauling and hold space, which is where the balance lever " +
+                "actually sits. Default 64."
+        )
+        var cannonballStackSize = 64
         // endregion
 
         @JsonSchema(

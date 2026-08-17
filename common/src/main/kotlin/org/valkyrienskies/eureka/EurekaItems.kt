@@ -53,7 +53,9 @@ object EurekaItems {
             for (ball in Cannonball.entries) {
                 val load = Load(ball, charge)
                 put(ball to charge, ITEMS.register(load.itemName) {
-                    CannonballItem(ball, charge, itemProps().stacksTo(16))
+                    // Read at registration, which is why EurekaMod loads the config first: a stack size is
+                // baked into the item's properties and cannot change after this line runs.
+                CannonballItem(ball, charge, itemProps().stacksTo(EurekaConfig.SERVER.cannonballStackSize.coerceIn(1, 99)))
                 })
             }
         }
