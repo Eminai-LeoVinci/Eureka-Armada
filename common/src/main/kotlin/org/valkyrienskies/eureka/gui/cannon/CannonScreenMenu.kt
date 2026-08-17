@@ -8,7 +8,12 @@ import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.inventory.Slot
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
+import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.state.properties.BlockStateProperties
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaScreens
+import org.valkyrienskies.eureka.block.CannonBlock
+import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.cannon.PowderCharge
 import org.valkyrienskies.eureka.item.CannonballItem
@@ -35,6 +40,7 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
     private val data = blockEntity?.data?.clone() ?: KtContainerData()
     var powderChargeOrdinal by data
     var gunLabelCode by data
+    var elevationIndex by data
 
     /** This gun's powder measure, as the client sees it. */
     val powderCharge: PowderCharge get() = PowderCharge.of(powderChargeOrdinal)
@@ -88,11 +94,47 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
      * whoever has the menu open.
      */
     override fun clickMenuButton(player: Player, id: Int): Boolean {
-        if (id != BUTTON_CHARGE) return super.clickMenuButton(player, id)
         val gun = blockEntity ?: return false
-        gun.powderCharge = gun.powderCharge.next
-        gun.setChanged()
-        return true
+        when (id) {
+            BUTTON_CHARGE -> {
+                gun.powderCharge = gun.powderCharge.next
+                gun.setChanged()
+                return true
+            }
+            BUTTON_ANGLE -> {
+                // The same both-halves re-pose the crouch-click gesture makes, minus its sound and
+                // actionbar line -- the button's own label answering is the feedback in here.
+                val level = gun.level ?: return false
+                val state = gun.blockState
+                if (state.block !is CannonBlock) return false
+                val facing = state.getValue(BlockStateProperties.HORIZONTAL_FACING)
+                val next = (state.getValue(EurekaProperties.ELEVATION) + 1) % 5
+                for (part in CannonPart.entries) {
+                    val pos = gun.blockPos.relative(facing, part.ordinal)
+                    val there = level.getBlockState(pos)
+                    if (there.block !is CannonBlock) continue
+                    level.setBlock(pos, there.setValue(EurekaProperties.ELEVATION, next), Block.UPDATE_CLIENTS)
+                }
+                gun.elevationIndex = next
+                return true
+            }
+            else -> return super.clickMenuButton(player, id)
+        }
+    }
+
+    /**
+     * The elevation mirror is refreshed here, every server broadcast while the menu is open, because the
+     * truth lives on the BLOCK and can move without this menu hearing -- a crouch-click at the gun, or
+     * the Operations tab laying the whole battery.
+     */
+    override fun broadcastChanges() {
+        blockEntity?.let { gun ->
+            val state = gun.blockState
+            if (state.block is CannonBlock) {
+                gun.elevationIndex = state.getValue(EurekaProperties.ELEVATION)
+            }
+        }
+        super.broadcastChanges()
     }
 
     /**
@@ -132,6 +174,9 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
 
         /** Button id for the breech's powder-measure toggle. */
         const val BUTTON_CHARGE = 0
+
+        /** Button id for the barrel's elevation toggle -- the crouch-click gesture, indoors. */
+        const val BUTTON_ANGLE = 1
 
         // The magazine has to fit between the divider at y=19 and the player inventory at y=84, and three
         // 18px wells plus their gaps is most of that. The powder column sits left, the shot slot centres

@@ -1,6 +1,5 @@
 package org.valkyrienskies.eureka.gui.cannon
 
-import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.components.Tooltip
@@ -28,6 +27,7 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
     AbstractContainerScreen<CannonScreenMenu>(handler, playerInventory, title) {
 
     private var chargeButton: Button? = null
+    private var angleButton: Button? = null
 
     init {
         imageWidth = 176
@@ -49,20 +49,38 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
                 .tooltip(Tooltip.create(Component.translatable("gui.vs_eureka.cannon_charge.tip")))
                 .build()
         )
+
+        // The barrel's elevation, cycled the way Power cycles the charge. The gun's own crouch-click
+        // gesture moves the same setting; the mirror slot keeps this label true whichever hand moved it.
+        angleButton = addRenderableWidget(
+            Button.builder(angleLabel()) {
+                minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, CannonScreenMenu.BUTTON_ANGLE)
+            }
+                .bounds(leftPos + BUTTON_X, topPos + ANGLE_Y, BUTTON_W, BUTTON_H)
+                .tooltip(Tooltip.create(Component.translatable("gui.vs_eureka.cannon_angle.tip")))
+                .build()
+        )
     }
 
     /**
-     * The label is rebuilt every frame rather than only when the button is pressed, because the value can
-     * change without this client touching it -- another player at the same gun, or the server refusing a
-     * click. The synced container data is the truth; the button just shows it.
+     * The labels are rebuilt every frame rather than only when a button is pressed, because either value
+     * can change without this client touching it -- another player at the same gun, the crouch-click
+     * gesture outside, or the Operations tab laying the battery. The synced container data is the truth;
+     * the buttons just show it.
      */
     override fun containerTick() {
         super.containerTick()
         chargeButton?.message = chargeLabel()
+        angleButton?.message = angleLabel()
     }
 
     private fun chargeLabel(): Component =
         Component.translatable("gui.vs_eureka.cannon_charge", menu.powderCharge.powder)
+
+    private fun angleLabel(): Component {
+        val degrees = org.valkyrienskies.eureka.EurekaProperties.elevationDegrees(menu.elevationIndex.coerceIn(0, 4))
+        return Component.literal(if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees))
+    }
 
     override fun renderBg(guiGraphics: GuiGraphics, partialTicks: Float, mouseX: Int, mouseY: Int) {
         val left = (width - imageWidth) / 2
@@ -111,9 +129,6 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
         }
 
         centered(guiGraphics, SHOT_LABEL, CannonScreenMenu.SHOT_X + 8, CannonScreenMenu.SLOT_Y - 12, DIM)
-
-        val status = if (menu.loaded) LOADED else UNLOADED
-        centered(guiGraphics, status, BUTTON_X + BUTTON_W / 2, BUTTON_Y + BUTTON_H + 5, if (menu.loaded) READY else DIM)
     }
 
     private fun centered(guiGraphics: GuiGraphics, text: Component, centreX: Int, y: Int, color: Int) {
@@ -128,17 +143,15 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
 
     companion object {
         private val SHOT_LABEL: Component = Component.translatable("gui.vs_eureka.cannon_shot")
-        private val LOADED: Component =
-            Component.translatable("gui.vs_eureka.cannon_loaded").withStyle(ChatFormatting.BOLD)
-        private val UNLOADED: Component = Component.translatable("gui.vs_eureka.cannon_unloaded")
 
         // Wide enough that the label never has to scroll. A vanilla Button insets its text 2px each side and
-        // scrolls whatever is left over, so the usable width is BUTTON_W - 4; "1x Charge" measures 52 in the
-        // default font, which overran a 52-wide button by exactly the 4 it lost to the insets. 60 leaves 56
-        // usable and a few pixels of headroom for a wider glyph set, and there is room to grow it further --
-        // the shot slot ends at x=97 and the panel's inner edge is at 168.
+        // scrolls whatever is left over, so the usable width is BUTTON_W - 4; "1x Power" measures under the
+        // 56 usable with headroom for a wider glyph set, and there is room to grow it further -- the shot
+        // slot ends at x=97 and the panel's inner edge is at 168. Power sits high and Angle under it, the
+        // pair filling the column the old loaded/not-loaded caption used to end.
         private const val BUTTON_X = 104
-        private const val BUTTON_Y = 36
+        private const val BUTTON_Y = 28
+        private const val ANGLE_Y = 52
         private const val BUTTON_W = 60
         private const val BUTTON_H = 20
 

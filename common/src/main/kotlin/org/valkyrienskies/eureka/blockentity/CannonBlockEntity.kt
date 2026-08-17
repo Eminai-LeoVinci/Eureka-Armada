@@ -83,6 +83,14 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     var gunLabelCode by data
 
+    /**
+     * A MIRROR of the ELEVATION blockstate, for the menu's Angle button -- elevation itself lives on the
+     * block, not here, so this is never persisted and never authoritative: the menu refreshes it every
+     * broadcast while it is open, which also keeps the button honest when somebody crouch-clicks the gun
+     * outside. Third slot; the declaration-order rule above applies.
+     */
+    var elevationIndex by data
+
     /** The three powder slots, top to bottom, and the shot slot. */
     var powderA: ItemStack = ItemStack.EMPTY
     var powderB: ItemStack = ItemStack.EMPTY
