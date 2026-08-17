@@ -11,9 +11,12 @@ import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.trading.MerchantOffer
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.ShipGuns
+import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -56,7 +59,9 @@ object CrewManifest {
         val level: Int,
         val name: String,
         /** Shown on the row itself, so a captain can read a whole crew's jobs without opening eight cards. */
-        val duty: CrewDuty
+        val duty: CrewDuty,
+        /** The captain's "do not touch", drawn as a padlock on the row. See `CrewLedger.Berth.locked`. */
+        val locked: Boolean = false
     )
 
     data class Snapshot(
@@ -123,7 +128,21 @@ object CrewManifest {
          * bow, stern chasers) -- the entries of the Station dropdown. Empty when the wheel has no articles
          * to name a bow from, which is also exactly when nobody can be stationed.
          */
-        val gunOptions: List<GunOption>
+        val gunOptions: List<GunOption>,
+
+        /** The captain's "do not touch": everything on this card but Unlock greys out while it is set. */
+        val locked: Boolean = false,
+
+        /**
+         * The stationed gun's own settings, read live off the cannon so the card can adjust them: the
+         * powder charge's ordinal, the elevation index (0..4), and what is chambered. All −1 (and the
+         * count 0) when this crew member has no resolvable gun -- which is also what hides the controls.
+         */
+        val chargeOrdinal: Int = -1,
+        val elevationIndex: Int = -1,
+        val ammoBall: Int = -1,
+        val ammoCharge: Int = -1,
+        val ammoCount: Int = 0
     )
 
     /**
@@ -234,7 +253,8 @@ object CrewManifest {
                 name = berth.name,
                 // Off the BERTH, not off the villager, so somebody ashore still shows the job they hold. That
                 // is the point of keeping duties on the articles -- walking off the deck is not resigning.
-                duty = berth.duty
+                duty = berth.duty,
+                locked = berth.locked
             )
         }
         val data = villager.villagerData
@@ -246,7 +266,8 @@ object CrewManifest {
             villagerType = keyOf(data.type(), DEFAULT_TYPE),
             level = data.level(),
             name = CrewNames.displayName(villager),
-            duty = berth.duty
+            duty = berth.duty,
+            locked = berth.locked
         )
     }
 
@@ -267,6 +288,26 @@ object CrewManifest {
         // showing "Reading the articles..." for as long as it was open, which is what a crew member who had
         // died or walked ashore looked like -- a row that would not open, could not be renamed, and showed no
         // rank. It was one missing answer wearing three costumes.
+        // The stationed gun's live settings, read off the cannon itself so the card's controls show what
+        // the gun would actually do. A berth with no resolvable gun answers the sentinels, which is what
+        // hides the controls -- an unstationed gunner has nothing to lay.
+        var chargeOrdinal = -1
+        var elevationIndex = -1
+        var ammoBall = -1
+        var ammoCharge = -1
+        var ammoCount = 0
+        val gun = berth.station?.let { level.getBlockEntity(BlockPos.of(it)) as? CannonBlockEntity }
+        if (gun != null) {
+            chargeOrdinal = gun.powderChargeOrdinal
+            elevationIndex = gun.blockState.getValue(EurekaProperties.ELEVATION)
+            val shot = gun.shot.item
+            if (shot is CannonballItem) {
+                ammoBall = shot.ball.ordinal
+                ammoCharge = shot.charge.ordinal
+                ammoCount = gun.shot.count
+            }
+        }
+
         if (crew == null) {
             val papers = CrewSnapshot.papers(berth.snapshot)
             return Detail(
@@ -282,7 +323,13 @@ object CrewManifest {
                 gunners = muster.gunners,
                 fireParty = muster.fireParty,
                 stationLabel = berth.stationLabel ?: "",
-                gunOptions = muster.optionsFor(villager)
+                gunOptions = muster.optionsFor(villager),
+                locked = berth.locked,
+                chargeOrdinal = chargeOrdinal,
+                elevationIndex = elevationIndex,
+                ammoBall = ammoBall,
+                ammoCharge = ammoCharge,
+                ammoCount = ammoCount
             )
         }
 
@@ -300,7 +347,13 @@ object CrewManifest {
             gunners = muster.gunners,
             fireParty = muster.fireParty,
             stationLabel = berth.stationLabel ?: "",
-            gunOptions = muster.optionsFor(villager)
+            gunOptions = muster.optionsFor(villager),
+            locked = berth.locked,
+            chargeOrdinal = chargeOrdinal,
+            elevationIndex = elevationIndex,
+            ammoBall = ammoBall,
+            ammoCharge = ammoCharge,
+            ammoCount = ammoCount
         )
     }
 

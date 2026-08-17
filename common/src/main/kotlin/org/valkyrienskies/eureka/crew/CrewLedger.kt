@@ -91,7 +91,17 @@ class CrewLedger : SavedData() {
          * addresses and the gunner re-seats himself. Cleared only when the gunner is genuinely relieved --
          * the gun destroyed, the duty changed, or the captain unassigning the station.
          */
-        val stationLabel: String? = null
+        val stationLabel: String? = null,
+        /**
+         * The captain's "do not touch". A locked berth keeps its duty, its station and its gun's settings
+         * through every BULK order -- re-laying the gun crew, posting the fire watch, laying elevations --
+         * and refuses the card's own controls too: only Unlock (and Back) answer. The one thing bulk
+         * still does for a locked gunner is SUPPLY the gun, with whatever it is already set to hold.
+         *
+         * Appended last on purpose: the loader builds berths positionally, and a trailing default is the
+         * only place a new field cannot silently mis-bind an eight-argument constructor call.
+         */
+        val locked: Boolean = false
     )
 
     private val crews = LinkedHashMap<Key, MutableList<Berth>>()
@@ -240,6 +250,14 @@ class CrewLedger : SavedData() {
      */
     fun standDownStation(villager: UUID) {
         edit(villager) { it.copy(station = null) }
+    }
+
+    /**
+     * Set or lift the captain's "do not touch" on one berth. See [Berth.locked] for what it shields;
+     * this is the whole write path -- the Lock button, and nothing else, moves it.
+     */
+    fun setLocked(villager: UUID, locked: Boolean) {
+        edit(villager) { it.copy(locked = locked) }
     }
 
     /**
@@ -438,6 +456,7 @@ class CrewLedger : SavedData() {
                 if (berth.duty != CrewDuty.NONE) member.putString(DUTY_KEY, berth.duty.id)
                 berth.station?.let { member.putLong(STATION_KEY, it) }
                 berth.stationLabel?.let { member.putString(STATION_LABEL_KEY, it) }
+                if (berth.locked) member.putBoolean(LOCKED_KEY, true)
                 members.add(member)
             }
             entry.put(BERTHS_KEY, members)
@@ -471,6 +490,7 @@ class CrewLedger : SavedData() {
         private const val DUTY_KEY = "duty"
         private const val STATION_KEY = "station"
         private const val STATION_LABEL_KEY = "station_label"
+        private const val LOCKED_KEY = "locked"
         private const val TOMBSTONES_KEY = "tombstones"
 
         private val TYPE: SavedDataType<CrewLedger> = SavedDataType(
@@ -518,7 +538,8 @@ class CrewLedger : SavedData() {
                     val duty = CrewDuty.byId(member.getString(DUTY_KEY).orElse(CrewDuty.NONE.id))
                     val station = member.getLong(STATION_KEY).orElse(null)
                     val stationLabel = member.getString(STATION_LABEL_KEY).orElse(null)?.ifEmpty { null }
-                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty, station, stationLabel))
+                    val locked = member.getBoolean(LOCKED_KEY).orElse(false)
+                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty, station, stationLabel, locked))
                 }
                 if (berths.isEmpty()) continue
 
