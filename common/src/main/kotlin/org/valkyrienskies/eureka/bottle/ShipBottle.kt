@@ -21,6 +21,7 @@ import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewMuster
+import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.PlacementCheck
@@ -240,12 +241,20 @@ object ShipBottle {
         }
 
         // The crew go into the articles before the deck goes away, so muster can put them back on release.
-        // Their villagers are world-space entities standing on a hull that is about to stop existing; standing
-        // them down snapshots each one into the CrewLedger rather than leaving them to fall into the sea.
-        val crewName = helmEntity.customName?.string
-        if (crewName != null) {
-            CrewMuster.standDown(level, ship.worldAABB, crewName, HelmNames.variantOf(level.getBlockState(helm)))
-        }
+        // Their villagers are world-space entities standing (or seated) on a hull that is about to stop
+        // existing; standing them down snapshots each one into the CrewLedger rather than leaving them to fall.
+        //
+        // The crew's name is read off the CREW STATION, not the marked wheel. The bottle is thrown at
+        // whichever helm it was marked on, and on a hull with several wheels that is usually NOT the one
+        // holding the articles -- the old gate read the marked wheel's name and skipped the entire stand-down
+        // whenever it was blank or wrong, which is how a whole crew once went over the side. The marked
+        // wheel's own name stays as the fallback for a ship with no recorded station.
+        val station = CrewStations.stationOf(level, ship)
+        val bottleCrewName = station?.helmName?.string ?: helmEntity.customName?.string
+        val bottleCrewVariant =
+            if (station != null) HelmNames.variantOf(station.blockState)
+            else HelmNames.variantOf(level.getBlockState(helm))
+        val crewReport = CrewMuster.standDownShip(level, ship.id, ship.worldAABB, bottleCrewName, bottleCrewVariant)
 
         // Only now that the ship exists in writing does the original stop existing -- and it must actually stop.
         // disassemble() hands the hull back to the WORLD, which would leave the ship standing there as well as
@@ -286,6 +295,20 @@ object ShipBottle {
 
         val bottled = bottleOf(templateName, shipName)
         PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD)
+        // The crew's fate is said out loud, not just logged. Silence here once meant eighty villagers falling
+        // out of the sky with nobody the wiser until the death messages started; a captain who bottles a
+        // crewed ship should see the articles close over them -- and a count of zero with crew aboard is the
+        // one outcome that must never again pass without a word.
+        if (crewReport.stood > 0) {
+            val crew = if (crewReport.stood == 1) "crew member" else "crew"
+            PathMessages.send(player, "${crewReport.stood} $crew stood down into the articles.", PathMessages.Kind.GOOD)
+        } else if (crewReport.berthedAboard > 0) {
+            PathMessages.send(
+                player,
+                "Crew were aboard but none could be stood down -- check the server log.",
+                PathMessages.Kind.WARN
+            )
+        }
         return bottled
     }
 

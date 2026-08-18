@@ -60,6 +60,7 @@ import org.valkyrienskies.eureka.bottle.BottleBindings
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.crew.CrewData
 import org.valkyrienskies.eureka.crew.CrewMuster
+import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -1272,9 +1273,17 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Everything the crew stand-down below needs, read while the ship still exists and while this block
         // entity is still the one holding the articles. The unfill relocates the wheel back into the world,
         // which resets THIS object exactly as an assembly does -- see the top of `assemble`.
-        val crewName = helmName?.string
-        val crewVariant = HelmNames.variantOf(blockState)
-        val sailors = if (crewName == null) emptyList() else ShipCrew.aboard(level as ServerLevel, ship)
+        //
+        // The crew's name is the CREW STATION's, not necessarily this wheel's: any helm can order the
+        // teardown, and on a hull with several wheels the pressed one need not be the named one. This wheel's
+        // own name stays as the fallback for a ship that never recorded a station.
+        val crewStation = CrewStations.stationOf(level as ServerLevel, ship)
+        val crewName = crewStation?.helmName?.string ?: helmName?.string
+        val crewVariant =
+            if (crewStation != null) HelmNames.variantOf(crewStation.blockState)
+            else HelmNames.variantOf(blockState)
+        val shipIdAtTeardown = ship.id
+        val sailors = ShipCrew.aboard(level as ServerLevel, ship)
 
         val inWorld = ship.shipToWorld.transformPosition(this.blockPos.toJOMLD())
 
@@ -1319,18 +1328,18 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // where its blocks now are.
         //
         // Unlike mustering, this is nobody's action in particular: disassembly has no player behind it, so
-        // every crew filed under this wheel is stood down, whoever signed them on.
-        if (crewName != null) {
-            val stood = CrewMuster.standDown(serverLevel, holdAABB, crewName, crewVariant)
-            if (stood > 0) {
-                val who = if (stood == 1) "crew member is" else "crew are"
-                for (sailor in sailors) {
-                    PathMessages.send(
-                        sailor,
-                        "$stood $who back on the articles. They muster when $crewName sails again.",
-                        PathMessages.Kind.GOOD
-                    )
-                }
+        // every berthed villager on the hull is stood down, whoever signed them on and whichever wheel their
+        // articles hang from. The ship comes apart for everybody at once.
+        val report = CrewMuster.standDownShip(serverLevel, shipIdAtTeardown, holdAABB, crewName, crewVariant)
+        if (report.stood > 0) {
+            val who = if (report.stood == 1) "crew member is" else "crew are"
+            val shipTitle = crewName ?: "she"
+            for (sailor in sailors) {
+                PathMessages.send(
+                    sailor,
+                    "${report.stood} $who back on the articles. They muster when $shipTitle sails again.",
+                    PathMessages.Kind.GOOD
+                )
             }
         }
     }

@@ -204,9 +204,15 @@ class CrewLedger : SavedData() {
      * The caller destroys the entity; this is the paperwork. Both halves have to happen together, so the
      * caller must have a snapshot IN HAND before it discards anybody -- a crew member removed from the world
      * without one is simply gone.
+     *
+     * The live [Berth.station] address goes with them. A stand-down means the ship is being packed up, and
+     * the shipyard position dies with the assembly -- left in place it points at a deleted ship, and the
+     * first reconcile after the REASSEMBLY reads that dead address as "the gun is gone" and relieves the
+     * gunner, label and all. The LABEL is the half that outlives the hull, and keeping it while dropping the
+     * address is exactly what walks a gunner back to his own gun when the ship exists again.
      */
     fun standDown(villager: UUID, snapshot: CompoundTag) {
-        edit(villager) { it.copy(snapshot = snapshot, ashore = true) }
+        edit(villager) { it.copy(snapshot = snapshot, ashore = true, station = null) }
     }
 
     /** What [villager] has been told to do, or [CrewDuty.NONE] if they are nobody's crew. */
@@ -239,17 +245,6 @@ class CrewLedger : SavedData() {
     /** Relieve [villager] of their gun entirely -- destroyed, unassigned, or re-tasked. */
     fun clearStation(villager: UUID) {
         edit(villager) { it.copy(station = null, stationLabel = null) }
-    }
-
-    /**
-     * Drop only the live address, keeping the label, when the ship is packed up under the gunner.
-     *
-     * This is the stand-down half of the binding: the shipyard position is about to stop meaning anything,
-     * but the LABEL still names a gun on the ship that will exist again, and keeping it is what lets the
-     * gunner walk back to his own gun after the reassembly.
-     */
-    fun standDownStation(villager: UUID) {
-        edit(villager) { it.copy(station = null) }
     }
 
     /**

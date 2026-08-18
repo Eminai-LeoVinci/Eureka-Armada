@@ -12,7 +12,9 @@ import org.joml.Vector3d
 import org.joml.primitives.AABBdc
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.follow.ShipCrew
+import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.util.logger
 import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
 
@@ -39,6 +41,8 @@ import java.util.UUID
  * never leaves a crew permanently spoken for.
  */
 object CrewMuster {
+
+    private val logger by logger()
 
     /**
      * Bring [captain]'s crew aboard [ship], and say what happened.
@@ -138,8 +142,11 @@ object CrewMuster {
         report(captain, crewName, moved, returned, rebuilt, lost, overflow)
     }
 
+    /** What a stand-down amounted to: how many were taken off, of how many berthed crew found aboard. */
+    class StandDownReport(val stood: Int, val berthedAboard: Int)
+
     /**
-     * Take a crew off a ship that is being put back into the world, into the articles.
+     * Take every crew member off a ship that is being put back into the world, into the articles.
      *
      * The other half of [muster], and the reason it can be the other half: a crew member is a berth on some
      * articles first and an entity second. Mustering builds the entity from the berth, so standing down can
@@ -147,39 +154,105 @@ object CrewMuster {
      * the deck the next time the ship is assembled.
      *
      * Without this, taking a ship apart leaves its whole crew standing wherever the deck used to be: milling
-     * about the yard, wandering off, drowning if she was disassembled at sea. The articles would still list
-     * them and mustering would still find them, but a shipwright who takes a hull apart twice has villagers
-     * scattered across two build sites.
+     * about the yard, wandering off, falling to their deaths if she was packed up in the air.
+     *
+     * ## Found through the articles, not through one wheel's name
+     * The first version swept the hull box for villagers and matched them against ONE crew name -- the name of
+     * whichever wheel the caller happened to be holding. An entire eighty-gunner crew went over the side that
+     * way: on a hull with several wheels the held one need not be the named one, and a gate that reads the
+     * wrong wheel stands down nobody at all. So the search now starts from the LEDGER and works outward --
+     * every berth under the crew's name (all captains at once, the wheel is being taken apart for all of
+     * them), plus every berthed villager the hull box turns up regardless of whose articles they are on, so a
+     * renamed wheel or a guest crew still gets everyone off the deck. A berthed villager who is genuinely
+     * somewhere else is left there: being on the books does not mean being aboard.
      *
      * **Nobody is destroyed without a written copy in hand.** A snapshot that cannot be taken means the crew
      * member is left exactly where they are, still on the articles and still in the world, because a crew
      * member who cannot be written down cannot be rebuilt -- and a villager left standing in a shipyard is a
      * nuisance, whereas one destroyed without a copy is gone.
      *
-     * Every captain's crew on this wheel is stood down, not just one: the wheel is being taken apart for all of
-     * them at once. Returns how many were taken off the deck.
+     * Deliberately chatty in the log. This path has failed silently once, at the cost of a whole crew, and the
+     * counts it prints are what tell the next investigation which lookup came up empty.
      */
-    fun standDown(level: ServerLevel, hull: AABBdc, crewName: String, variant: String): Int {
+    fun standDownShip(
+        level: ServerLevel,
+        shipId: Long,
+        hull: AABBdc,
+        crewName: String?,
+        variant: String?
+    ): StandDownReport {
         val ledger = CrewLedger.get(level.server)
-        val keys = ledger.keysUnder(crewName, variant)
-        if (keys.isEmpty()) return 0
+        logger.info("[crew] stand-down ship=$shipId crew='${crewName ?: "(unnamed)"}' variant=${variant ?: "?"}")
 
-        val aboard = villagersIn(level, hull).associateBy { it.uuid }
-        if (aboard.isEmpty()) return 0
-
-        var stood = 0
-        for (key in keys) {
-            for (berth in ledger.crew(key)) {
-                val crew = aboard[berth.villager] ?: continue
-                val snapshot = CrewSnapshot.capture(crew) ?: continue
-                ledger.standDown(berth.villager, snapshot)
-                // `discard` rather than `kill`: nobody died. There is nothing to drop, no experience to award,
-                // and the same crew member walks back out of the articles when she is rebuilt.
-                crew.discard()
-                stood++
+        // Two independent ways onto the list, union'd by villager id. The name lookup is the intended path;
+        // the box sweep is the safety net that holds when the name is wrong, and the reason a mismatch can
+        // never again cost a whole crew.
+        val berths = LinkedHashMap<UUID, CrewLedger.Berth>()
+        var berthsByName = 0
+        if (crewName != null && variant != null) {
+            for (key in ledger.keysUnder(crewName, variant)) {
+                for (berth in ledger.crew(key)) {
+                    berths[berth.villager] = berth
+                    berthsByName++
+                }
             }
         }
-        return stood
+        val inBox = villagersIn(level, hull).associateBy { it.uuid }
+        var berthedInBox = 0
+        for (villager in inBox.values) {
+            val berth = ledger.berthOf(villager.uuid) ?: continue
+            berthedInBox++
+            berths.putIfAbsent(berth.villager, berth)
+        }
+        logger.info(
+            "[crew] sources: berthsByName=$berthsByName villagersInBox=${inBox.size} " +
+                "berthedInBox=$berthedInBox candidates=${berths.size}"
+        )
+
+        // The acceptance box, with the same slack the sweep itself allows for somebody standing on the top face.
+        val deck = AABB(
+            hull.minX() - DECK_MARGIN, hull.minY() - DECK_MARGIN, hull.minZ() - DECK_MARGIN,
+            hull.maxX() + DECK_MARGIN, hull.maxY() + DECK_MARGIN, hull.maxZ() + DECK_MARGIN
+        )
+
+        var stood = 0
+        var berthedAboard = 0
+        for (berth in berths.values) {
+            val villager = inBox[berth.villager] ?: findAnywhere(level.server, berth.villager)
+            if (villager == null) {
+                logger.info("[crew]   ${berth.name}: not-found")
+                continue
+            }
+            if (villager.level() !== level) {
+                logger.info("[crew]   ${berth.name}: found-elsewhere-skipped (other dimension)")
+                continue
+            }
+            // Aboard means inside the hull box -- or seated on one of THIS ship's gun seats, which pins them
+            // to the ship more directly than any position test can.
+            val seated = (villager.vehicle as? ShipMountingEntity)?.driveShipId == shipId
+            if (!seated && !deck.contains(villager.x, villager.y, villager.z)) {
+                logger.info("[crew]   ${berth.name}: found-elsewhere-skipped (ashore)")
+                continue
+            }
+            berthedAboard++
+            val snapshot = CrewSnapshot.capture(villager)
+            if (snapshot == null) {
+                logger.warn("[crew]   ${berth.name}: snapshot-failed -- left aboard")
+                continue
+            }
+            // The seat first, while the villager still exists to be dismounted: this kills it now and clears
+            // the runtime seating, rather than leaving an orphan for the reconcile sweep to find.
+            GunStations.unseat(level, berth.villager)
+            ledger.standDown(berth.villager, snapshot)
+            // `discard` rather than `kill`: nobody died. There is nothing to drop, no experience to award,
+            // and the same crew member walks back out of the articles when she is rebuilt.
+            villager.discard()
+            logger.info("[crew]   ${berth.name}: ${if (seated) "stood-down-seated" else "stood-down-standing"}")
+            stood++
+        }
+
+        logger.info("[crew] stand-down complete stood=$stood berthedAboard=$berthedAboard")
+        return StandDownReport(stood, berthedAboard)
     }
 
     /**
