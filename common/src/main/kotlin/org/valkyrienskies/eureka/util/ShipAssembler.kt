@@ -51,17 +51,50 @@ object ShipAssembler {
         return blockPositions
     }
 
+    /**
+     * A finished assembly, and the exact block map it was pasted with.
+     *
+     * VS2 lays the collected world blocks into the shipyard by pure integer translation -- a corner plus
+     * each block's offset from the set's minimum -- so the only faithful way to answer "where did MY block
+     * land" is to repeat that arithmetic. Asking the freshly seeded transform instead was the previous
+     * answer, and it is wrong by whatever the ship's centre of mass does to the transform's offset term:
+     * right most days, one block off on a bottle-released hull -- and everything keyed to the answer, the
+     * crew station above all, quietly broke downstream of that one flooring.
+     */
+    class Assembled(val ship: ServerShip, private val corner: BlockPos, private val min: BlockPos) {
+        /** Where [worldPos] -- one of the assembled blocks -- landed in the shipyard. Exact. */
+        fun inShipyard(worldPos: BlockPos): BlockPos = corner.offset(worldPos.subtract(min))
+    }
+
     // Turn a collected block set into a ship. Must run AFTER any pre-assembly world edits, since
     // VSShipAssembler reads the current world state into the ship. Clears orphaned resting snow first.
-    fun finishAssembly(level: ServerLevel, blockPositions: Set<BlockPos>): ServerShip {
+    fun finishAssembly(level: ServerLevel, blockPositions: Set<BlockPos>): Assembled {
         clearRestingSnowLayers(level, blockPositions)
-        return VSShipAssembler.assembleToShip(level, blockPositions, 1.0)
+        val context = VSShipAssembler.assembleToShipFull(level, blockPositions, 1.0)
+
+        // Recompute the paste's corner exactly as the assembler computed it: min/max of the set, the box's
+        // half-extent, corner = ceil(centre - halfExtent). Same doubles, same ceil, same answer.
+        var minX = Int.MAX_VALUE; var minY = Int.MAX_VALUE; var minZ = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE; var maxY = Int.MIN_VALUE; var maxZ = Int.MIN_VALUE
+        for (pos in blockPositions) {
+            minX = min(minX, pos.x); minY = min(minY, pos.y); minZ = min(minZ, pos.z)
+            maxX = max(maxX, pos.x); maxY = max(maxY, pos.y); maxZ = max(maxZ, pos.z)
+        }
+        val offset = Vector3d(
+            (maxX - minX + 1) / 2.0, (maxY - minY + 1) / 2.0, (maxZ - minZ + 1) / 2.0
+        )
+        val corner = Vector3d(context.toCenter).sub(offset).ceil()
+        return Assembled(
+            context.ship,
+            BlockPos(corner.x.toInt(), corner.y.toInt(), corner.z.toInt()),
+            BlockPos(minX, minY, minZ)
+        )
     }
 
     // Back-compat one-shot collect-then-assemble (no pre-assembly hook). Kept for any external callers;
     // the helm now drives the two steps directly so it can run the Eureka Auto-Shipwright in between.
     fun collectBlocks(level: ServerLevel, center: BlockPos, predicate: (BlockPos, BlockState) -> Boolean): ServerShip? =
-        collectBlockPositions(level, center, predicate)?.let { finishAssembly(level, it) }
+        collectBlockPositions(level, center, predicate)?.let { finishAssembly(level, it).ship }
 
     // Snow layers (minecraft:snow) are in the assemble_blacklist, so they're never collected into the
     // ship -- but excluding them just leaves them behind in the world, hovering over the spot the deck

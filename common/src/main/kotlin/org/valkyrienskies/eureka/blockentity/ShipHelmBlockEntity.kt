@@ -1117,21 +1117,18 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         isCrewStation = true
         setChanged()
 
-        val builtShip = ShipAssembler.finishAssembly(level, blockPositions)
+        val assembled = ShipAssembler.finishAssembly(level, blockPositions)
+        val builtShip = assembled.ship
 
         if (holdEntities) {
             EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
         }
 
-
-        // Where that wheel ended up, so the roster can be found in one block-entity lookup instead of a walk of
-        // the ship's blocks. Rounds the same way the assembler does: the block containing the helm's centre.
-        val helmInShip = builtShip.worldToShip.transformPosition(
-            Vector3d(blockPos.x + 0.5, blockPos.y + 0.5, blockPos.z + 0.5)
-        )
-        val crewStation = BlockPos(
-            floor(helmInShip.x).toInt(), floor(helmInShip.y).toInt(), floor(helmInShip.z).toInt()
-        ).asLong()
+        // Where that wheel ended up, so the roster can be found in one block-entity lookup instead of a walk
+        // of the ship's blocks. EXACT integer arithmetic off the paste itself -- asking the freshly seeded
+        // transform instead was how a bottle-released hull recorded its crew station one block off, and every
+        // name-keyed thing aboard (roster, dropdowns, gun labels) went quietly dead behind that one flooring.
+        val crewStation = assembled.inShipyard(this.blockPos).asLong()
 
         // A freshly-assembled ship is created as ShipData and only becomes a
         // LoadedServerShip once vs-core builds its ShipObject (usually the next
@@ -1163,6 +1160,21 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.engines = engineCount
             control.assembledBlocks = blockCount
             control.crewStationPos = crewStation
+            // One station per ship, and a written record of where it landed. This wheel flagged itself
+            // before the relocation; the wheels that did NOT win keep old flags forever unless somebody
+            // clears them, and stale flags mis-rank every later sweep and template score. Deferred the
+            // same few ticks the ship's name is: the sweep reads shipAABB, which vs-core fills in a beat
+            // after the ship loads.
+            run {
+                val settledId = loadedShip.id
+                val server = level.server
+                val settleAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
+                server.executeIf({ server.overworld().gameTime >= settleAt }) {
+                    level.shipObjectWorld.loadedShips.getById(settledId)?.let {
+                        CrewStations.settle(level, it, BlockPos.of(crewStation))
+                    }
+                }
+            }
 
             // Keep Name: give the hull back the name this wheel last steered under, using the value read off
             // the block BEFORE the assembly reset it (see keepNameAtAssembly above).

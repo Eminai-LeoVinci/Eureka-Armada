@@ -6,6 +6,7 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
+import org.valkyrienskies.mod.util.logger
 
 /**
  * Which wheel holds a ship's articles, and how to find it from either end.
@@ -20,22 +21,110 @@ import org.valkyrienskies.mod.common.getLoadedShipManagingPos
  */
 object CrewStations {
 
+    private val logger by logger()
+
     /**
      * The helm holding [ship]'s articles, or null if it has none.
      *
      * Null is a real and expected answer, not a failure: a ship assembled before this feature existed has no
      * recorded station, and neither does one whose station has been mined out. Both are fixed the same way --
      * aim at a wheel and press the crew key, which claims it. See [claim].
+     *
+     * ## A miss heals instead of failing
+     * The recorded address is a position, and positions can be WRONG as well as stale -- an assembly that
+     * recorded its station one block off left a ship whose named wheel stood right there while every lookup
+     * came back empty, and the "no station, claim what you aim at" fallback then handed the articles to a
+     * blank spare. So a readable miss is treated as a bookkeeping error, not a fact: sweep the hull's own
+     * chunks for its wheels, prefer the one that is flagged and named, repair the address, and answer with
+     * it. An UNREADABLE address -- shipyard chunks still settling after an assembly -- returns null without
+     * repairing anything, because silence is not evidence.
      */
     fun stationOf(level: ServerLevel, ship: LoadedServerShip): ShipHelmBlockEntity? {
         val control = ship.getAttachment(EurekaShipControl::class.java) ?: return null
         val packed = control.crewStationPos
-        if (packed == EurekaShipControl.NO_CREW_STATION) return null
-        val helm = level.getBlockEntity(BlockPos.of(packed)) as? ShipHelmBlockEntity ?: return null
-        // The recorded address is a position, and positions outlive the things at them. A helm that was mined
-        // and replaced by a different block -- or by a NEW helm, which is a different set of articles -- must
-        // not be mistaken for the one that was claimed.
-        return if (helm.isCrewStation) helm else null
+        if (packed != EurekaShipControl.NO_CREW_STATION) {
+            val pos = BlockPos.of(packed)
+            if (!level.hasChunkAt(pos)) return null
+            val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity
+            // A helm that was mined and replaced by a different block -- or by a NEW helm, which is a
+            // different set of articles -- must not be mistaken for the one that was claimed.
+            if (helm != null && helm.isCrewStation) return helm
+        }
+
+        val wheels = helmsAboard(level, ship) ?: return null
+        val chosen = wheels.firstOrNull { it.isCrewStation && it.helmName != null }
+            ?: wheels.firstOrNull { it.isCrewStation }
+            ?: wheels.firstOrNull { it.helmName != null }
+            ?: return null
+        control.crewStationPos = chosen.blockPos.asLong()
+        if (!chosen.isCrewStation) {
+            chosen.isCrewStation = true
+            chosen.setChanged()
+        }
+        // One station per ship, restored in the same pass: a stale flag left on another wheel would shadow
+        // this one the next time anything scores or sweeps the hull.
+        for (other in wheels) {
+            if (other !== chosen && other.isCrewStation) {
+                other.isCrewStation = false
+                other.setChanged()
+            }
+        }
+        logger.info(
+            "[crew] station healed ship=${ship.id} -> ${chosen.blockPos} ('${chosen.helmName?.string ?: "(unnamed)"}')"
+        )
+        return chosen
+    }
+
+    /**
+     * Confirm [station] as [ship]'s one crew station: clear the flag on every other wheel aboard, and say
+     * where it landed. Called from the assembly once the shipyard is readable -- the wheel flagged itself
+     * before relocation ("the first helm wins"), but nothing until now unflagged the wheels that DIDN'T
+     * win, and hulls carrying several old claims scored template releases against the wrong one.
+     */
+    fun settle(level: ServerLevel, ship: LoadedServerShip, station: BlockPos) {
+        val wheels = helmsAboard(level, ship) ?: emptyList()
+        for (wheel in wheels) {
+            if (wheel.blockPos != station && wheel.isCrewStation) {
+                wheel.isCrewStation = false
+                wheel.setChanged()
+            }
+        }
+        val holder = level.getBlockEntity(station) as? ShipHelmBlockEntity
+        logger.info(
+            "[crew] station ship=${ship.id} at $station holds=" +
+                if (holder == null) "NOT A HELM (${level.getBlockState(station).block})"
+                else "'${holder.helmName?.string ?: "(unnamed)"}'"
+        )
+    }
+
+    /**
+     * Every wheel aboard [ship], or null while its chunks are not readable. The [ShipGuns] chunk-walk,
+     * asked for helms: a hull carries a handful at most, and this runs only on misses and at assembly.
+     */
+    private fun helmsAboard(level: ServerLevel, ship: LoadedServerShip): List<ShipHelmBlockEntity>? {
+        val aabb = ship.shipAABB ?: return null
+        val wheels = ArrayList<ShipHelmBlockEntity>()
+        val minChunkX = aabb.minX() shr 4
+        val maxChunkX = aabb.maxX() shr 4
+        val minChunkZ = aabb.minZ() shr 4
+        val maxChunkZ = aabb.maxZ() shr 4
+        for (chunkX in minChunkX..maxChunkX) {
+            for (chunkZ in minChunkZ..maxChunkZ) {
+                // getChunkNow, never getChunk: a ship's own chunks are loaded for as long as the ship is,
+                // so a miss here means a chunk that is not part of this hull and must not be forced in.
+                val chunk = level.chunkSource.getChunkNow(chunkX, chunkZ) ?: continue
+                for (blockEntity in chunk.blockEntities.values) {
+                    if (blockEntity !is ShipHelmBlockEntity) continue
+                    val pos = blockEntity.blockPos
+                    if (pos.x < aabb.minX() || pos.x > aabb.maxX() ||
+                        pos.y < aabb.minY() || pos.y > aabb.maxY() ||
+                        pos.z < aabb.minZ() || pos.z > aabb.maxZ()
+                    ) continue
+                    wheels.add(blockEntity)
+                }
+            }
+        }
+        return wheels
     }
 
     /**
