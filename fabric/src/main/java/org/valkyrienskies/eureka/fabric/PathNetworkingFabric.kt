@@ -27,6 +27,7 @@ import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.HelmNames
+import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.ShipCrews
 import org.valkyrienskies.eureka.crew.ShipStores
 import org.valkyrienskies.eureka.item.Cannonball
@@ -597,6 +598,11 @@ object PathNetworkingFabric {
                         CrewOperations.requestPower(level, player, helm, side, ordinal, layer)
                     })
                 }
+                OPS_OPEN_HELM -> { level: ServerLevel ->
+                    // The manifest's Back button: hand the player the helm menu whose book opened it.
+                    val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity
+                    if (wheel != null) ShipCrews.openHelm(level, player, wheel)
+                }
                 else -> null
             }
             if (order == null) return@registerGlobalReceiver
@@ -755,6 +761,7 @@ object PathNetworkingFabric {
     private const val OPS_GUN_AMMO: Byte = 9
     private const val OPS_LOCK: Byte = 10
     private const val OPS_SET_POWER: Byte = 11
+    private const val OPS_OPEN_HELM: Byte = 12
 
     /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
     private const val MAX_ITEM_ID = 256
@@ -856,6 +863,10 @@ object PathNetworkingFabric {
             it.writeByte(ball.ordinal)
             it.writeByte(charge.ordinal)
         }
+
+    /** Client: reopen the helm menu the manifest's book came from. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewOpenHelm(helm: Long) = sendOps(helm, OPS_OPEN_HELM) {}
 
     /** Client: set or lift the lock on one crew member. */
     @Environment(EnvType.CLIENT)

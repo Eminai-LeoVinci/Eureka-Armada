@@ -144,17 +144,8 @@ object EurekaConfig {
     }
 
     class Client {
-        @JsonSchema(description = "Master toggle for the piloted-ship HUD. When off, the Speed/Altitude/Heading readouts are all hidden (and greyed out in the helm menu).")
+        @JsonSchema(description = "The piloted-ship HUD: speed, altitude and compass heading as small text at the top-center of the screen. One switch for the whole line -- toggled from the helm menu.")
         var displayHud = true
-
-        @JsonSchema(description = "Show the piloted ship's speed as small text at the top-center of the screen.")
-        var displaySpeed = false
-
-        @JsonSchema(description = "Show the piloted ship's altitude (Y) at the top-center of the screen.")
-        var displayAltitude = false
-
-        @JsonSchema(description = "Show the piloted ship's compass heading at the top-center of the screen.")
-        var displayHeading = false
 
         @JsonSchema(
             description = "Show every saved ship path in this dimension as a glowing line. Toggled in-game " +

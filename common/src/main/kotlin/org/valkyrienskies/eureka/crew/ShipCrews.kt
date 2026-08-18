@@ -10,8 +10,10 @@ import net.minecraft.world.entity.projectile.ProjectileUtil
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
+import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -226,6 +228,44 @@ object ShipCrews {
      * The manifest is a screen, and [printArticles] below is what happens when it cannot be opened -- a client
      * the payload cannot reach still gets the roster, in chat, rather than a key that does nothing.
      */
+    /**
+     * The helm menu's book: open the articles exactly as the crew key does, for a player whose only
+     * credential is an open helm container. The helm menu's own validity check is unconditional -- a
+     * container over a shipyard block cannot use vanilla's distance rule -- so this is the one road into
+     * the articles that has to carry its own reach guard: arm's length of the wheel's WORLD position, or
+     * standing on the ship (armada included), the same gate every manifest action applies.
+     */
+    @JvmStatic
+    fun openArticles(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
+        if (!withinBookReach(level, player, helm)) return
+        showArticles(level, player, helm)
+    }
+
+    /**
+     * The manifest's Back button: reopen the helm menu the book was pressed in. The same door swings both
+     * ways -- and carries the same guard, because this request too arrives from a plain screen with no
+     * container behind it to vouch for anything.
+     */
+    @JvmStatic
+    fun openHelm(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
+        if (!withinBookReach(level, player, helm)) return
+        player.openMenu(helm)
+    }
+
+    /** Arm's length of the wheel's WORLD position, or standing on its ship (armada included). */
+    private fun withinBookReach(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity): Boolean {
+        val ship = CrewStations.shipOf(level, helm)
+        val at = helm.blockPos
+        val world = ship?.shipToWorld?.transformPosition(Vector3d(at.x + 0.5, at.y + 0.5, at.z + 0.5))
+            ?: Vector3d(at.x + 0.5, at.y + 0.5, at.z + 0.5)
+        val dx = player.x - world.x
+        val dy = player.y - world.y
+        val dz = player.z - world.z
+        if (dx * dx + dy * dy + dz * dz <= BOOK_REACH_SQ) return true
+        return ship != null &&
+            ShipCrew.standingOn(player)?.let { it in ArmadaGroup.idsOf(level, ship) } == true
+    }
+
     private fun showArticles(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
         val ship = CrewStations.shipOf(level, helm)
         if (ship == null) {
@@ -457,4 +497,7 @@ object ShipCrews {
      * plainly addressing a particular person, and not so close that you must stand on their toes.
      */
     private const val REACH = 6.0
+
+    /** The book's reach: the manifest actions' arm's-length rule, generous next to [REACH]'s aim gate. */
+    private const val BOOK_REACH_SQ = 16.0 * 16.0
 }

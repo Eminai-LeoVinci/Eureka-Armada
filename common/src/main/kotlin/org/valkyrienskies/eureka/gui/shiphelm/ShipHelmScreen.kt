@@ -66,10 +66,8 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     private lateinit var cruiseTurnBox: EditBox
     private lateinit var cruiseVerticalBox: EditBox
 
-    private lateinit var displayHudCheckbox: ShipHelmCheckbox
-    private lateinit var displaySpeedCheckbox: ShipHelmCheckbox
-    private lateinit var displayAltitudeCheckbox: ShipHelmCheckbox
-    private lateinit var displayHeadingCheckbox: ShipHelmCheckbox
+    private lateinit var crewBookButton: CrewBookButton
+    private lateinit var hudCheckbox: ShipHelmCheckbox
 
     private lateinit var assemblerMasterCheckbox: ShipHelmCheckbox
     private lateinit var assemblerFloaterCheckbox: ShipHelmCheckbox
@@ -163,30 +161,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         cruiseVerticalBox = addCruiseBox(x + COL1_BOX_X, y + cruiseRowY(2))
         // endregion
 
-        // region Column 2: Display HUD (client config, persisted immediately)
-        displayHudCheckbox = addRenderableWidget(
-            ShipHelmCheckbox(
-                x + COL2_X, y + HEADER_Y, checkboxWidth(DISPLAY_HUD_TEXT),
-                DISPLAY_HUD_TEXT, font, { EurekaConfig.CLIENT.displayHud }
-            ) { EurekaConfig.CLIENT.displayHud = !EurekaConfig.CLIENT.displayHud; EurekaConfigLoader.save() }
-        )
-        displaySpeedCheckbox = addRenderableWidget(
-            ShipHelmCheckbox(
-                x + COL2_SUB_X, y + cruiseRowY(0), checkboxWidth(SPEED_TEXT),
-                SPEED_TEXT, font, { EurekaConfig.CLIENT.displaySpeed }
-            ) { EurekaConfig.CLIENT.displaySpeed = !EurekaConfig.CLIENT.displaySpeed; EurekaConfigLoader.save() }
-        )
-        displayAltitudeCheckbox = addRenderableWidget(
-            ShipHelmCheckbox(
-                x + COL2_SUB_X, y + cruiseRowY(1), checkboxWidth(ALTITUDE_TEXT),
-                ALTITUDE_TEXT, font, { EurekaConfig.CLIENT.displayAltitude }
-            ) { EurekaConfig.CLIENT.displayAltitude = !EurekaConfig.CLIENT.displayAltitude; EurekaConfigLoader.save() }
-        )
-        displayHeadingCheckbox = addRenderableWidget(
-            ShipHelmCheckbox(
-                x + COL2_SUB_X, y + cruiseRowY(2), checkboxWidth(HEADING_TEXT),
-                HEADING_TEXT, font, { EurekaConfig.CLIENT.displayHeading }
-            ) { EurekaConfig.CLIENT.displayHeading = !EurekaConfig.CLIENT.displayHeading; EurekaConfigLoader.save() }
+        // region Column 2: the Crew & Operations book
+        // The four Display-HUD checkboxes lived here; the whole column now belongs to the book that opens
+        // the articles -- the screen a captain actually works a crewed ship from -- and the HUD collapsed
+        // into one switch in the misc rows below.
+        crewBookButton = addRenderableWidget(
+            CrewBookButton(x + BOOK_X, y + BOOK_Y, BOOK_W, BOOK_H, font) {
+                minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, ShipHelmScreenMenu.BUTTON_CREW_BOOK)
+            }
         )
         // endregion
 
@@ -272,6 +254,15 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
                 x + MISC2_X, y + MISC_Y + MISC_DY, checkboxWidth(ARMADA_CHILD_TEXT),
                 ARMADA_CHILD_TEXT, font, { menu.isArmadaChild }
             ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 16) }
+        )
+        // The whole piloted-ship HUD behind one switch, in the right column's empty third row -- it was a
+        // master and three sub-toggles that shipped OFF, so ticking the master alone showed nothing at all.
+        // Client config, persisted immediately, exactly as the old cluster was.
+        hudCheckbox = addRenderableWidget(
+            ShipHelmCheckbox(
+                x + MISC2_X, y + MISC_Y + 2 * MISC_DY, checkboxWidth(DISPLAY_HUD_TEXT),
+                DISPLAY_HUD_TEXT, font, { EurekaConfig.CLIENT.displayHud }
+            ) { EurekaConfig.CLIENT.displayHud = !EurekaConfig.CLIENT.displayHud; EurekaConfigLoader.save() }
         )
         // endregion
 
@@ -430,6 +421,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
      */
     override fun containerTick() {
         super.containerTick()
+        // D-pad right opens the book -- "choose", in the crew screens' pad language, and the one control
+        // on this menu a pad player reaches for. Drained so the press cannot double as a deck gesture the
+        // moment the screen closes underneath it.
+        if (org.valkyrienskies.mod.client.ShipGamepad.dpadRightPressed() && crewBookButton.active) {
+            minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, ShipHelmScreenMenu.BUTTON_CREW_BOOK)
+            org.valkyrienskies.mod.client.ShipGamepad.drainPresses()
+            return
+        }
         val step = when {
             org.valkyrienskies.mod.client.ShipGamepad.bumperRightPressed() -> 1
             org.valkyrienskies.mod.client.ShipGamepad.bumperLeftPressed() -> -1
@@ -514,11 +513,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         updateCruiseBox(cruiseTurnBox, cruiseVisible, cruiseUsable, menu.cruiseTurn)
         updateCruiseBox(cruiseVerticalBox, cruiseVisible, cruiseUsable, menu.cruiseVertical)
 
-        // HUD sub-toggles grey out while the master is off.
-        val hudOn = EurekaConfig.CLIENT.displayHud
-        displaySpeedCheckbox.active = hudOn
-        displayAltitudeCheckbox.active = hudOn
-        displayHeadingCheckbox.active = hudOn
+        // The book opens the articles, and articles hang off an assembled ship's wheel: unassembled, the
+        // server would only answer "assemble the ship first", so the cover says it first by greying.
+        crewBookButton.active = assembled
 
         // Auto-Shipwright subs grey out while the section master is off; the section is per-player (no ship
         // needed) and stays fully usable on every tab, because it is set BEFORE a ship exists -- at which
@@ -947,9 +944,12 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private val CRUISE_DIVE_TEXT = Component.translatable("gui.vs_eureka.cruise_dive")
 
         private val DISPLAY_HUD_TEXT = Component.translatable("gui.vs_eureka.display_hud")
-        private val SPEED_TEXT = Component.translatable("gui.vs_eureka.display_speed")
-        private val ALTITUDE_TEXT = Component.translatable("gui.vs_eureka.display_altitude")
-        private val HEADING_TEXT = Component.translatable("gui.vs_eureka.display_heading")
+
+        /** The Crew & Operations book, centred in the column the HUD checkboxes used to fill. */
+        private const val BOOK_X = 131
+        private const val BOOK_Y = 46
+        private const val BOOK_W = 48
+        private const val BOOK_H = 56
 
         private val ASSEMBLER_TEXT = Component.translatable("gui.vs_eureka.assembler")
         private val ASSEMBLER_FLOATER_TEXT = Component.translatable("gui.vs_eureka.assembler_floater")

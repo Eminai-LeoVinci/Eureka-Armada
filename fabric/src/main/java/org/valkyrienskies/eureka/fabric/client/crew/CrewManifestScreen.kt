@@ -93,6 +93,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var cardDismissButton: ShipHelmButton? = null
     private var cardBackButton: ShipHelmButton? = null
 
+    /**
+     * Back to the helm menu, pinned to the panel's bottom-right corner on both tabs -- the other half of
+     * the helm's Crew & Operations book, so the two screens open onto each other. A real widget, which
+     * means the overlay rule applies: super paints widgets last and answers their clicks first, so it
+     * hides whenever a dropdown or popup is up, exactly as the card's buttons learned to.
+     */
+    private var helmBackButton: ShipHelmButton? = null
+
     /** The crew's own name, edited in the header. Same keep-across-rebuild reasoning as [nameValue]. */
     private var crewNameValue = ""
     private var crewNameBox: EditBox? = null
@@ -193,6 +201,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             // open -- nothing under a card invites leaving it mid-edit, and Back keeps its meaning.
             addTab(0, TAB_OPERATIONS_TEXT, Tab.OPERATIONS)
             addTab(1, TAB_ROSTER_TEXT, Tab.ROSTER)
+
+            // Pinned to the corner, outside the scrolling body, on both tabs. Sends the player back to the
+            // helm menu whose book brought them here (the server re-opens it; reach-guarded there).
+            helmBackButton = addRenderableWidget(
+                ShipHelmButton(
+                    left + PANEL_W - 8 - BACK_BTN_W, top + PANEL_H - 4 - BACK_BTN_H,
+                    BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
+                ) { PathNetworkingFabric.sendCrewOpenHelm(snapshot.helm) }
+            )
 
             if (activeTab == Tab.OPERATIONS) {
                 initOperations()
@@ -950,6 +967,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         cardRenameButton?.visible = cardWidgetsVisible
         cardDismissButton?.visible = cardWidgetsVisible
         cardBackButton?.visible = cardWidgetsVisible
+        // The corner Back yields to every overlay too -- an unfolded ammo list can reach the corner, and a
+        // widget painted through it would also steal its clicks.
+        helmBackButton?.visible = !opsMenuOpen()
         super.render(guiGraphics, mouseX, mouseY, partialTicks)
     }
 

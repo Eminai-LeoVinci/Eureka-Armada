@@ -393,9 +393,20 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             return true
         }
 
-        // Ids 6 and 7 are FREE. They were the Advanced / Vanilla radio, which the three ship-category tabs
-        // replace -- and those need no button id at all, because the category is derived from the ship rather
-        // than chosen, and clicking a tab only changes what the client draws.
+        // The Crew & Operations book: close this menu and hand the player the articles -- the same screen
+        // the crew key opens at the wheel. The close must run FIRST: the container-close packet has to land
+        // before the manifest payload, or it closes the book it is meant to be replaced by. Deliberately
+        // NOT child-locked -- reading the articles is not ship control. (Id 7 remains free; 6 and 7 were
+        // the Advanced / Vanilla radio the ship-category tabs replaced.)
+        if (id == BUTTON_CREW_BOOK) {
+            if (server) {
+                val captain = player as? net.minecraft.server.level.ServerPlayer ?: return true
+                val serverLevel = captain.level() as? net.minecraft.server.level.ServerLevel ?: return true
+                captain.closeContainer()
+                org.valkyrienskies.eureka.crew.ShipCrews.openArticles(serverLevel, captain, blockEntity)
+            }
+            return true
+        }
 
         // "Armada Parent" / "Armada Child" markers. 16 is deliberately NOT child-locked: unticking Child is how
         // a bound ship gets released, so it has to stay live at a child's otherwise read-only helm.
@@ -434,6 +445,9 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
         // value-entry band is handled separately (by range). 16 (armada-child) is the one control a child keeps:
         // it's the release. 17 (Replace All) is a per-player preference like 12/13/14, so it isn't locked.
         private val CHILD_LOCKED_IDS = setOf(0, 1, 3, 4, 5, 8, 9, 10, 11, 15)
+
+        /** The Crew & Operations book. One of the two ids the old Advanced/Vanilla radio freed up. */
+        const val BUTTON_CREW_BOOK = 6
 
         // Indexed by the low nibble of the synced category, so a value from a newer server can't throw.
         private val PROFILES = ControlProfile.values()
