@@ -28,6 +28,7 @@ import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import org.valkyrienskies.eureka.cannon.CannonShot
+import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
 /**
@@ -253,7 +254,17 @@ object ShipTemplate {
                 //
                 // A cannonball in flight over the deck at capture time is the identical trap, and would come
                 // back out of the bottle still flying, so it goes the same way.
-                it !is ThrownShipBottle && it !is CannonShot
+                it !is ThrownShipBottle && it !is CannonShot &&
+                // A gunner's seat is glue, not ship: GunStations rebuilds it from the ledger within a second
+                // of the crew mustering back, so the template has nothing to add -- and letting it in is
+                // worse than useless. The seat is the one entity aboard that rides with a passenger, and
+                // save() writes that passenger into its `Passengers` tag: the very villager the passenger
+                // exclusion above exists to keep OUT of the template, smuggled back in inside his chair.
+                // Placement is non-recursive today, so the copy stays inert -- but "inert duplicate villager
+                // NBT" is a duplication bug waiting on a vanilla change, not a feature. (Chunk saves are a
+                // different channel: MixinGunnerSeatPersists deliberately keeps occupied seats across a
+                // relog, and nothing here touches that.)
+                it !is ShipMountingEntity
         }
 
         for (entity in candidates) {
@@ -350,6 +361,9 @@ object ShipTemplate {
                 // and every template already on disk carries its own stowaway. Without this, existing bottles
                 // would go on handing an empty back forever and only newly captured ones would behave.
                 "vs_eureka:thrown_ship_bottle", "vs_eureka:cannon_shot" -> true
+                // A gunner's seat captured before the exclusion above existed, villager NBT and all. The live
+                // seat is rebuilt from the ledger; this copy is only ever dead weight or a duplicate.
+                "valkyrienskies:ship_mounting_entity" -> true
                 else -> false
             }
         }
