@@ -258,7 +258,11 @@ object ShipBottle {
         val bottleCrewVariant =
             if (station != null) HelmNames.variantOf(station.blockState)
             else HelmNames.variantOf(level.getBlockState(helm))
-        val crewReport = CrewMuster.standDownShip(level, ship.id, ship.worldAABB, bottleCrewName, bottleCrewVariant)
+        // Where everybody is standing, taken before they are taken off: a bottled crew comes back out of the
+        // bottle onto the same spots, so a ship that was a shop is still a shop when it is poured out.
+        val posts = CrewMuster.postsOf(level, ship, station?.blockPos ?: helm)
+        val crewReport =
+            CrewMuster.standDownShip(level, ship.id, ship.worldAABB, bottleCrewName, bottleCrewVariant, posts)
 
         // Only now that the ship exists in writing does the original stop existing -- and it must actually stop.
         // disassemble() hands the hull back to the WORLD, which would leave the ship standing there as well as

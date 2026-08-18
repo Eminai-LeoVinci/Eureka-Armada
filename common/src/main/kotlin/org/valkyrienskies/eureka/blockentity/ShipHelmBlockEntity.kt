@@ -1285,6 +1285,21 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         val shipIdAtTeardown = ship.id
         val sailors = ShipCrew.aboard(level as ServerLevel, ship)
 
+        // Where each crew member is standing, measured NOW. The stand-down itself deliberately waits until
+        // after the unfill -- a refused unfill must not strand a crew in the articles -- but by then there
+        // is no ship left to measure against, and a post is only meaningful in the ship's own frame.
+        // Measured in the lattice the unfill below is about to lay the ship into -- the same snapped matrix
+        // and the same sub-block carry the blocks themselves get. "Where will they stand after the unfill,
+        // minus where the wheel will" is exact by the same arithmetic that places the deck under them.
+        //
+        // Anchored on the crew station when there is one and on THIS wheel when there is not -- the same
+        // fallback the crew's name takes, and for the same reason: a ship whose recorded station has gone
+        // stale must still remember where its people were standing, or the fallback is a heap on the helm.
+        val (plannedShipToWorld, plannedCarry) = ShipAssembler.unfillPlan(ship, this.blockPos)
+        val crewPosts = CrewMuster.postsInLattice(
+            level as ServerLevel, ship, plannedShipToWorld, plannedCarry, crewStation?.blockPos ?: this.blockPos
+        )
+
         val inWorld = ship.shipToWorld.transformPosition(this.blockPos.toJOMLD())
 
         // Fall-through hold through the teardown: the shipyard collision vanishes for a split second before the
@@ -1330,7 +1345,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Unlike mustering, this is nobody's action in particular: disassembly has no player behind it, so
         // every berthed villager on the hull is stood down, whoever signed them on and whichever wheel their
         // articles hang from. The ship comes apart for everybody at once.
-        val report = CrewMuster.standDownShip(serverLevel, shipIdAtTeardown, holdAABB, crewName, crewVariant)
+        val report =
+            CrewMuster.standDownShip(serverLevel, shipIdAtTeardown, holdAABB, crewName, crewVariant, crewPosts)
         if (report.stood > 0) {
             val who = if (report.stood == 1) "crew member is" else "crew are"
             val shipTitle = crewName ?: "she"

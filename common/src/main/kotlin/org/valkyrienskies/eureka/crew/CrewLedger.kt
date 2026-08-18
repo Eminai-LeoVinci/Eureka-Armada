@@ -6,6 +6,7 @@ import net.minecraft.server.MinecraftServer
 import net.minecraft.util.datafix.DataFixTypes
 import net.minecraft.world.level.saveddata.SavedData
 import net.minecraft.world.level.saveddata.SavedDataType
+import net.minecraft.world.phys.Vec3
 import org.valkyrienskies.eureka.EurekaMod
 import java.util.UUID
 
@@ -101,7 +102,26 @@ class CrewLedger : SavedData() {
          * Appended last on purpose: the loader builds berths positionally, and a trailing default is the
          * only place a new field cannot silently mis-bind an eight-argument constructor call.
          */
-        val locked: Boolean = false
+        val locked: Boolean = false,
+        /**
+         * Where this crew member was standing when the ship was last packed up: an offset from the
+         * crew-station wheel, in the ship's own block frame.
+         *
+         * An OFFSET and not a position, for the reason [station] cannot be trusted across an assembly --
+         * shipyard coordinates are re-dealt every time a hull is built, so the only durable way to say
+         * "here" is to say it relative to something that is re-found on the other side. The wheel is that
+         * something: the articles already hang from it, and a muster already knows where it landed.
+         *
+         * This is what makes a ship a place rather than a vehicle full of passengers. A shopkeeper stood in
+         * his window, a smith at his anvil and a gunner at his breech all come back to the same spot after a
+         * disassembly or a bottle, instead of being tipped out in a heap on the wheel -- which, before this
+         * existed, killed forty-three of a sixty-seven crew to entity cramming in one reassembly, and struck
+         * every one of them off the articles as they died.
+         *
+         * Appended after [locked] for that field's own reason: positional loading makes the tail the only
+         * safe place to grow.
+         */
+        val post: Vec3? = null
     )
 
     private val crews = LinkedHashMap<Key, MutableList<Berth>>()
@@ -211,8 +231,10 @@ class CrewLedger : SavedData() {
      * gunner, label and all. The LABEL is the half that outlives the hull, and keeping it while dropping the
      * address is exactly what walks a gunner back to his own gun when the ship exists again.
      */
-    fun standDown(villager: UUID, snapshot: CompoundTag) {
-        edit(villager) { it.copy(snapshot = snapshot, ashore = true, station = null) }
+    fun standDown(villager: UUID, snapshot: CompoundTag, post: Vec3? = null) {
+        // A post that could not be measured leaves the remembered one alone rather than erasing it: not
+        // knowing where somebody is standing today is no reason to forget where they belong.
+        edit(villager) { it.copy(snapshot = snapshot, ashore = true, station = null, post = post ?: it.post) }
     }
 
     /** What [villager] has been told to do, or [CrewDuty.NONE] if they are nobody's crew. */
@@ -452,6 +474,11 @@ class CrewLedger : SavedData() {
                 berth.station?.let { member.putLong(STATION_KEY, it) }
                 berth.stationLabel?.let { member.putString(STATION_LABEL_KEY, it) }
                 if (berth.locked) member.putBoolean(LOCKED_KEY, true)
+                berth.post?.let {
+                    member.putDouble(POST_X_KEY, it.x)
+                    member.putDouble(POST_Y_KEY, it.y)
+                    member.putDouble(POST_Z_KEY, it.z)
+                }
                 members.add(member)
             }
             entry.put(BERTHS_KEY, members)
@@ -486,6 +513,11 @@ class CrewLedger : SavedData() {
         private const val STATION_KEY = "station"
         private const val STATION_LABEL_KEY = "station_label"
         private const val LOCKED_KEY = "locked"
+        // Three keys rather than a list: a hand-edited articles file is meant to be readable, and "post_y"
+        // says which number is the height without anyone counting commas.
+        private const val POST_X_KEY = "post_x"
+        private const val POST_Y_KEY = "post_y"
+        private const val POST_Z_KEY = "post_z"
         private const val TOMBSTONES_KEY = "tombstones"
 
         private val TYPE: SavedDataType<CrewLedger> = SavedDataType(
@@ -534,7 +566,14 @@ class CrewLedger : SavedData() {
                     val station = member.getLong(STATION_KEY).orElse(null)
                     val stationLabel = member.getString(STATION_LABEL_KEY).orElse(null)?.ifEmpty { null }
                     val locked = member.getBoolean(LOCKED_KEY).orElse(false)
-                    berths.add(Berth(villager, slot, memberName, snapshot, ashore, duty, station, stationLabel, locked))
+                    // All three or none: a half-written post would put somebody on the keel or in the mast.
+                    val postX = member.getDouble(POST_X_KEY).orElse(null)
+                    val postY = member.getDouble(POST_Y_KEY).orElse(null)
+                    val postZ = member.getDouble(POST_Z_KEY).orElse(null)
+                    val post = if (postX != null && postY != null && postZ != null) Vec3(postX, postY, postZ) else null
+                    berths.add(
+                        Berth(villager, slot, memberName, snapshot, ashore, duty, station, stationLabel, locked, post)
+                    )
                 }
                 if (berths.isEmpty()) continue
 

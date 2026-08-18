@@ -6,17 +6,22 @@ import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.npc.villager.Villager
+import net.minecraft.world.level.gamerules.GameRules
 import net.minecraft.world.phys.AABB
+import org.joml.Matrix4d
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.joml.primitives.AABBdc
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.util.logger
 import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.floor
 
 /**
  * Bringing a crew aboard the ship their wheel just built.
@@ -83,7 +88,7 @@ object CrewMuster {
             return
         }
 
-        val deck = boardingPoint(ship, station)
+        val berthing = Berthing(level, ship, station)
         var moved = 0
         var returned = 0
         var rebuilt = 0
@@ -109,9 +114,11 @@ object CrewMuster {
                 continue
             }
 
+            val spot = berthing.claim(berth)
+
             val live = findAnywhere(level.server, berth.villager)
             if (live != null) {
-                live.teleportTo(deck.x, deck.y, deck.z)
+                live.teleportTo(spot.x, spot.y, spot.z)
                 answerTo(live, berth)
                 CrewSnapshot.capture(live)?.let { ledger.updateSnapshot(berth.villager, it) }
                 ledger.markAboard(berth.villager)
@@ -124,7 +131,7 @@ object CrewMuster {
                 lost++
                 continue
             }
-            val restored = CrewSnapshot.restore(level, snapshot, deck)
+            val restored = CrewSnapshot.restore(level, snapshot, spot)
             if (restored == null) {
                 lost++
             } else if (berth.ashore) {
@@ -139,11 +146,94 @@ object CrewMuster {
             }
         }
 
+        // `withPost` against `posted` is the line that matters when this goes wrong: it separates "the
+        // articles never recorded where they stood" from "they were recorded and something moved them".
+        // `labels` is expected to read 0 here -- the gun census needs shipAABB, which vs-core fills in a
+        // beat after the ship exists; GunStations.reconcile is what seats the gunners, on its own clock.
+        logger.info(
+            "[crew] muster ship=${ship.id} crew='$crewName' berths=${berths.size} " +
+                "withPost=${berths.count { it.post != null }} posted=${berthing.posted} " +
+                "scattered=${berthing.scattered} labels=${GunLabels.labeled(level, ship).size} " +
+                "moved=$moved returned=$returned rebuilt=$rebuilt lost=$lost overflow=$overflow"
+        )
         report(captain, crewName, moved, returned, rebuilt, lost, overflow)
     }
 
     /** What a stand-down amounted to: how many were taken off, of how many berthed crew found aboard. */
     class StandDownReport(val stood: Int, val berthedAboard: Int)
+
+    /**
+     * Where every berthed villager aboard [ship] is standing, as offsets from the wheel at [station] in the
+     * ship's own block frame. Measured for a stand-down; kept on the berth as [CrewLedger.Berth.post].
+     *
+     * Has to be taken while the ship still EXISTS, which is the one awkward thing about it: the disassembly
+     * stands its crew down after the unfill (so that a refused unfill cannot strand anybody), and by then
+     * there is no ship left to measure against. So the measuring is separated from the standing down, and
+     * the caller takes this reading first.
+     */
+    fun postsOf(level: ServerLevel, ship: LoadedServerShip, station: BlockPos): Map<UUID, Vec3> =
+        measurePosts(level, ship, "ship") { pos ->
+            val local = ship.transform.worldToShip.transformPosition(Vector3d(pos.x, pos.y, pos.z))
+            Vec3(local.x - station.x, local.y - station.y, local.z - station.z)
+        }
+
+    /**
+     * The same reading for a hull about to be laid back into the WORLD by a disassembly, measured in the
+     * lattice the unfill is about to create: [snapped] is the quarter-turn-snapped ship-to-world matrix and
+     * [carry] the sub-block offset the unfill will apply to blocks and riders alike (both from
+     * `ShipAssembler.unfillPlan`), [anchor] the crew-station wheel in shipyard coordinates.
+     *
+     * Two frames, because a ship is rebuilt from whichever arrangement of blocks it is next gathered from,
+     * and the two ways of packing a ship up leave that arrangement in different places. A BOTTLE writes the
+     * shipyard layout into a template and lays it back down unturned, so the shipyard frame survives the
+     * round trip and [postsOf] is right. A DISASSEMBLY snaps the hull to the nearest quarter turn as it
+     * hands the blocks to the world, and the next assembly gathers them from there by pure translation --
+     * so the only frame that survives is the one the unfill itself is about to write. Anything less exact
+     * showed up in play at once: a plain world-frame reading missed the snap's half-block terms, and a
+     * hull disassembled facing a different quarter than it was built at put its whole crew back one block
+     * off -- through walls and over rails.
+     */
+    fun postsInLattice(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        snapped: Matrix4d,
+        carry: Vector3d,
+        anchor: BlockPos
+    ): Map<UUID, Vec3> {
+        // Where the wheel's BLOCK will stand after the unfill: the same floor(centre) write the blocks get.
+        val anchorAfter = snapped.transformPosition(Vector3d(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5))
+            .let { Vec3(floor(it.x), floor(it.y), floor(it.z)) }
+        val worldToShip = ship.transform.worldToShip
+        return measurePosts(level, ship, "lattice") { pos ->
+            // The rider's own journey through the unfill: into the ship frame, out through the snapped
+            // matrix, carried by the same sub-block offset the deck under their feet takes.
+            val after = snapped.transformPosition(
+                worldToShip.transformPosition(Vector3d(pos.x, pos.y, pos.z))
+            )
+            Vec3(
+                after.x + carry.x - anchorAfter.x,
+                after.y + carry.y - anchorAfter.y,
+                after.z + carry.z - anchorAfter.z
+            )
+        }
+    }
+
+    private fun measurePosts(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        frame: String,
+        offsetOf: (Vec3) -> Vec3
+    ): Map<UUID, Vec3> {
+        val ledger = CrewLedger.get(level.server)
+        val posts = HashMap<UUID, Vec3>()
+        val seen = villagersIn(level, ship.worldAABB)
+        for (villager in seen) {
+            if (ledger.berthOf(villager.uuid) == null) continue
+            posts[villager.uuid] = offsetOf(Vec3(villager.x, villager.y, villager.z))
+        }
+        logger.info("[crew] posts ship=${ship.id} frame=$frame villagers=${seen.size} measured=${posts.size}")
+        return posts
+    }
 
     /**
      * Take every crew member off a ship that is being put back into the world, into the articles.
@@ -179,7 +269,8 @@ object CrewMuster {
         shipId: Long,
         hull: AABBdc,
         crewName: String?,
-        variant: String?
+        variant: String?,
+        posts: Map<UUID, Vec3> = emptyMap()
     ): StandDownReport {
         val ledger = CrewLedger.get(level.server)
         logger.info("[crew] stand-down ship=$shipId crew='${crewName ?: "(unnamed)"}' variant=${variant ?: "?"}")
@@ -243,7 +334,7 @@ object CrewMuster {
             // The seat first, while the villager still exists to be dismounted: this kills it now and clears
             // the runtime seating, rather than leaving an orphan for the reconcile sweep to find.
             GunStations.unseat(level, berth.villager)
-            ledger.standDown(berth.villager, snapshot)
+            ledger.standDown(berth.villager, snapshot, posts[berth.villager])
             // `discard` rather than `kill`: nobody died. There is nothing to drop, no experience to award,
             // and the same crew member walks back out of the articles when she is rebuilt.
             villager.discard()
@@ -302,25 +393,137 @@ object CrewMuster {
     }
 
     /**
-     * Where a mustered crew member appears: standing at the wheel, in WORLD coordinates.
+     * Hands every mustered crew member a place to stand, and never hands out the same block twice.
      *
-     * This used to be the top of the ship's world AABB, on the reasoning that anywhere above the hull is
-     * somewhere they can fall onto the deck from. That is true of a raft and badly false of a ship with masts:
-     * the box reaches the top of the rigging, so a crew called aboard a galleon appeared level with the
-     * crow's nest and fell the whole height of the ship -- far enough to hurt them, and on a tall one far
-     * enough to kill.
+     * ## Why this exists at all
+     * Every returning crew member used to be put down on one square: the block above the wheel. Sixty-seven
+     * villagers in one block is not a crowd, it is a death sentence -- vanilla's entity cramming kills
+     * everything past twenty-four of them, and a dead crew member is struck off the articles for good. One
+     * reassembly cost a captain forty-three of sixty-seven. Handing out distinct blocks is what makes that
+     * impossible rather than unlikely.
      *
-     * The wheel is the right anchor instead. It is a real block on a real deck, it is by definition somewhere a
-     * player stands, and its shipyard position is already in hand from the assembly. One block up so nobody
-     * appears inside the wheel itself; the drop from there is a step.
+     * ## Posts first, then the wheel
+     * A berth that remembers where it stood ([CrewLedger.Berth.post]) is put back exactly there, which is
+     * the whole point of remembering: a shop keeps its shopkeeper, a gun deck keeps its gunners, a ship
+     * stays the place it was built to be. Anyone without a post -- signed on ashore, or berthed before
+     * posts existed -- rings out around the wheel instead, one to a block, spiralling until there is room.
+     *
+     * The search prefers a block with something solid under it, so nobody is handed a spot in mid-air over
+     * the deck while a perfectly good plank sits one block over.
      */
-    private fun boardingPoint(ship: LoadedServerShip, station: Long): Vec3 {
-        val helm = BlockPos.of(station)
-        val world = ship.shipToWorld.transformPosition(
-            Vector3d(helm.x + 0.5, helm.y + BOARDING_CLEARANCE, helm.z + 0.5)
-        )
-        return Vec3(world.x, world.y, world.z)
+    private class Berthing(
+        private val level: ServerLevel,
+        private val ship: LoadedServerShip,
+        station: Long
+    ) {
+        private val helm = BlockPos.of(station)
+        private val taken = HashMap<BlockPos, Int>()
+
+        /** How many were put back exactly where they were standing, and how many had to be found room. */
+        var posted = 0
+            private set
+        var scattered = 0
+            private set
+
+        /**
+         * The per-block ceiling: one under the cramming rule, so even a hull with fewer free blocks than
+         * crew cannot crush anybody. A rule of zero means the game has cramming switched off entirely, and
+         * then there is nothing to protect against.
+         */
+        private val cap = ((level.gameRules.get(GameRules.MAX_ENTITY_CRAMMING) as? Number)?.toInt() ?: 0).let {
+            if (it <= 0) Int.MAX_VALUE else maxOf(1, it - 1)
+        }
+
+        /** Where this berth should land, in WORLD coordinates. */
+        fun claim(berth: CrewLedger.Berth): Vec3 {
+            val post = berth.post
+            val wanted = if (post != null) {
+                Vec3(helm.x + post.x, helm.y + post.y, helm.z + post.z)
+            } else {
+                Vec3(helm.x + 0.5, helm.y + BOARDING_CLEARANCE, helm.z + 0.5)
+            }
+
+            // The FOOT_LIFT before flooring: a foot standing exactly on a block boundary -- everybody on a
+            // flush deck, and a seated gunner within a twentieth of one -- must resolve to the block the
+            // BODY occupies, not to the deck plank under it, which is solid and reads as "no room here".
+            val first = BlockPos.containing(wanted.x, wanted.y + FOOT_LIFT, wanted.z)
+
+            // A remembered post is not a crowd. Two gunners legitimately share the walkway block between
+            // their guns, and scattering the second man off his own post traded exactness for a rule that
+            // exists to stop a HEAP -- so a post may be re-used up to the cramming cap, and only the
+            // wheel-ring fallback keeps the strict one-to-a-block rule.
+            val block =
+                if (post != null && roomy(first) && (taken[first] ?: 0) < cap) first
+                else findRoom(first)
+            taken.merge(block, 1, Int::plus)
+            if (post != null && block == first) posted++ else scattered++
+
+            // The exact spot when it was free -- standing in a doorway means standing in THAT part of the
+            // doorway -- and the middle of whatever block had room otherwise.
+            val local =
+                if (block == first) wanted
+                else Vec3(block.x + 0.5, block.y.toDouble(), block.z + 0.5)
+            val world = ship.shipToWorld.transformPosition(Vector3d(local.x, local.y, local.z))
+            return Vec3(world.x, world.y, world.z)
+        }
+
+        /**
+         * The nearest block to [first] that a villager can be put in: empty at head and foot, not already
+         * spoken for, and ideally standing on something. Widening rings, lowest first, so a crowd fills the
+         * deck it is on before it spills onto the one above.
+         */
+        private fun findRoom(first: BlockPos): BlockPos {
+            var airborne: BlockPos? = null
+            var crowded: BlockPos? = null
+            val cursor = BlockPos.MutableBlockPos()
+            for (radius in 0..SEARCH_RADIUS) {
+                for (dy in VERTICAL_ORDER) {
+                    for (dx in -radius..radius) {
+                        for (dz in -radius..radius) {
+                            // Only the ring's edge: the inside was covered by a smaller radius already.
+                            if (radius > 0 && abs(dx) != radius && abs(dz) != radius) continue
+                            cursor.set(first.x + dx, first.y + dy, first.z + dz)
+                            if (!roomy(cursor)) continue
+                            val here = cursor.immutable()
+                            // EMPTY is the bar, not "under the cramming limit". Letting a block take a
+                            // second body while another stands free is how the first cut managed to put a
+                            // whole crew back on one square -- the very thing this class exists to stop.
+                            if (!spokenFor(here)) {
+                                if (standable(here)) return here
+                                if (airborne == null) airborne = here
+                            } else if (crowded == null && (taken[here] ?: 0) < cap) {
+                                crowded = here
+                            }
+                        }
+                    }
+                }
+            }
+            // In order of preference: a free block with a floor, a free block in the air, and only then
+            // somebody else's block -- which the cramming cap keeps survivable. `first` is the last resort
+            // for a hull so full that nothing within reach is even standable.
+            return airborne ?: crowded ?: first
+        }
+
+        /** Two blocks of clear air here: enough for a villager to be put down without suffocating. */
+        private fun roomy(pos: BlockPos): Boolean = clear(pos) && clear(pos.above())
+
+        private fun spokenFor(pos: BlockPos): Boolean = (taken[pos] ?: 0) > 0
+
+        private fun clear(pos: BlockPos): Boolean =
+            level.getBlockState(pos).getCollisionShape(level, pos).isEmpty
+
+        private fun standable(pos: BlockPos): Boolean =
+            !level.getBlockState(pos.below()).getCollisionShape(level, pos.below()).isEmpty
     }
+
+    /** How far a crowded muster will look for room, in blocks, before it settles for standing in the air. */
+    private const val SEARCH_RADIUS = 6
+
+    /** Lifts a measured foot off the block boundary before flooring it -- see the note in `claim`. */
+    private const val FOOT_LIFT = 0.1
+
+    /** Heights the search tries, in order: this deck first, then a step up, then down into the hold. */
+    private val VERTICAL_ORDER = listOf(0, 1, -1, 2, -2)
 
     /**
      * Call [villager] what the articles call them.
@@ -367,7 +570,16 @@ object CrewMuster {
         )
     }
 
-    /** How far above the wheel a mustered crew member is placed. A step down onto the deck, never inside it. */
+    /**
+     * How far above the wheel an unposted crew member is placed. A step down onto the deck, never inside it.
+     *
+     * The WHEEL is the anchor, and that was learned the hard way: this used to be the top of the ship's
+     * world box, on the reasoning that anywhere above the hull is somewhere you can fall onto the deck
+     * from. True of a raft and badly false of anything with masts -- the box reaches the top of the
+     * rigging, so a crew called aboard a galleon appeared level with the crow's nest and fell the height of
+     * the ship. The wheel is a real block on a real deck, it is by definition somewhere a player stands,
+     * and the assembly already knows where it landed.
+     */
     private const val BOARDING_CLEARANCE = 1.5
 
     /** Someone standing on deck is a hair outside the hull box; the same slack `ShipCrew` allows. */

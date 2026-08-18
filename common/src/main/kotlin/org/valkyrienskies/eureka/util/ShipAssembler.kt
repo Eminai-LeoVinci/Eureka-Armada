@@ -133,12 +133,14 @@ object ShipAssembler {
      * Puts [ship]'s blocks back into the world and tears the ship down. Returns false without touching anything if
      * the ship can't be laid down where it is -- see the height check below.
      */
-    fun unfillShip(level: ServerLevel, ship: ServerShip, shipCenter: BlockPos, center: BlockPos): Boolean {
-        val rotation: Rotation = ship.transform.shipToWorldRotation
-            .let(::AxisAngle4d)
-            .let(ShipAssembler::snapRotation)
-            .let(::rotationFromAxisAngle)
-
+    /**
+     * The exact block map the next [unfillShip] will apply: the ship-to-world matrix with its rotation
+     * snapped to the nearest quarter turn, and the sub-block offset every relocated block -- and every
+     * rider -- is carried by. Published so the crew's stand-down can measure posts in the lattice the ship
+     * is about to be laid into: any other frame misses the snap, and a snap that actually turns shifts a
+     * reconstruction by a whole block. [anchor] must be one of the ship's own blocks (the helm).
+     */
+    fun unfillPlan(ship: ServerShip, anchor: BlockPos): Pair<Matrix4d, Vector3d> {
         // ship's rotation rounded to nearest 90*
         val shipToWorld = ship.transform.run {
             Matrix4d()
@@ -147,6 +149,19 @@ object ShipAssembler {
                 .scale(shipToWorldScaling)
                 .translate(-positionInShip.x(), -positionInShip.y(), -positionInShip.z())
         }
+        val gridOffset = shipToWorld
+            .transformPosition(Vector3d(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5))
+            .let { Vector3d(floor(it.x) + 0.5 - it.x, floor(it.y) + 0.5 - it.y, floor(it.z) + 0.5 - it.z) }
+        return shipToWorld to gridOffset
+    }
+
+    fun unfillShip(level: ServerLevel, ship: ServerShip, shipCenter: BlockPos, center: BlockPos): Boolean {
+        val rotation: Rotation = ship.transform.shipToWorldRotation
+            .let(::AxisAngle4d)
+            .let(ShipAssembler::snapRotation)
+            .let(::rotationFromAxisAngle)
+
+        val (shipToWorld, gridOffset) = unfillPlan(ship, shipCenter)
 
         // Every block below is written to floor(its world centre), and nothing downstream checks that against the
         // world's height range: a hull straddling the build ceiling -- which a high-flying ship reaches easily --
@@ -179,21 +194,17 @@ object ShipAssembler {
 
         val alloc0 = Vector3d()
 
-        // Every block below is written to floor(its world center), so a ship sitting at any sub-block offset --
-        // which is every ship that hasn't come to rest exactly on the grid -- has its whole structure snapped to
-        // the block grid on the way out, moving it by up to half a block on each axis. The entities standing on
-        // it are not part of that write. When the deck rises into a player's feet it leaves them embedded in it:
-        // never on ground (so no jump, and mining runs at the airborne penalty), every neighbouring block at foot
-        // level is deck too, and the server keeps correcting the client's attempt to fall out -- the rapid bob.
-        // Relogging can't clear it, because the position genuinely is inside the block. So carry whatever was
-        // riding the ship by the same offset the blocks take.
-        //
-        // Measured off the helm, which is one of this ship's own blocks and so goes through exactly the math the
-        // loop applies. A 90-degree rotation maps the block lattice onto itself, so every block of the ship
-        // shares the helm's fractional offset -- one vector describes the whole move.
-        val gridOffset = shipToWorld
-            .transformPosition(Vector3d(shipCenter.x + 0.5, shipCenter.y + 0.5, shipCenter.z + 0.5))
-            .let { Vector3d(floor(it.x) + 0.5 - it.x, floor(it.y) + 0.5 - it.y, floor(it.z) + 0.5 - it.z) }
+        // gridOffset (from unfillPlan): every block below is written to floor(its world center), so a ship at
+        // any sub-block offset -- which is every ship that hasn't come to rest exactly on the grid -- has its
+        // whole structure snapped to the block grid on the way out, moving it by up to half a block on each
+        // axis. The entities standing on it are not part of that write. When the deck rises into a player's
+        // feet it leaves them embedded in it: never on ground (so no jump, and mining runs at the airborne
+        // penalty), every neighbouring block at foot level is deck too, and the server keeps correcting the
+        // client's attempt to fall out -- the rapid bob. Relogging can't clear it, because the position
+        // genuinely is inside the block. So carry whatever was riding the ship by the same offset the blocks
+        // take. Measured off the helm, which is one of this ship's own blocks and so goes through exactly the
+        // math the loop applies; a 90-degree rotation maps the lattice onto itself, so one vector describes
+        // the whole move.
 
         // Captured BEFORE the relocation: the block updates it triggers can spawn entities of their own (falling
         // sand off a column that just lost its support), and those already appear at their final position. The
