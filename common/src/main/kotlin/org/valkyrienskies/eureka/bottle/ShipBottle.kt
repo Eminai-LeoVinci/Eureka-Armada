@@ -54,6 +54,10 @@ object ShipBottle {
     private const val SHIP_NAME_KEY = "vs_eureka:bottle_ship"
     private const val MARKED_HELM_KEY = "vs_eureka:marked_helm"
 
+    // Mirrors the key ShipHelmBlockEntity.saveAdditional writes for its crew-station flag; read here off the
+    // template's block NBT so the release can tell which of several wheels holds the articles.
+    private const val CREW_STATION_KEY = "vs_eureka:crew_station"
+
     // The wheel's durable identity (ShipHelmBlockEntity.bottleBinding), written alongside the position.
     // The position alone was the whole bug: capture deletes the ship and release builds a new one on a new
     // chunk claim, so every OTHER bottle marked on the same wheel was left holding a shipyard address into
@@ -454,16 +458,34 @@ object ShipBottle {
         return true
     }
 
-    /** Where the wheel landed, in world coordinates, so the release can hand it its own assembly. */
+    /**
+     * Where the wheel landed, in world coordinates, so the release can hand it its own assembly.
+     *
+     * Not just ANY wheel. Whichever helm this returns is the one `assemble` runs from, and assembling is a
+     * claim: that wheel becomes the crew station, and its name is what the muster looks the crew up under. A
+     * hull can carry several wheels, and palette order is build order, not importance -- first-found once
+     * handed a release to a blank spare, which mustered nobody (no name to look up) and re-dealt every gun
+     * label from the wrong bow. So the wheel already holding the articles wins, a named wheel beats a blank
+     * one, and only a hull with neither falls back to first-found.
+     */
     private fun helmIn(level: ServerLevel, template: net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate, corner: BlockPos): BlockPos? {
+        var best: BlockPos? = null
+        var bestScore = -1
         for (palette in template.palettes) {
             for (info in palette.blocks()) {
                 if (info.state.block !is ShipHelmBlock) continue
                 val at = BlockPos(corner.x + info.pos.x, corner.y + info.pos.y, corner.z + info.pos.z)
-                if (level.getBlockState(at).block is ShipHelmBlock) return at
+                if (level.getBlockState(at).block !is ShipHelmBlock) continue
+                var score = 0
+                if (info.nbt?.getBooleanOr(CREW_STATION_KEY, false) == true) score += 2
+                if (info.nbt?.contains("CustomName") == true) score += 1
+                if (score > bestScore) {
+                    bestScore = score
+                    best = at
+                }
             }
         }
-        return null
+        return best
     }
 
     /**
