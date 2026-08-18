@@ -517,6 +517,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // server would only answer "assemble the ship first", so the cover says it first by greying.
         crewBookButton.active = assembled
 
+        // The section's name tells the truth about what the system is doing. Holding a SPEED is cruise
+        // control -- that is the whole of what the words mean. The moment it is also holding a heading or
+        // an altitude, it is flying the ship, and the label changes to say so. A small literalism, left in
+        // deliberately for the kind of player who would otherwise raise it.
+        cruiseMasterCheckbox.message =
+            if (menu.cruising && (menu.cruiseTurnArmed || menu.cruiseVerticalArmed)) AUTO_PILOT_TEXT
+            else CRUISE_TEXT
+
         // Auto-Shipwright subs grey out while the section master is off; the section is per-player (no ship
         // needed) and stays fully usable on every tab, because it is set BEFORE a ship exists -- at which
         // point the ship has no category to gate it by, and you may well be building a hybrid.
@@ -931,6 +939,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private val TAB_SUBMARINE_TEXT = Component.translatable("gui.vs_eureka.tab_submarine")
 
         private val CRUISE_TEXT = Component.translatable("gui.vs_eureka.cruise_control")
+
+        /** What the cruise section calls itself once it is steering as well as holding speed. */
+        private val AUTO_PILOT_TEXT = Component.translatable("gui.vs_eureka.auto_pilot")
         // The cruise axes wear different names on each tab -- see axisLabels. CRUISE_VERTICAL_TEXT is the
         // neutral fallback the checkboxes are constructed with before the first applyAxisLabels.
         private val CRUISE_SPEED_TEXT = Component.translatable("gui.vs_eureka.cruise_speed")

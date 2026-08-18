@@ -186,6 +186,7 @@
   "gui.vs_eureka.tab_airship": "Airships",
   "gui.vs_eureka.tab_submarine": "Submarine",
   "gui.vs_eureka.cruise_control": "Cruise Control",
+  "gui.vs_eureka.auto_pilot": "Auto-Pilot",
   "gui.vs_eureka.cruise_speed": "Speed:",
   "gui.vs_eureka.cruise_turn": "Turn:",
   "gui.vs_eureka.cruise_vertical": "Vertical:",
