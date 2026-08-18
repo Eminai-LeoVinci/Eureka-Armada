@@ -519,14 +519,16 @@ object PathNetworkingFabric {
                     val count = buf.readByte().toInt()
                     val side = readSide(buf) ?: return@registerGlobalReceiver
                     val layer = readLayer(buf)
+                    val mode = readMode(buf) ?: return@registerGlobalReceiver
                     ({ level: ServerLevel ->
-                        CrewOperations.requestAssignGunners(level, player, helm, count, side, layer)
+                        CrewOperations.requestAssignGunners(level, player, helm, count, side, layer, mode)
                     })
                 }
                 OPS_ASSIGN_FIREFIGHTERS -> {
                     val count = buf.readByte().toInt()
+                    val mode = readMode(buf) ?: return@registerGlobalReceiver
                     ({ level: ServerLevel ->
-                        CrewOperations.requestAssignFirefighters(level, player, helm, count)
+                        CrewOperations.requestAssignFirefighters(level, player, helm, count, mode)
                     })
                 }
                 OPS_RESTOCK_POWDER -> { level: ServerLevel ->
@@ -612,6 +614,9 @@ object PathNetworkingFabric {
     /** A deck scope off the wire: 0 is every deck, anything hostile is clamped rather than trusted. */
     private fun readLayer(buf: FriendlyByteBuf): Int = buf.readByte().toInt().coerceIn(0, MAX_LAYERS)
 
+    private fun readMode(buf: FriendlyByteBuf): CrewOperations.AssignMode? =
+        CrewOperations.AssignMode.entries.getOrNull(buf.readByte().toInt())
+
     @Environment(EnvType.CLIENT)
     fun registerClient() {
         // The helm menu lives in :common and cannot reach this package, so it names a wheel through this seam.
@@ -630,7 +635,13 @@ object PathNetworkingFabric {
         }
         // Markers are the only client state here keyed on entity ids, which are per-connection: carrying a set
         // into the next world would draw plates over whatever happened to inherit those ids.
-        ClientPlayConnectionEvents.DISCONNECT.register { _, _ -> ClientCrewMarkers.clear() }
+        ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
+            ClientCrewMarkers.clear()
+            // The Operations tab's assignment modes are remembered for the session, not for ever: leaving
+            // the world puts both toggles back on the safe one rather than carrying a Release into the
+            // next ship a player opens a book on.
+            CrewManifestScreen.forgetModes()
+        }
 
         ClientPlayNetworking.registerGlobalReceiver(CREW_MARKS_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
@@ -762,19 +773,28 @@ object PathNetworkingFabric {
     @Environment(EnvType.CLIENT)
     fun sendCrewStoresAsk(helm: Long) = sendOps(helm, OPS_STORES) {}
 
-    /** Client: man [side]'s guns on deck [layer] (0 = all) until [count] of them are manned in total. */
+    /** Client: work [side]'s guns on deck [layer] (0 = all) per [mode], to a total of [count] manned. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewAssignGunners(helm: Long, count: Int, side: CrewOperations.Side, layer: Int) =
-        sendOps(helm, OPS_ASSIGN_GUNNERS) {
-            it.writeByte(count.coerceIn(0, MAX_OPS_COUNT))
-            it.writeByte(side.ordinal)
-            it.writeByte(layer.coerceIn(0, MAX_LAYERS))
-        }
+    fun sendCrewAssignGunners(
+        helm: Long,
+        count: Int,
+        side: CrewOperations.Side,
+        layer: Int,
+        mode: CrewOperations.AssignMode
+    ) = sendOps(helm, OPS_ASSIGN_GUNNERS) {
+        it.writeByte(count.coerceIn(0, MAX_OPS_COUNT))
+        it.writeByte(side.ordinal)
+        it.writeByte(layer.coerceIn(0, MAX_LAYERS))
+        it.writeByte(mode.ordinal)
+    }
 
-    /** Client: post the fire watch -- [count] firefighters in total. */
+    /** Client: post the fire watch per [mode] -- [count] firefighters in total. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewAssignFirefighters(helm: Long, count: Int) =
-        sendOps(helm, OPS_ASSIGN_FIREFIGHTERS) { it.writeByte(count.coerceIn(0, MAX_OPS_COUNT)) }
+    fun sendCrewAssignFirefighters(helm: Long, count: Int, mode: CrewOperations.AssignMode) =
+        sendOps(helm, OPS_ASSIGN_FIREFIGHTERS) {
+            it.writeByte(count.coerceIn(0, MAX_OPS_COUNT))
+            it.writeByte(mode.ordinal)
+        }
 
     /** Client: run powder to every gun aboard from the holds, split evenly. */
     @Environment(EnvType.CLIENT)

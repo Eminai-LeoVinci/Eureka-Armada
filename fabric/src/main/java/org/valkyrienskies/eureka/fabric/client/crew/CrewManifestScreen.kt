@@ -149,6 +149,18 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** The cannonball restock's own side; its DECK comes from the cannon controls above it. */
     private var shotSide = CrewOperations.Side.BOTH
 
+    /**
+     * What each Assign button will DO -- kept in the companion, not here, so closing the book and opening
+     * it again does not quietly put a captain back on a different mode than the one they left set. They
+     * reset at disconnect; see [forgetModes].
+     */
+    private var crewMode: CrewOperations.AssignMode
+        get() = rememberedCrewMode
+        set(value) { rememberedCrewMode = value }
+    private var fireMode: CrewOperations.AssignMode
+        get() = rememberedFireMode
+        set(value) { rememberedFireMode = value }
+
     /** The round the shot restock will load. Defaults to the holds' most plentiful when stores arrive. */
     private var selectedAmmo: Pair<Cannonball, CannonCharge>? = null
     private var ammoMenuOpen = false
@@ -1079,6 +1091,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, OPS_GUNNERS_TEXT, left + 8, opsRowY(OPS_V_ROW_G) + 4, TEXT)
         opsButton(guiGraphics, STOP_G_MINUS, MINUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_PLUS, PLUS_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_G_MODE, modeText(crewMode), mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
         drawSides(guiGraphics, STOP_G_SIDE, opsRowY(OPS_V_ROW_GSCOPE), crewSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_LAYER, layerButtonText(crewLayer), mouseX, mouseY)
@@ -1087,6 +1100,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, OPS_FIRE_TEXT, left + 8, opsRowY(OPS_V_ROW_F) + 4, TEXT)
         opsButton(guiGraphics, STOP_F_MINUS, MINUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_F_PLUS, PLUS_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_F_MODE, modeText(fireMode), mouseX, mouseY)
         opsButton(guiGraphics, STOP_F_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
 
         guiGraphics.fill(left + 8, opsRowY(OPS_V_SEP1), left + PANEL_W - 8, opsRowY(OPS_V_SEP1) + 1, SEPARATOR)
@@ -1144,6 +1158,17 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     /** Where a virtual body row sits on screen this frame. */
     private fun opsRowY(vy: Int): Int = top + OPS_BODY_TOP + vy - opsScroll
+
+    /** What an Assign row's mode toggle reads: the thing that will happen when Assign is pressed. */
+    private fun modeText(mode: CrewOperations.AssignMode): Component = when (mode) {
+        CrewOperations.AssignMode.KEEP -> OPS_MODE_KEEP_TEXT
+        CrewOperations.AssignMode.REASSIGN -> OPS_MODE_REASSIGN_TEXT
+        CrewOperations.AssignMode.RELEASE -> OPS_MODE_RELEASE_TEXT
+    }
+
+    /** The toggle steps through the three in order, both under the mouse and under the pad. */
+    private fun nextMode(mode: CrewOperations.AssignMode): CrewOperations.AssignMode =
+        CrewOperations.AssignMode.entries[(mode.ordinal + 1) % CrewOperations.AssignMode.entries.size]
 
     /** What a deck dropdown's button reads: the scope it is set to, with the unfold marker. */
     private fun layerButtonText(layer: Int): Component =
@@ -1349,12 +1374,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_G_MINUS -> intArrayOf(left + OPS_MINUS_X, OPS_V_ROW_G, OPS_STEP_W, OPS_CTRL_H)
         STOP_G_BOX -> intArrayOf(left + OPS_BOX_X, OPS_V_ROW_G, OPS_BOX_W, OPS_CTRL_H)
         STOP_G_PLUS -> intArrayOf(left + OPS_PLUS_X, OPS_V_ROW_G, OPS_STEP_W, OPS_CTRL_H)
+        STOP_G_MODE -> intArrayOf(left + OPS_MODE_X, OPS_V_ROW_G, OPS_MODE_W, OPS_CTRL_H)
         STOP_G_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, OPS_V_ROW_G, OPS_ASSIGN_W, OPS_CTRL_H)
         STOP_G_SIDE -> intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_GSCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_G_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_GSCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
         STOP_F_MINUS -> intArrayOf(left + OPS_MINUS_X, OPS_V_ROW_F, OPS_STEP_W, OPS_CTRL_H)
         STOP_F_BOX -> intArrayOf(left + OPS_BOX_X, OPS_V_ROW_F, OPS_BOX_W, OPS_CTRL_H)
         STOP_F_PLUS -> intArrayOf(left + OPS_PLUS_X, OPS_V_ROW_F, OPS_STEP_W, OPS_CTRL_H)
+        STOP_F_MODE -> intArrayOf(left + OPS_MODE_X, OPS_V_ROW_F, OPS_MODE_W, OPS_CTRL_H)
         STOP_F_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, OPS_V_ROW_F, OPS_ASSIGN_W, OPS_CTRL_H)
         STOP_C_SIDE -> intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_CSCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_C_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_CSCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
@@ -1394,13 +1421,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_G_BOX -> gunnerCountBox?.let { this.focused = it }
             STOP_G_SIDE -> crewSide = pickSide(crewSide, STOP_G_SIDE, mouseX)
             STOP_G_LAYER -> openLayerMenu(crew = true)
+            STOP_G_MODE -> crewMode = nextMode(crewMode)
             STOP_G_ASSIGN ->
-                PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide, crewLayer)
+                PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide, crewLayer, crewMode)
             STOP_F_MINUS -> adjustCount(gunners = false, delta = -1)
             STOP_F_PLUS -> adjustCount(gunners = false, delta = +1)
             STOP_F_BOX -> fireCountBox?.let { this.focused = it }
+            STOP_F_MODE -> fireMode = nextMode(fireMode)
             STOP_F_ASSIGN ->
-                PathNetworkingFabric.sendCrewAssignFirefighters(snapshot.helm, fireCount)
+                PathNetworkingFabric.sendCrewAssignFirefighters(snapshot.helm, fireCount, fireMode)
             STOP_C_SIDE -> ctrlSide = pickSide(ctrlSide, STOP_C_SIDE, mouseX)
             STOP_C_LAYER -> openLayerMenu(crew = false)
             STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, ctrlSide, elevIndex, ctrlLayer)
@@ -2210,6 +2239,23 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     companion object {
 
+        /**
+         * What each Assign row is set to DO, remembered for as long as the player is in a world.
+         *
+         * Kept here rather than on the screen because a manifest is built fresh every time it opens, and a
+         * captain who set Reassign, closed the book and opened it again would find the toggle quietly back
+         * on something else. Not written to disk either: [forgetModes] puts both back to the safe one when
+         * the connection drops, so the setting lives exactly as long as the voyage does.
+         */
+        private var rememberedCrewMode = CrewOperations.AssignMode.KEEP
+        private var rememberedFireMode = CrewOperations.AssignMode.KEEP
+
+        /** Both toggles back to Keep Assigned. Called when the client disconnects. */
+        fun forgetModes() {
+            rememberedCrewMode = CrewOperations.AssignMode.KEEP
+            rememberedFireMode = CrewOperations.AssignMode.KEEP
+        }
+
         /** Open a manifest, or fold a fresh one into the manifest already on screen for that same wheel. */
         fun open(snapshot: CrewManifest.Snapshot) {
             val mc = Minecraft.getInstance()
@@ -2262,6 +2308,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val OPS_GUNNERS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_gunners")
         private val OPS_FIRE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fire_watch")
         private val OPS_ASSIGN_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_assign")
+        private val OPS_MODE_KEEP_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_mode_keep")
+        private val OPS_MODE_REASSIGN_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_mode_reassign")
+        private val OPS_MODE_RELEASE_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_mode_release")
         private val OPS_AMMO_LABEL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_ammo")
         private val OPS_LAYER_ALL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_layer_all")
         private val OPS_SIDE_PORT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_port")
@@ -2378,6 +2429,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_ASSIGN_W = 48
 
         /** The mode toggle, in the gap the count stepper and Assign left between them. */
+        private const val OPS_MODE_X = 136
+        private const val OPS_MODE_W = 100
         private const val OPS_WIDE_W = 100
         private const val OPS_AMMO_X = 116
         private const val OPS_AMMO_W = 176
@@ -2434,26 +2487,28 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STOP_G_MINUS = 0
         private const val STOP_G_BOX = 1
         private const val STOP_G_PLUS = 2
-        private const val STOP_G_ASSIGN = 3
-        private const val STOP_G_SIDE = 4
-        private const val STOP_G_LAYER = 5
-        private const val STOP_F_MINUS = 6
-        private const val STOP_F_BOX = 7
-        private const val STOP_F_PLUS = 8
-        private const val STOP_F_ASSIGN = 9
-        private const val STOP_C_SIDE = 10
-        private const val STOP_C_LAYER = 11
-        private const val STOP_LAY = 12
-        private const val STOP_ELEV_ANGLE = 13
-        private const val STOP_PWR = 14
-        private const val STOP_PWR_LEVEL = 15
-        private const val STOP_AMMO_MENU = 16
-        private const val STOP_SHOT = 17
-        private const val STOP_SHOT_SIDE = 18
-        private const val STOP_REFUEL = 19
-        private const val STOP_FUEL_LIST = 20
-        private const val STOP_POWDER = 21
-        private const val OPS_STOP_COUNT = 22
+        private const val STOP_G_MODE = 3
+        private const val STOP_G_ASSIGN = 4
+        private const val STOP_G_SIDE = 5
+        private const val STOP_G_LAYER = 6
+        private const val STOP_F_MINUS = 7
+        private const val STOP_F_BOX = 8
+        private const val STOP_F_PLUS = 9
+        private const val STOP_F_MODE = 10
+        private const val STOP_F_ASSIGN = 11
+        private const val STOP_C_SIDE = 12
+        private const val STOP_C_LAYER = 13
+        private const val STOP_LAY = 14
+        private const val STOP_ELEV_ANGLE = 15
+        private const val STOP_PWR = 16
+        private const val STOP_PWR_LEVEL = 17
+        private const val STOP_AMMO_MENU = 18
+        private const val STOP_SHOT = 19
+        private const val STOP_SHOT_SIDE = 20
+        private const val STOP_REFUEL = 21
+        private const val STOP_FUEL_LIST = 22
+        private const val STOP_POWDER = 23
+        private const val OPS_STOP_COUNT = 24
 
         // endregion
 

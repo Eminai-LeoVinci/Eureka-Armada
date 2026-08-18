@@ -51,6 +51,19 @@ object CrewOperations {
     enum class Side { PORT, STARBOARD, BOTH }
 
     /**
+     * What an Assign order means for crew who already hold a position.
+     *
+     * [KEEP] never re-tasks anybody -- it makes the numbers up out of idle hands, so an order about one
+     * deck can never cost another one its gunners. [REASSIGN] is the opposite promise: the WHOLE gun crew
+     * comes off its guns first, wherever they stand, and the scope is dealt again from the top of the
+     * articles. [RELEASE] frees the scope and posts nobody; the count is not consulted, because "let Deck
+     * 2's port guns go" is not a number.
+     *
+     * Ordinals are the wire format; KEEP leads because it is the default and the one that cannot surprise.
+     */
+    enum class AssignMode { KEEP, REASSIGN, RELEASE }
+
+    /**
      * Pushes a stores tally at one screen, along with the guns-per-deck census the deck dropdown lists.
      * Installed by the platform networking, exactly as `CrewManifest.sender` is; the default no-op keeps
      * loaders without the payload honest. The deck counts ride this payload rather than the manifest
@@ -69,22 +82,39 @@ object CrewOperations {
     }
 
     /**
-     * Man [side]'s guns on deck [layer]: seat gunners at EMPTY guns in that scope until [count] of them
-     * are manned in total, and touch nothing else.
+     * Work [side]'s guns on deck [layer] according to [mode], and touch nothing outside that scope.
      *
-     * Fill-only, on purpose -- the opposite of the whole-battery re-deal this order used to be. An order
-     * about Deck 1's port battery is not permission to unseat Deck 2: gunners already at their guns stay
-     * exactly where they are, locked or not, and count toward the total. Asking for no more than are
-     * already manned changes nothing and says so. New hands come from the first unlocked berths on the
-     * articles that are not holding a gun ANYWHERE and are not waiting on a remembered one -- an idle
-     * firefighter may be drafted (a duty is an order, not a shackle), but a gunner on another deck is
-     * never poached off it by an order about this one, and a stood-down gunner whose label is about to
-     * walk him back to his own gun is left for the reconcile that is already carrying him there.
+     * An order about Deck 1's port battery is never permission to unseat Deck 2 -- that is the whole point
+     * of the scope, and it holds in all three modes:
+     *
+     * - [AssignMode.KEEP] seats gunners at EMPTY guns until [count] of the scope's guns are manned in
+     *   total. Nobody already at a gun is moved, locked or not, and everybody already there counts toward
+     *   the total; asking for no more than are manned changes nothing and says so.
+     * - [AssignMode.REASSIGN] stands this crew's ENTIRE unlocked gun crew down first -- every deck, both
+     *   sides -- and then fills the scope the same way. That is what makes "sixty to port, then sixty to
+     *   starboard" mean the second order rather than both at once; a scope-only clearing would leave the
+     *   port battery manned and answer the starboard order with whatever hands happened to be spare.
+     * - [AssignMode.RELEASE] empties the scope and posts nobody.
+     *
+     * New hands come from the first unlocked berths on the articles that are not holding a gun ANYWHERE
+     * and are not waiting on a remembered one -- an idle firefighter may be drafted (a duty is an order,
+     * not a shackle), but a gunner on another deck is never poached off it by an order about this one, and
+     * a stood-down gunner whose label is about to walk him back to his own gun is left for the reconcile
+     * that is already carrying him there.
      *
      * BOTH deals alternately -- L, R, L, R -- so a half-manned ship still answers on both broadsides; a
-     * single side fills bow to stern. Guns held by another captain's crew are never dealt.
+     * single side fills bow to stern. Guns held by another captain's crew are never dealt, and LOCKED
+     * berths are untouched by every mode, releases included.
      */
-    fun requestAssignGunners(level: ServerLevel, player: ServerPlayer, helm: Long, count: Int, side: Side, layer: Int) {
+    fun requestAssignGunners(
+        level: ServerLevel,
+        player: ServerPlayer,
+        helm: Long,
+        count: Int,
+        side: Side,
+        layer: Int,
+        mode: AssignMode
+    ) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
@@ -98,14 +128,51 @@ object CrewOperations {
         }
 
         val ledger = CrewLedger.get(level.server)
+
+        // Both of the other modes begin by standing gunners down -- but over different ground, and the
+        // difference is the whole meaning of the two words.
+        //
+        // Reassign is a CLEAN SLATE: every gun this crew holds anywhere comes free first, so an order to
+        // man the starboard battery can draw on the hands that were serving to port. Clearing only the
+        // scope was the first cut and it read as a plain bug -- sixty gunners stayed put on the left, and
+        // an order for sixty on the right was answered by the five spare hands that happened to be idle.
+        // Release is the scoped one: it frees what the selectors point at and nothing else.
+        val released = when (mode) {
+            AssignMode.KEEP -> 0
+            AssignMode.REASSIGN -> standDownGunners(level, ledger, op, null)
+            AssignMode.RELEASE -> standDownGunners(level, ledger, op, scope)
+        }
+        if (mode == AssignMode.RELEASE) {
+            if (released == 0) {
+                PathMessages.send(player, "No one to release from ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.GOOD)
+            } else {
+                val who = if (released == 1) "gunner" else "gunners"
+                PathMessages.send(player, "${scopeName(side, layer)}: $released $who released.", PathMessages.Kind.GOOD)
+                CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
+                pushStores(op)
+            }
+            return
+        }
+
         // Anybody's stationed berth mans a gun -- locked, another captain's, all of them. The count the
         // captain asked for is "how many of these guns have somebody behind them", not "how many are mine".
+        // Read AFTER the clearing above, so a re-deal sees the guns it just emptied.
         val held = ledger.stationedBerths().mapNotNullTo(HashSet()) { it.station }
         val manned = scope.count { it.gun.blockPos.asLong() in held }
         val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
         val wanted = (total - manned).coerceAtLeast(0)
         if (wanted == 0) {
-            PathMessages.send(player, "${scopeName(side, layer)} already musters $manned gunners.", PathMessages.Kind.GOOD)
+            if (released > 0) {
+                PathMessages.send(
+                    player,
+                    "${scopeName(side, layer)}: $released stood down, $manned still manned.",
+                    PathMessages.Kind.GOOD
+                )
+                CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
+                pushStores(op)
+            } else {
+                PathMessages.send(player, "${scopeName(side, layer)} already musters $manned gunners.", PathMessages.Kind.GOOD)
+            }
             return
         }
 
@@ -178,18 +245,74 @@ object CrewOperations {
     /**
      * Post the fire watch: [count] firefighters in total, locked ones included in the count.
      *
-     * Ledger-only -- a duty survives being ashore, so no entity is required -- and the same from-scratch
-     * shape as the gun crew: the first unlocked berths in slot order hold the duty, everyone else
-     * unlocked who held it stands down. Gunners drafted to the watch leave their guns (setDuty clears
-     * the binding); the reverse draft is the gun-crew order's business.
+     * Ledger-only -- a duty survives being ashore, so no entity is required -- and the same three modes
+     * the gun crew answers to, minus a scope, because a fire does not care which battery you favour:
+     *
+     * - [AssignMode.KEEP] leaves every hand already posted where it is and makes the difference up out of
+     *   crew doing nothing at all. A gunner at his gun is somebody who already has a position, and this
+     *   mode's whole promise is that it will not take him off it.
+     * - [AssignMode.REASSIGN] posts from scratch: the first unlocked berths in slot order hold the duty
+     *   and everyone else unlocked who held it stands down. Gunners MAY be drafted here and leave their
+     *   guns (setDuty clears the binding) -- that is the long-standing rule, and now it is a choice.
+     * - [AssignMode.RELEASE] stands the whole unlocked watch down.
      */
-    fun requestAssignFirefighters(level: ServerLevel, player: ServerPlayer, helm: Long, count: Int) {
+    fun requestAssignFirefighters(
+        level: ServerLevel,
+        player: ServerPlayer,
+        helm: Long,
+        count: Int,
+        mode: AssignMode
+    ) {
         val op = gate(level, player, helm) ?: return
         val ledger = CrewLedger.get(level.server)
         val berths = ledger.crew(op.key).sortedBy { it.slot }
         val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
 
+        if (mode == AssignMode.RELEASE) {
+            var released = 0
+            for (berth in berths) {
+                if (berth.locked || berth.duty != CrewDuty.FIREFIGHTER) continue
+                ledger.setDuty(berth.villager, CrewDuty.NONE)
+                released++
+            }
+            if (released == 0) {
+                PathMessages.send(player, "No fire watch to release.", PathMessages.Kind.GOOD)
+            } else {
+                PathMessages.send(player, "Fire watch: $released released.", PathMessages.Kind.GOOD)
+                CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
+                pushStores(op)
+            }
+            return
+        }
+
         val lockedWatch = berths.count { it.locked && it.duty == CrewDuty.FIREFIGHTER }
+
+        if (mode == AssignMode.KEEP) {
+            val onWatch = berths.count { it.duty == CrewDuty.FIREFIGHTER }
+            var short = (total - onWatch).coerceAtLeast(0)
+            if (short == 0) {
+                PathMessages.send(player, "The fire watch already musters $onWatch.", PathMessages.Kind.GOOD)
+                return
+            }
+            var added = 0
+            for (berth in berths) {
+                if (short == 0) break
+                // Idle means idle: no duty, no gun, and no gun remembered from a ship that was packed up.
+                if (berth.locked || berth.duty != CrewDuty.NONE) continue
+                if (berth.station != null || berth.stationLabel != null) continue
+                ledger.setDuty(berth.villager, CrewDuty.FIREFIGHTER)
+                short--
+                added++
+            }
+            PathMessages.send(player, "Fire watch: $added posted, ${onWatch + added} on watch.", PathMessages.Kind.GOOD)
+            if (short > 0) {
+                PathMessages.send(player, "No more idle crew to post.", PathMessages.Kind.WARN)
+            }
+            CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
+            pushStores(op)
+            return
+        }
+
         var wanted = (total - lockedWatch).coerceAtLeast(0)
 
         var posted = 0
@@ -633,6 +756,43 @@ object CrewOperations {
             Side.STARBOARD -> onDeck.filter { it.label.startsWith(STARBOARD_GROUP) }
             Side.BOTH -> onDeck
         }
+    }
+
+    /**
+     * Turn this crew's unlocked gunners back into free hands, and say how many. A null [scope] means every
+     * gunner they have, wherever they stand -- Reassign's clean slate; a scope limits it to the guns that
+     * list covers, which is Release.
+     *
+     * Matched by the gun a berth HOLDS and by the label it is OWED: a gunner whose ship was packed up
+     * under him keeps only the label until the reconcile walks him back, and an order that clears his deck
+     * plainly means him too. A berth carrying the duty but no gun at all is swept up by the clean slate,
+     * since "from scratch" is a statement about the whole gun crew. `setDuty` drops the station and the
+     * label together -- a duty change is an order to do something else, so there is no gun left to
+     * remember -- and the seat is emptied at once rather than left for the next reconcile pass to notice.
+     */
+    private fun standDownGunners(
+        level: ServerLevel,
+        ledger: CrewLedger,
+        op: Op,
+        scope: List<GunLabels.Labeled>?
+    ): Int {
+        val positions = scope?.mapTo(HashSet()) { it.gun.blockPos.asLong() }
+        val labels = scope?.mapTo(HashSet()) { it.label }
+        var released = 0
+        for (berth in ledger.crew(op.key)) {
+            if (berth.locked) continue
+            val station = berth.station
+            val label = berth.stationLabel
+            if (station == null && label == null && berth.duty != CrewDuty.GUNNER) continue
+            if (positions != null && labels != null) {
+                val here = (station != null && station in positions) || (label != null && label in labels)
+                if (!here) continue
+            }
+            ledger.setDuty(berth.villager, CrewDuty.NONE)
+            GunStations.unseat(level, berth.villager)
+            released++
+        }
+        return released
     }
 
     /**
