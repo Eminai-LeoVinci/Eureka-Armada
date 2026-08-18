@@ -81,6 +81,18 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var nameValue = ""
     private var nameBox: EditBox? = null
 
+    /**
+     * The card's real widgets, held so a dropdown can hide them.
+     *
+     * A dropdown on the card is hand-drawn and these are not, and `super.render` paints widgets LAST --
+     * so Back sat on top of the gun list, and worse, `super.mouseClicked` runs FIRST, so it also ATE the
+     * clicks meant for the entries underneath it. Hiding them while a list is unfolded is what makes the
+     * card's own rule -- a dropdown owns the card while it is open -- true of the widgets too.
+     */
+    private var cardRenameButton: ShipHelmIconButton? = null
+    private var cardDismissButton: ShipHelmButton? = null
+    private var cardBackButton: ShipHelmButton? = null
+
     /** The crew's own name, edited in the header. Same keep-across-rebuild reasoning as [nameValue]. */
     private var crewNameValue = ""
     private var crewNameBox: EditBox? = null
@@ -210,14 +222,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             it.setResponder { typed -> nameValue = typed }
         }
 
-        addRenderableWidget(
+        cardRenameButton = addRenderableWidget(
             ShipHelmIconButton(
                 cardX() + CARD_W - CARD_PAD - RENAME_BTN_W, cardY() + CARD_PAD,
                 RENAME_BTN_W, NAME_BOX_H, RENAME_TEXT, font
             ) { commitRename() }
         )
 
-        addRenderableWidget(
+        cardDismissButton = addRenderableWidget(
             ShipHelmButton(
                 cardX() + CARD_PAD, cardY() + CARD_H - CARD_PAD - BACK_BTN_H,
                 DISMISS_BTN_W, BACK_BTN_H,
@@ -229,7 +241,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             it.active = detail?.locked != true
         }
 
-        addRenderableWidget(
+        cardBackButton = addRenderableWidget(
             ShipHelmButton(
                 cardX() + CARD_W - CARD_PAD - BACK_BTN_W, cardY() + CARD_H - CARD_PAD - BACK_BTN_H,
                 BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
@@ -331,6 +343,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         openCard = null
         detail = null
         nameBox = null
+        cardRenameButton = null
+        cardDismissButton = null
+        cardBackButton = null
         dismissArmed = false
         stationMenuOpen = false
         cardAmmoMenuOpen = false
@@ -916,8 +931,18 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // painted through a popup, would be the scissor's one leak.
         positionCountBox(gunnerCountBox, OPS_V_ROW_G)
         positionCountBox(fireCountBox, OPS_V_ROW_F)
+        // The card's widgets step aside for the card's own dropdowns, for both halves of the same reason:
+        // super paints them over the list, and answers their clicks before the list is ever asked.
+        val cardWidgetsVisible = !cardMenuOpen()
+        nameBox?.visible = cardWidgetsVisible
+        cardRenameButton?.visible = cardWidgetsVisible
+        cardDismissButton?.visible = cardWidgetsVisible
+        cardBackButton?.visible = cardWidgetsVisible
         super.render(guiGraphics, mouseX, mouseY, partialTicks)
     }
+
+    /** Whether a list is unfolded over the card. While one is, it owns the card entirely. */
+    private fun cardMenuOpen(): Boolean = stationMenuOpen || cardAmmoMenuOpen
 
     private fun positionCountBox(box: EditBox?, vy: Int) {
         if (box == null) return
