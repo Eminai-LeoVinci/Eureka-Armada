@@ -112,6 +112,10 @@ object GunStations {
             val station = berth.station
             if (station != null) {
                 val pos = BlockPos.of(station)
+                // An unloaded chunk answers "no block entity" exactly as a mined gun does, and this pass
+                // runs a second after an assembly when the shipyard may still be settling. Silence is not
+                // evidence: wait for a chunk we can actually read before relieving anybody.
+                if (!level.hasChunkAt(pos)) continue
                 if (level.getBlockEntity(pos) !is CannonBlockEntity) {
                     // The gun is gone -- destroyed, mined, or shot away. This is the relieved-of-post rule.
                     relieve(level, ledger, berth.villager, berth.name, berth.stationLabel)
@@ -131,9 +135,16 @@ object GunStations {
                 val label = berth.stationLabel ?: continue
                 val shipId = ShipCrew.standingOn(villager) ?: continue
                 val ship = level.shipObjectWorld.loadedShips.getById(shipId) ?: continue
-                val gun = GunLabels.byLabel(level, ship, label)
+                // "This ship has no names for its guns" is not the same statement as "no gun answers to
+                // yours". A census that comes up empty means the hull has no crew-station wheel yet, or its
+                // chunks are not readable yet -- both true for a beat after every assembly -- and reading
+                // that as "your gun is gone" is what quietly stripped a whole gun crew of their stations
+                // one second after they mustered, leaving sixty gunners wandering the deck.
+                val named = GunLabels.labeled(level, ship)
+                if (named.isEmpty()) continue
+                val gun = named.firstOrNull { it.label == label }?.gun
                 if (gun == null) {
-                    // Aboard again, but no gun wears that name any more.
+                    // Aboard again, and the ship CAN name its guns -- so this one really is gone.
                     relieve(level, ledger, berth.villager, berth.name, label)
                     continue
                 }
