@@ -510,8 +510,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 }
 
                 // The Lock answers FIRST, and answers even locked -- it is the one way back out.
-                if ((card.duty != CrewDuty.NONE || card.locked) &&
-                    mx >= lockButtonX() && mx < lockButtonX() + LOCK_BTN_W &&
+                if (mx >= lockButtonX() && mx < lockButtonX() + LOCK_BTN_W &&
                     my >= lockButtonY() && my < lockButtonY() + BACK_BTN_H
                 ) {
                     toggleLock(card)
@@ -1867,9 +1866,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     /** Lock or Unlock, centred between Dismiss and Back -- the one control a locked card still answers. */
     private fun drawLockButton(guiGraphics: GuiGraphics, card: CrewManifest.Detail, mouseX: Int, mouseY: Int) {
-        // No duty means nothing to freeze -- unless a lock is already on, in which case the way OUT must
-        // exist whatever the paperwork says.
-        if (card.duty == CrewDuty.NONE && !card.locked) return
+        // Every berth can be locked, Crewmen included. The button used to hide on a berth with no duty, on
+        // the reasoning that there was nothing to freeze -- but a Crewman IS something now, and locking one
+        // is how a captain keeps the two hands minding the repair room out of a re-deal of the gun crew.
+        // (The server never had this rule: requestLock asks no questions about duty, and every bulk order
+        // already steps around a locked berth whatever it is doing. Only the button was missing, which is
+        // why the workaround was to make them gunners with no gun and lock that.)
         val x = lockButtonX()
         val y = lockButtonY()
         val lit = (mouseX >= x && mouseX < x + LOCK_BTN_W && mouseY >= y && mouseY < y + BACK_BTN_H) ||
@@ -1907,7 +1909,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             stops.add(CARD_STOP_ELEVATION)
             stops.add(CARD_STOP_AMMO)
         }
-        if (card.duty != CrewDuty.NONE) stops.add(CARD_STOP_LOCK)
+        stops.add(CARD_STOP_LOCK)
         return stops
     }
 

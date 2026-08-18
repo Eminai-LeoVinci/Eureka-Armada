@@ -352,6 +352,7 @@ object CrewOperations {
      */
     fun requestRestockPowder(level: ServerLevel, player: ServerPlayer, helm: Long) {
         val op = gate(level, player, helm) ?: return
+        if (!storesManned(op)) return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -444,6 +445,7 @@ object CrewOperations {
         layer: Int
     ) {
         val op = gate(level, player, helm) ?: return
+        if (!storesManned(op)) return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -652,6 +654,7 @@ object CrewOperations {
      */
     fun requestRefuel(level: ServerLevel, player: ServerPlayer, helm: Long) {
         val op = gate(level, player, helm) ?: return
+        if (!storesManned(op)) return
         val engines = org.valkyrienskies.eureka.ship.ShipEngines.aboard(level, op.ship)
         if (engines.isEmpty()) {
             PathMessages.send(player, "No engines aboard.", PathMessages.Kind.ERROR)
@@ -743,6 +746,31 @@ object CrewOperations {
     private fun pushStores(op: Op) {
         val decks = GunLabels.layerCounts(GunLabels.labeled(op.level, op.ship))
         storesSender(op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship), decks)
+    }
+
+    /**
+     * Whether anyone is free to run the stores, said out loud when nobody is.
+     *
+     * A Crewman -- the duty everyone signs on with -- is who carries cargo, and every Restock order needs
+     * at least one alive and ABOARD this crew's ship right now: a captain who posts every last hand to a
+     * gun or the fire watch has nobody left to run powder to them, and a crewman standing ashore is no
+     * help to a ship at sea. LOCKED crewmen count in full -- a lock freezes a crew member's settings,
+     * never their duty. The gunner's own card stays ungated: a man arms his own gun.
+     */
+    private fun storesManned(op: Op): Boolean {
+        val ledger = CrewLedger.get(op.level.server)
+        val manned = CrewMuster.villagersIn(op.level, op.ship.worldAABB).any { villager ->
+            ledger.crewOf(villager.uuid) == op.key &&
+                ledger.berthOf(villager.uuid)?.duty == CrewDuty.NONE
+        }
+        if (!manned) {
+            PathMessages.send(
+                op.player,
+                "Nobody to run the stores -- every hand has a post. Crewmen carry the cargo.",
+                PathMessages.Kind.ERROR
+            )
+        }
+        return manned
     }
 
     /**

@@ -383,8 +383,12 @@ object CrewMuster {
     private fun villagersInHull(level: ServerLevel, ship: LoadedServerShip): List<Villager> =
         villagersIn(level, ship.worldAABB)
 
-    /** Every living villager inside a world-space box, with the usual slack for standing on the top face. */
-    private fun villagersIn(level: ServerLevel, hull: AABBdc): List<Villager> {
+    /**
+     * Every living villager inside a world-space box, with the usual slack for standing on the top face.
+     * Public because "who is actually aboard" is a question more than the muster asks -- the Restock
+     * orders count their Crewmen through it.
+     */
+    fun villagersIn(level: ServerLevel, hull: AABBdc): List<Villager> {
         val box = AABB(
             hull.minX() - DECK_MARGIN, hull.minY() - DECK_MARGIN, hull.minZ() - DECK_MARGIN,
             hull.maxX() + DECK_MARGIN, hull.maxY() + DECK_MARGIN, hull.maxZ() + DECK_MARGIN

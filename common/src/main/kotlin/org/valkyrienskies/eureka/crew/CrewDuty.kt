@@ -10,18 +10,25 @@ package org.valkyrienskies.eureka.crew
  * later. Anyone who wants both jobs done buys another berth, which is the point -- a duty is what a berth is
  * FOR, and Hearts of the Sea are what limit them.
  *
- * ## [NONE] is a real answer
- * A crew member with no duty is not a bug or an unset field: they are ballast, and most of a crew starts that
- * way. Signing somebody on and giving them a job are deliberately two separate decisions, because the first is
- * about who is aboard and the second is about what the ship is for. It is also what makes the assignment
- * button a cycle rather than a one-way choice -- there is always somewhere to put a duty back to.
+ * ## [NONE] is a real answer, and it has a name: Crewman
+ * A crew member with no specialist duty is not ballast -- they are the deckhands, and most of a crew starts
+ * (and should partly stay) that way. The manifest calls them Crewmen, and the Restock orders are gated on
+ * having at least one aboard: cargo does not carry itself, and a captain who posts every last hand to a gun
+ * has nobody left to run powder to it. Signing somebody on and giving them a job are still two separate
+ * decisions, and the assignment button stays a cycle because there is always somewhere to put a duty back
+ * to -- it just puts them back to being a Crewman now, not to being nothing.
  *
  * The [id] is the wire and disk spelling, and it is the reason this is not persisted by ordinal: inserting a
  * duty in the middle of this list later must not silently re-employ every crew in the world.
  */
 enum class CrewDuty(val id: String) {
 
-    /** Aboard, fed, and doing nothing in particular. */
+    /**
+     * A Crewman: the deckhand duty everyone signs on with. Displays as "Crewman"; the id stays "none"
+     * because it is the disk and wire spelling, and renaming a spelling re-employs nobody. Crewmen hold no
+     * station and path nowhere, but the Restock orders refuse to run without one aboard -- theirs is the
+     * job of keeping the stores moving, granted by presence rather than performed in any animation.
+     */
     NONE("none"),
 
     /** Mans one gun. Fires it when the ship is ordered to fire, and only then -- see `CrewDuties.broadside`. */
