@@ -130,8 +130,8 @@ object PathNetworkingFabric {
     private val CREW_STORES_CODEC: StreamCodec<FriendlyByteBuf, CrewStoresPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewStoresPayload::data) { CrewStoresPayload(it) }
 
-    /** Upper bound on a gun label's wire length -- "L12" is three characters; eight leaves room for absurd fleets. */
-    private const val MAX_GUN_LABEL = 8
+    /** Upper bound on a gun label's wire length -- "L12 - D3" is eight characters; twelve leaves room for absurd fleets. */
+    private const val MAX_GUN_LABEL = 12
 
     /** Upper bound on an occupant name in the station dropdown; crew names are capped well under this. */
     private const val MAX_OCCUPANT_NAME = 64
@@ -356,9 +356,9 @@ object PathNetworkingFabric {
             }
         }
 
-        CrewOperations.storesSender = { player, helm, stores ->
+        CrewOperations.storesSender = { player, helm, stores, decks ->
             if (ServerPlayNetworking.canSend(player, CREW_STORES_TYPE)) {
-                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores)))
+                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks)))
                 true
             } else {
                 false
@@ -518,9 +518,10 @@ object PathNetworkingFabric {
                 OPS_ASSIGN_GUNNERS -> {
                     val count = buf.readByte().toInt()
                     val side = readSide(buf) ?: return@registerGlobalReceiver
-                    { level: ServerLevel ->
-                        CrewOperations.requestAssignGunners(level, player, helm, count, side)
-                    }
+                    val layer = readLayer(buf)
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestAssignGunners(level, player, helm, count, side, layer)
+                    })
                 }
                 OPS_ASSIGN_FIREFIGHTERS -> {
                     val count = buf.readByte().toInt()
@@ -528,11 +529,8 @@ object PathNetworkingFabric {
                         CrewOperations.requestAssignFirefighters(level, player, helm, count)
                     })
                 }
-                OPS_RESTOCK_POWDER -> {
-                    val side = readSide(buf) ?: return@registerGlobalReceiver
-                    { level: ServerLevel ->
-                        CrewOperations.requestRestockPowder(level, player, helm, side)
-                    }
+                OPS_RESTOCK_POWDER -> { level: ServerLevel ->
+                    CrewOperations.requestRestockPowder(level, player, helm)
                 }
                 OPS_RESTOCK_SHOT -> {
                     val side = readSide(buf) ?: return@registerGlobalReceiver
@@ -540,9 +538,10 @@ object PathNetworkingFabric {
                         ?: return@registerGlobalReceiver
                     val charge = CannonCharge.entries.getOrNull(buf.readByte().toInt())
                         ?: return@registerGlobalReceiver
-                    { level: ServerLevel ->
-                        CrewOperations.requestRestockShot(level, player, helm, side, ball, charge)
-                    }
+                    val layer = readLayer(buf)
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestRestockShot(level, player, helm, side, ball, charge, layer)
+                    })
                 }
                 OPS_REFUEL -> { level: ServerLevel ->
                     CrewOperations.requestRefuel(level, player, helm)
@@ -550,9 +549,10 @@ object PathNetworkingFabric {
                 OPS_ELEVATION -> {
                     val side = readSide(buf) ?: return@registerGlobalReceiver
                     val index = buf.readByte().toInt()
-                    // Parenthesised: an open brace after toInt() would parse as its trailing lambda.
+                    val layer = readLayer(buf)
+                    // Parenthesised: an open brace after a call would parse as its trailing lambda.
                     ({ level: ServerLevel ->
-                        CrewOperations.requestElevation(level, player, helm, side, index)
+                        CrewOperations.requestElevation(level, player, helm, side, index, layer)
                     })
                 }
                 OPS_GUN_CHARGE -> {
@@ -589,9 +589,10 @@ object PathNetworkingFabric {
                 OPS_SET_POWER -> {
                     val side = readSide(buf) ?: return@registerGlobalReceiver
                     val ordinal = buf.readByte().toInt()
-                    // Parenthesised: an open brace after toInt() would parse as its trailing lambda.
+                    val layer = readLayer(buf)
+                    // Parenthesised: an open brace after a call would parse as its trailing lambda.
                     ({ level: ServerLevel ->
-                        CrewOperations.requestPower(level, player, helm, side, ordinal)
+                        CrewOperations.requestPower(level, player, helm, side, ordinal, layer)
                     })
                 }
                 else -> null
@@ -607,6 +608,9 @@ object PathNetworkingFabric {
 
     private fun readSide(buf: FriendlyByteBuf): CrewOperations.Side? =
         CrewOperations.Side.entries.getOrNull(buf.readByte().toInt())
+
+    /** A deck scope off the wire: 0 is every deck, anything hostile is clamped rather than trusted. */
+    private fun readLayer(buf: FriendlyByteBuf): Int = buf.readByte().toInt().coerceIn(0, MAX_LAYERS)
 
     @Environment(EnvType.CLIENT)
     fun registerClient() {
@@ -647,8 +651,8 @@ object PathNetworkingFabric {
         }
 
         ClientPlayNetworking.registerGlobalReceiver(CREW_STORES_TYPE) { payload, context ->
-            val (helm, stores) = decodeStores(payload.data)
-            context.client().execute { CrewManifestScreen.acceptStores(helm, stores) }
+            val (helm, stores, decks) = decodeStores(payload.data)
+            context.client().execute { CrewManifestScreen.acceptStores(helm, stores, decks) }
         }
         ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
@@ -758,12 +762,13 @@ object PathNetworkingFabric {
     @Environment(EnvType.CLIENT)
     fun sendCrewStoresAsk(helm: Long) = sendOps(helm, OPS_STORES) {}
 
-    /** Client: lay out the gun crew -- [count] gunners in total over [side]'s guns. */
+    /** Client: man [side]'s guns on deck [layer] (0 = all) until [count] of them are manned in total. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewAssignGunners(helm: Long, count: Int, side: CrewOperations.Side) =
+    fun sendCrewAssignGunners(helm: Long, count: Int, side: CrewOperations.Side, layer: Int) =
         sendOps(helm, OPS_ASSIGN_GUNNERS) {
             it.writeByte(count.coerceIn(0, MAX_OPS_COUNT))
             it.writeByte(side.ordinal)
+            it.writeByte(layer.coerceIn(0, MAX_LAYERS))
         }
 
     /** Client: post the fire watch -- [count] firefighters in total. */
@@ -771,38 +776,40 @@ object PathNetworkingFabric {
     fun sendCrewAssignFirefighters(helm: Long, count: Int) =
         sendOps(helm, OPS_ASSIGN_FIREFIGHTERS) { it.writeByte(count.coerceIn(0, MAX_OPS_COUNT)) }
 
-    /** Client: run powder to [side]'s battery from the holds. */
+    /** Client: run powder to every gun aboard from the holds, split evenly. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewRestockPowder(helm: Long, side: CrewOperations.Side) =
-        sendOps(helm, OPS_RESTOCK_POWDER) { it.writeByte(side.ordinal) }
+    fun sendCrewRestockPowder(helm: Long) = sendOps(helm, OPS_RESTOCK_POWDER) {}
 
-    /** Client: run the chosen round to [side]'s battery from the holds. */
+    /** Client: run the chosen round to [side]'s battery on deck [layer] (0 = all) from the holds. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewRestockShot(helm: Long, side: CrewOperations.Side, ball: Cannonball, charge: CannonCharge) =
+    fun sendCrewRestockShot(helm: Long, side: CrewOperations.Side, ball: Cannonball, charge: CannonCharge, layer: Int) =
         sendOps(helm, OPS_RESTOCK_SHOT) {
             it.writeByte(side.ordinal)
             it.writeByte(ball.ordinal)
             it.writeByte(charge.ordinal)
+            it.writeByte(layer.coerceIn(0, MAX_LAYERS))
         }
 
     /** Client: stoke every engine aboard from the holds, best fuel first. */
     @Environment(EnvType.CLIENT)
     fun sendCrewRefuel(helm: Long) = sendOps(helm, OPS_REFUEL) {}
 
-    /** Client: lay [side]'s battery ([CrewOperations.Side.BOTH] = all) to elevation [index], 0..4. */
+    /** Client: lay [side]'s battery on deck [layer] ([CrewOperations.Side.BOTH] = all sides, 0 = all decks) to elevation [index], 0..4. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewSetElevation(helm: Long, side: CrewOperations.Side, index: Int) =
+    fun sendCrewSetElevation(helm: Long, side: CrewOperations.Side, index: Int, layer: Int) =
         sendOps(helm, OPS_ELEVATION) {
             it.writeByte(side.ordinal)
             it.writeByte(index.coerceIn(0, 4))
+            it.writeByte(layer.coerceIn(0, MAX_LAYERS))
         }
 
-    /** Client: set [side]'s battery ([CrewOperations.Side.BOTH] = all) to powder charge [ordinal], 0..2. */
+    /** Client: set [side]'s battery on deck [layer] (0 = all decks) to powder charge [ordinal], 0..2. */
     @Environment(EnvType.CLIENT)
-    fun sendCrewSetPower(helm: Long, side: CrewOperations.Side, ordinal: Int) =
+    fun sendCrewSetPower(helm: Long, side: CrewOperations.Side, ordinal: Int, layer: Int) =
         sendOps(helm, OPS_SET_POWER) {
             it.writeByte(side.ordinal)
             it.writeByte(ordinal.coerceIn(0, 2))
+            it.writeByte(layer.coerceIn(0, MAX_LAYERS))
         }
 
     /** Client: set one gunner's cannon to a powder charge. Absolute, like the duty button. */
@@ -841,7 +848,7 @@ object PathNetworkingFabric {
     /** A count byte's honest ceiling; berth caps live far below it. */
     private const val MAX_OPS_COUNT = 127
 
-    private fun encodeStores(helm: Long, stores: ShipStores.Stores): ByteArray {
+    private fun encodeStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>): ByteArray {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeLong(helm)
         buf.writeVarInt(stores.gunpowder)
@@ -857,10 +864,15 @@ object PathNetworkingFabric {
             buf.writeVarInt(fuel.count)
             buf.writeVarInt(fuel.burnTicks)
         }
+        // Guns per deck, keel up -- what the screen's deck dropdowns list. Rides the stores payload
+        // because it changes with the same gestures the holds do, and this payload already refreshes on
+        // screen-open and after every ops order.
+        buf.writeVarInt(decks.size.coerceAtMost(MAX_LAYERS))
+        for (deck in decks.take(MAX_LAYERS)) buf.writeVarInt(deck)
         return toArray(buf)
     }
 
-    private fun decodeStores(data: ByteArray): Pair<Long, ShipStores.Stores> {
+    private fun decodeStores(data: ByteArray): Triple<Long, ShipStores.Stores, List<Int>> {
         val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
         val helm = buf.readLong()
         val gunpowder = buf.readVarInt()
@@ -880,11 +892,17 @@ object PathNetworkingFabric {
             fuels.add(ShipStores.FuelCount(buf.readUtf(MAX_ITEM_ID), buf.readVarInt(), buf.readVarInt()))
         }
 
-        return helm to ShipStores.Stores(gunpowder, ammo, fuels)
+        val deckCount = buf.readVarInt().coerceIn(0, MAX_LAYERS)
+        val decks = List(deckCount) { buf.readVarInt() }
+
+        return Triple(helm, ShipStores.Stores(gunpowder, ammo, fuels), decks)
     }
 
     /** Decode bound on shot kinds; the item set is 15 today, and a hostile length is clamped, not trusted. */
     private const val MAX_AMMO_KINDS = 64
+
+    /** Decode bound on gun decks; a real ship carries a handful, and a hostile count is clamped, not trusted. */
+    private const val MAX_LAYERS = 64
 
     // endregion
 

@@ -33,8 +33,10 @@ import java.util.UUID
  * lay out the gun crew, post the fire watch, run powder and shot to the batteries, stoke the engines --
  * each one the sum of dozens of gestures a player used to make by hand. The materials come from
  * [ShipStores] (any chest or barrel aboard), the guns from `GunLabels.labeled` (which is also the order
- * everything is served in: port bow to stern, then starboard, then the chasers), and the authority from
- * the same gate every manifest action uses: the wheel's articles, reachable from anywhere aboard.
+ * everything is served in: deck by deck from the keel up, each deck's port battery bow to stern, then its
+ * starboard, then its chasers), and the authority from the same gate every manifest action uses: the
+ * wheel's articles, reachable from anywhere aboard. Most gun orders take a scope -- a side and a deck --
+ * and touch nothing outside it.
  *
  * ## Locks are the exception to everything bulk
  * A LOCKED berth is a captain's "do not touch": bulk assignment counts them toward the total but never
@@ -49,12 +51,14 @@ object CrewOperations {
     enum class Side { PORT, STARBOARD, BOTH }
 
     /**
-     * Pushes a stores tally at one screen. Installed by the platform networking, exactly as
-     * `CrewManifest.sender` is; the default no-op keeps loaders without the payload honest.
+     * Pushes a stores tally at one screen, along with the guns-per-deck census the deck dropdown lists.
+     * Installed by the platform networking, exactly as `CrewManifest.sender` is; the default no-op keeps
+     * loaders without the payload honest. The deck counts ride this payload rather than the manifest
+     * because they change with the same gestures the holds do -- every ops order refreshes both at once.
      */
     @Volatile
     @JvmField
-    var storesSender: (ServerPlayer, Long, ShipStores.Stores) -> Boolean = { _, _, _ -> false }
+    var storesSender: (ServerPlayer, Long, ShipStores.Stores, List<Int>) -> Boolean = { _, _, _, _ -> false }
 
     // region the orders
 
@@ -65,60 +69,60 @@ object CrewOperations {
     }
 
     /**
-     * Lay out the gun crew: [count] gunners in total, distributed over [side]'s guns.
+     * Man [side]'s guns on deck [layer]: seat gunners at EMPTY guns in that scope until [count] of them
+     * are manned in total, and touch nothing else.
      *
-     * From scratch, on purpose: every UNLOCKED gunner of this crew leaves their gun first, and the new
-     * layout is dealt to the first berths on the articles -- slot order, any current duty, firefighters
-     * included. The count is the size of the whole gun crew, locked gunners included: ask for six with
-     * two locked and four more are seated. Asking for fewer than the locked count seats nobody new and
-     * stands every unlocked gunner down, which is exactly what "from scratch" promises.
+     * Fill-only, on purpose -- the opposite of the whole-battery re-deal this order used to be. An order
+     * about Deck 1's port battery is not permission to unseat Deck 2: gunners already at their guns stay
+     * exactly where they are, locked or not, and count toward the total. Asking for no more than are
+     * already manned changes nothing and says so. New hands come from the first unlocked berths on the
+     * articles that are not holding a gun ANYWHERE and are not waiting on a remembered one -- an idle
+     * firefighter may be drafted (a duty is an order, not a shackle), but a gunner on another deck is
+     * never poached off it by an order about this one, and a stood-down gunner whose label is about to
+     * walk him back to his own gun is left for the reconcile that is already carrying him there.
      *
-     * BOTH deals alternately -- L1, R1, L2, R2... -- so a half-manned ship still answers on both
-     * broadsides; a single side fills bow to stern. Locked gunners' guns and guns held by another
-     * captain's crew are never dealt.
+     * BOTH deals alternately -- L, R, L, R -- so a half-manned ship still answers on both broadsides; a
+     * single side fills bow to stern. Guns held by another captain's crew are never dealt.
      */
-    fun requestAssignGunners(level: ServerLevel, player: ServerPlayer, helm: Long, count: Int, side: Side) {
+    fun requestAssignGunners(level: ServerLevel, player: ServerPlayer, helm: Long, count: Int, side: Side, layer: Int) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
             return
         }
-
-        val ledger = CrewLedger.get(level.server)
-        val berths = ledger.crew(op.key).sortedBy { it.slot }
-        val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
-
-        val lockedGunners = berths.filter { it.locked && it.duty == CrewDuty.GUNNER }
-        val lockedGuns = lockedGunners.mapNotNullTo(HashSet()) { it.station }
-        val foreignHeld = ledger.stationedBerths()
-            .filter { ledger.crewOf(it.villager) != op.key }
-            .mapNotNullTo(HashSet()) { it.station }
-
-        // From scratch: the whole unlocked gun crew leaves their seats before the new hand is dealt.
-        for (berth in berths) {
-            if (berth.locked || berth.duty != CrewDuty.GUNNER) continue
-            ledger.clearStation(berth.villager)
-            GunStations.unseat(level, berth.villager)
+        val scope = assignmentSeq(labeled, side, layer)
+        if (scope.isEmpty()) {
+            PathMessages.send(player, "No guns in ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.WARN)
+            return
         }
 
-        val targets = ArrayDeque(
-            assignmentSeq(labeled, side).filter {
-                val packed = it.gun.blockPos.asLong()
-                packed !in lockedGuns && packed !in foreignHeld
-            }
+        val ledger = CrewLedger.get(level.server)
+        // Anybody's stationed berth mans a gun -- locked, another captain's, all of them. The count the
+        // captain asked for is "how many of these guns have somebody behind them", not "how many are mine".
+        val held = ledger.stationedBerths().mapNotNullTo(HashSet()) { it.station }
+        val manned = scope.count { it.gun.blockPos.asLong() in held }
+        val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
+        val wanted = (total - manned).coerceAtLeast(0)
+        if (wanted == 0) {
+            PathMessages.send(player, "${scopeName(side, layer)} already musters $manned gunners.", PathMessages.Kind.GOOD)
+            return
+        }
+
+        // Empty guns in dealing order; free hands in slot order. A berth with a station is on a gun and a
+        // berth with only a LABEL is owed one -- both are spoken for, so neither is a free hand.
+        val targets = ArrayDeque(scope.filter { it.gun.blockPos.asLong() !in held })
+        val candidates = ArrayDeque(
+            ledger.crew(op.key).sortedBy { it.slot }
+                .filter { !it.locked && it.station == null && it.stationLabel == null }
         )
 
-        val wanted = (total - lockedGunners.size).coerceAtLeast(0)
         var assigned = 0
         var away = 0
         var refused = 0
-        val seated = HashSet<UUID>()
 
-        for (berth in berths) {
-            if (assigned >= wanted || targets.isEmpty()) break
-            if (berth.locked) continue
-
+        while (assigned < wanted && targets.isNotEmpty() && candidates.isNotEmpty()) {
+            val berth = candidates.removeFirst()
             val villager = CrewMuster.findAnywhere(level.server, berth.villager)
             if (villager == null || !villager.isAlive || villager.level() !== level) {
                 // An unreachable crew member costs no gun -- the next berth takes it instead.
@@ -145,7 +149,6 @@ object CrewOperations {
             ledger.setStation(berth.villager, gun.gun.blockPos.asLong(), gun.label)
             if (GunStations.stationNow(level, berth.villager, gun.gun.blockPos)) {
                 assigned++
-                seated.add(berth.villager)
             } else {
                 ledger.clearStation(berth.villager)
                 GunStations.unseat(level, berth.villager)
@@ -153,20 +156,16 @@ object CrewOperations {
             }
         }
 
-        // The other half of "from scratch": an unlocked GUNNER this deal did not seat is not a gunner.
-        for (berth in ledger.crew(op.key)) {
-            if (berth.locked || berth.duty != CrewDuty.GUNNER) continue
-            if (berth.villager in seated) continue
-            ledger.setDuty(berth.villager, CrewDuty.NONE)
-            GunStations.unseat(level, berth.villager)
-        }
-
-        val kept = if (lockedGunners.isEmpty()) "" else ", ${lockedGunners.size} locked kept"
-        PathMessages.send(player, "Gun crew: $assigned seated$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(
+            player,
+            "${scopeName(side, layer)}: $assigned seated, ${manned + assigned} of ${scope.size} guns manned.",
+            PathMessages.Kind.GOOD
+        )
         val gripes = buildList {
             if (away > 0) add("$away couldn't be reached")
             if (refused > 0) add("$refused guns refused (footing or seat)")
             if (assigned < wanted && targets.isEmpty()) add("ran out of guns")
+            if (assigned < wanted && targets.isNotEmpty() && candidates.isEmpty()) add("ran out of free hands")
         }
         if (gripes.isNotEmpty()) {
             PathMessages.send(player, gripes.joinToString(", ") + ".", PathMessages.Kind.WARN)
@@ -219,61 +218,92 @@ object CrewOperations {
     }
 
     /**
-     * Run powder to [side]'s battery: every gun's three charge slots filled to the brim, bow to stern,
-     * from the holds. Locked gunners' guns are supplied like any other -- powder is powder; a lock
-     * freezes settings, not logistics. Stops, and says where, the moment the holds run dry.
+     * Run powder to every gun aboard, split evenly. Locked gunners' guns are supplied like any other --
+     * powder is powder; a lock freezes settings, not logistics.
+     *
+     * Evenly, not bow-to-stern-until-dry, which is what this order used to do: a short supply that filled
+     * the bow battery to the brim and left the stern with nothing answered a logistics order with a
+     * tactical opinion. The split is planned in memory first -- fair share per pass, capped at each
+     * magazine's room, leftovers re-shared until the powder or the room runs out -- and then moved once
+     * per gun, forwardmost guns taking any indivisible remainder.
      */
-    fun requestRestockPowder(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side) {
+    fun requestRestockPowder(level: ServerLevel, player: ServerPlayer, helm: Long) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
             return
         }
-        val guns = sideGuns(labeled, side)
-        if (guns.isEmpty()) {
-            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+
+        val order = labeled.filter { 3 * CannonBlockEntity.MAGAZINE_CAPACITY - it.gun.powderCount > 0 }
+        if (order.isEmpty()) {
+            PathMessages.send(player, "Every magazine is already full.", PathMessages.Kind.WARN)
+            return
+        }
+        var avail = ShipStores.count(level, op.ship) { it.`is`(Items.GUNPOWDER) }
+        if (avail == 0) {
+            PathMessages.send(player, "No gunpowder in the holds.", PathMessages.Kind.WARN)
             return
         }
 
+        val room = HashMap<CannonBlockEntity, Int>(order.size)
+        for (named in order) room[named.gun] = 3 * CannonBlockEntity.MAGAZINE_CAPACITY - named.gun.powderCount
+
+        val grant = HashMap<CannonBlockEntity, Int>(order.size)
+        var open = order.map { it.gun }
+        while (avail > 0 && open.isNotEmpty()) {
+            val share = avail / open.size
+            if (share == 0) {
+                // Fewer grains than guns: one each to the forwardmost until it runs out.
+                for (gun in open) {
+                    if (avail == 0) break
+                    grant.merge(gun, 1, Int::plus)
+                    avail--
+                }
+                break
+            }
+            val next = ArrayList<CannonBlockEntity>(open.size)
+            for (gun in open) {
+                val give = minOf(share, room.getValue(gun) - (grant[gun] ?: 0))
+                if (give > 0) {
+                    grant.merge(gun, give, Int::plus)
+                    avail -= give
+                }
+                if ((grant[gun] ?: 0) < room.getValue(gun)) next.add(gun)
+            }
+            open = next
+        }
+
         var moved = 0
-        var dryAt: String? = null
-        outer@ for (named in guns) {
-            val gun = named.gun
-            var need = 3 * CannonBlockEntity.MAGAZINE_CAPACITY - gun.powderCount
-            while (need > 0) {
-                val got = ShipStores.withdraw(level, op.ship, { it.`is`(Items.GUNPOWDER) }, need)
-                if (got == 0) {
-                    dryAt = named.label
-                    break@outer
-                }
-                val stack = ItemStack(Items.GUNPOWDER, got)
-                val loaded = gun.load(stack, true)
+        var touched = 0
+        for (named in order) {
+            val quota = grant[named.gun] ?: continue
+            val got = ShipStores.withdraw(level, op.ship, { it.`is`(Items.GUNPOWDER) }, quota)
+            if (got == 0) break
+            val stack = ItemStack(Items.GUNPOWDER, got)
+            val loaded = named.gun.load(stack, true)
+            if (loaded > 0) {
                 moved += loaded
-                need -= loaded
-                if (!stack.isEmpty) {
-                    // The gun would not take what the holds gave (should not happen -- need was measured);
-                    // whatever is left goes back rather than vanishing.
-                    ShipStores.deposit(level, op.ship, stack)
-                    break
-                }
-                if (loaded == 0) break
+                touched++
+            }
+            if (!stack.isEmpty) {
+                // The gun would not take what the holds gave (should not happen -- room was measured);
+                // whatever is left goes back rather than vanishing.
+                ShipStores.deposit(level, op.ship, stack)
             }
         }
 
-        if (moved == 0 && dryAt != null) {
+        if (moved == 0) {
             PathMessages.send(player, "No gunpowder in the holds.", PathMessages.Kind.WARN)
         } else {
-            PathMessages.send(player, "Distributed $moved powder.", PathMessages.Kind.GOOD)
-            if (dryAt != null) {
-                PathMessages.send(player, "Holds ran dry at $dryAt.", PathMessages.Kind.WARN)
-            }
+            PathMessages.send(player, "Distributed $moved powder over $touched guns, evenly.", PathMessages.Kind.GOOD)
         }
         pushStores(op)
     }
 
     /**
-     * Run shot to [side]'s battery: every gun filled to the brim with the chosen round, in battery order.
+     * Run shot to [side]'s battery on deck [layer]: every gun in the scope filled to the brim with the
+     * chosen round, in battery order.
      *
      * A gun already chambered with a DIFFERENT round has it swapped back into the holds first -- a
      * restock order means "arm the battery with THIS", not "top up whatever history left in each gun".
@@ -287,7 +317,8 @@ object CrewOperations {
         helm: Long,
         side: Side,
         ball: Cannonball,
-        charge: CannonCharge
+        charge: CannonCharge,
+        layer: Int
     ) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
@@ -295,9 +326,9 @@ object CrewOperations {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
             return
         }
-        val guns = sideGuns(labeled, side)
+        val guns = sideGuns(labeled, side, layer)
         if (guns.isEmpty()) {
-            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+            PathMessages.send(player, "No guns in ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.WARN)
             return
         }
 
@@ -349,23 +380,23 @@ object CrewOperations {
     }
 
     /**
-     * Lay [side]'s battery to one elevation. [Side.BOTH] reads as ALL here, chasers included -- "everything
-     * to twenty-two and a half" is an order about the ship, not about a broadside.
+     * Lay [side]'s battery on deck [layer] to one elevation. [Side.BOTH] reads as ALL here, chasers
+     * included -- "everything to twenty-two and a half" is an order about the ship, not about a broadside.
      *
-     * Per-side layings are independent by construction: this writes only the guns it addresses, so laying
-     * port to +22.5 and then starboard to +45 leaves port exactly where it was put. LOCKED gunners' guns
-     * are stepped over -- their elevation is a setting, and settings are theirs.
+     * Per-scope layings are independent by construction: this writes only the guns it addresses, so laying
+     * Deck 1's port to +22.5 and then Deck 2's to +45 leaves Deck 1 exactly where it was put. LOCKED
+     * gunners' guns are stepped over -- their elevation is a setting, and settings are theirs.
      */
-    fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int) {
+    fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
             return
         }
-        val guns = sideGuns(labeled, side)
+        val guns = sideGuns(labeled, side, layer)
         if (guns.isEmpty()) {
-            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+            PathMessages.send(player, "No guns in ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.WARN)
             return
         }
 
@@ -384,31 +415,26 @@ object CrewOperations {
 
         // One line, no per-gun sound: thirty lantern clanks is noise, and this is an order acknowledged.
         val degrees = EurekaProperties.elevationDegrees(clamped)
-        val battery = when (side) {
-            Side.PORT -> "Port battery"
-            Side.STARBOARD -> "Starboard battery"
-            Side.BOTH -> "Every gun"
-        }
         val skipped = guns.size - laid
         val kept = if (skipped == 0) "" else " ($skipped locked kept)"
-        PathMessages.send(player, "$battery laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "${scopeName(side, layer)} laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD)
     }
 
     /**
-     * Set [side]'s battery to one powder measure -- the bulk twin of the card's charge control, and of
-     * [requestElevation] in shape: [Side.BOTH] reads as ALL, per-side settings are independent, and LOCKED
-     * gunners' guns keep the measure their captain set them.
+     * Set [side]'s battery on deck [layer] to one powder measure -- the bulk twin of the card's charge
+     * control, and of [requestElevation] in shape: [Side.BOTH] reads as ALL, per-scope settings are
+     * independent, and LOCKED gunners' guns keep the measure their captain set them.
      */
-    fun requestPower(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, ordinal: Int) {
+    fun requestPower(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, ordinal: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
             return
         }
-        val guns = sideGuns(labeled, side)
+        val guns = sideGuns(labeled, side, layer)
         if (guns.isEmpty()) {
-            PathMessages.send(player, "No guns on that side.", PathMessages.Kind.WARN)
+            PathMessages.send(player, "No guns in ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.WARN)
             return
         }
 
@@ -426,14 +452,9 @@ object CrewOperations {
             set++
         }
 
-        val battery = when (side) {
-            Side.PORT -> "Port battery"
-            Side.STARBOARD -> "Starboard battery"
-            Side.BOTH -> "Every gun"
-        }
         val skipped = guns.size - set
         val kept = if (skipped == 0) "" else " ($skipped locked kept)"
-        PathMessages.send(player, "$battery set to ${charge.powder}x power -- $set guns$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "${scopeName(side, layer)} set to ${charge.powder}x power -- $set guns$kept.", PathMessages.Kind.GOOD)
     }
 
     /** Set one gunner's cannon to a powder charge, from their card. The card's own optimism confirms here. */
@@ -597,35 +618,53 @@ object CrewOperations {
     }
 
     private fun pushStores(op: Op) {
-        storesSender(op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship))
+        val decks = GunLabels.layerCounts(GunLabels.labeled(op.level, op.ship))
+        storesSender(op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship), decks)
     }
 
-    /** The guns an order addresses, in the order they are served: [GunLabels.labeled] filtered by side. */
-    private fun sideGuns(labeled: List<GunLabels.Labeled>, side: Side): List<GunLabels.Labeled> =
-        when (side) {
-            Side.PORT -> labeled.filter { it.label.startsWith(PORT_GROUP) }
-            Side.STARBOARD -> labeled.filter { it.label.startsWith(STARBOARD_GROUP) }
-            Side.BOTH -> labeled
+    /**
+     * The guns an order addresses, in the order they are served: [GunLabels.labeled] filtered by side and
+     * by deck. Layer [ALL_LAYERS] is every deck, exactly as [Side.BOTH] is every side.
+     */
+    private fun sideGuns(labeled: List<GunLabels.Labeled>, side: Side, layer: Int): List<GunLabels.Labeled> {
+        val onDeck = if (layer == ALL_LAYERS) labeled else labeled.filter { it.layer == layer }
+        return when (side) {
+            Side.PORT -> onDeck.filter { it.label.startsWith(PORT_GROUP) }
+            Side.STARBOARD -> onDeck.filter { it.label.startsWith(STARBOARD_GROUP) }
+            Side.BOTH -> onDeck
         }
+    }
 
     /**
      * The DEALING order for gunner assignment. A single side is that side bow to stern; BOTH alternates
-     * L1, R1, L2, R2... so both broadsides man up evenly, the longer side's tail follows, and the
-     * chasers come last -- a half crew answers on both sides before anybody minds the bow gun.
+     * L, R, L, R... so both broadsides man up evenly, the longer side's tail follows, and the chasers
+     * come last -- a half crew answers on both sides before anybody minds the bow gun. The deck filter
+     * runs first, so "both sides of Deck 2" alternates across that one deck.
      */
-    private fun assignmentSeq(labeled: List<GunLabels.Labeled>, side: Side): List<GunLabels.Labeled> {
-        if (side != Side.BOTH) return sideGuns(labeled, side)
-        val port = labeled.filter { it.label.startsWith(PORT_GROUP) }
-        val starboard = labeled.filter { it.label.startsWith(STARBOARD_GROUP) }
-        val rest = labeled.filterNot { it.label.startsWith(PORT_GROUP) || it.label.startsWith(STARBOARD_GROUP) }
+    private fun assignmentSeq(labeled: List<GunLabels.Labeled>, side: Side, layer: Int): List<GunLabels.Labeled> {
+        if (side != Side.BOTH) return sideGuns(labeled, side, layer)
+        val onDeck = if (layer == ALL_LAYERS) labeled else labeled.filter { it.layer == layer }
+        val port = onDeck.filter { it.label.startsWith(PORT_GROUP) }
+        val starboard = onDeck.filter { it.label.startsWith(STARBOARD_GROUP) }
+        val rest = onDeck.filterNot { it.label.startsWith(PORT_GROUP) || it.label.startsWith(STARBOARD_GROUP) }
 
-        val dealt = ArrayList<GunLabels.Labeled>(labeled.size)
+        val dealt = ArrayList<GunLabels.Labeled>(onDeck.size)
         for (i in 0 until maxOf(port.size, starboard.size)) {
             port.getOrNull(i)?.let { dealt.add(it) }
             starboard.getOrNull(i)?.let { dealt.add(it) }
         }
         dealt.addAll(rest)
         return dealt
+    }
+
+    /**
+     * How an order's scope reads back to the captain: the side, the deck, or both, said the way an
+     * acknowledgement would say it. Doubles as the "no guns there" complaint via `lowercase()`.
+     */
+    private fun scopeName(side: Side, layer: Int): String = when (side) {
+        Side.PORT -> if (layer == ALL_LAYERS) "Port battery" else "Deck $layer's port battery"
+        Side.STARBOARD -> if (layer == ALL_LAYERS) "Starboard battery" else "Deck $layer's starboard battery"
+        Side.BOTH -> if (layer == ALL_LAYERS) "Every gun" else "All of Deck $layer"
     }
 
     /**
@@ -686,6 +725,9 @@ object CrewOperations {
 
     private const val PORT_GROUP = "L"
     private const val STARBOARD_GROUP = "R"
+
+    /** The layer argument meaning "every deck" -- the deck dropdown's All, as [Side.BOTH] is the sides'. */
+    const val ALL_LAYERS = 0
 
     /** The top of the ELEVATION property's range: index 4, +45 degrees. */
     private const val MAX_ELEVATION = 4

@@ -72,7 +72,7 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         set(value) { powderChargeOrdinal = value.ordinal }
 
     /**
-     * This gun's bow-relative name ("L1"), packed through [org.valkyrienskies.eureka.cannon.GunLabels.encode];
+     * This gun's deck-and-bow-relative name ("L1 - D1"), packed through [org.valkyrienskies.eureka.cannon.GunLabels.encode];
      * 0 when it has none. Delegated through [data] like the charge, and refreshed in [createMenu] -- open
      * time is the one moment the label is wanted, the BE has no ticker, and labels shift only when guns are
      * added or removed, so computing it per open is both cheapest and always current.

@@ -107,15 +107,35 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** What the holds last reported, or null before the first stores payload has landed. */
     private var stores: ShipStores.Stores? = null
 
+    /** Guns per deck, keel up, off the same payload the holds ride. Empty until it lands (or no guns). */
+    private var deckCounts: List<Int> = emptyList()
+
+    /** How far the Operations body is scrolled: the tab outgrew its panel when it grew categories. */
+    private var opsScroll = 0
+
     /** The count boxes' values, kept as fields so widget rebuilds keep what was typed. */
     private var gunnerCount = 0
     private var fireCount = 0
     private var gunnerCountBox: EditBox? = null
     private var fireCountBox: EditBox? = null
 
-    /** Which battery crew assignment deals to, and which one the stores orders serve. Independent knobs. */
+    /**
+     * The crew assigner's scope -- which side's guns to man, on which deck (0 = all). Its own pair of
+     * knobs, independent of the cannon controls', because "man Deck 1 while I lay Deck 2" is one trip.
+     */
     private var crewSide = CrewOperations.Side.BOTH
-    private var storesSide = CrewOperations.Side.BOTH
+    private var crewLayer = 0
+
+    /**
+     * The cannon-controls scope: one side + deck pair governing Set Angle, Set Power, the ammunition
+     * pick, and the deck half of the cannonball restock. One pair rather than one per row, because the
+     * rows under it are one battery being worked.
+     */
+    private var ctrlSide = CrewOperations.Side.BOTH
+    private var ctrlLayer = 0
+
+    /** The cannonball restock's own side; its DECK comes from the cannon controls above it. */
+    private var shotSide = CrewOperations.Side.BOTH
 
     /** The round the shot restock will load. Defaults to the holds' most plentiful when stores arrive. */
     private var selectedAmmo: Pair<Cannonball, CannonCharge>? = null
@@ -123,15 +143,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var ammoMenuScroll = 0
 
     private var fuelPopupOpen = false
-    private var fuelPopupScroll = 0
 
-    /** The elevation row's own knobs: which guns, and which of the five steps. Level to start. */
-    private var elevSide = CrewOperations.Side.BOTH
+    /** The elevation and power steps the Set Angle / Set Power orders will send. Level and 1x to start. */
     private var elevIndex = 2
-
-    /** The power row's knobs, independent of the elevation row's for the same reason it is. */
-    private var powerSide = CrewOperations.Side.BOTH
     private var powerLevel = 0
+
+    /** The two deck dropdowns -- at most one open, sharing a scroll for the rare many-decked hull. */
+    private var crewLayerMenuOpen = false
+    private var ctrlLayerMenuOpen = false
+    private var layerMenuScroll = 0
 
     /** The CARD's ammo dropdown -- the ops one's twin, listing the same holds but arming ONE gun. */
     private var cardAmmoMenuOpen = false
@@ -233,8 +253,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private fun switchTab(next: Tab) {
         if (activeTab == next) return
         activeTab = next
-        ammoMenuOpen = false
-        fuelPopupOpen = false
+        closeOpsMenus()
         if (renamingCrew) commitCrewRename(send = false)
         padSel = -1
         rebuildWidgets()
@@ -242,13 +261,27 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (next == Tab.OPERATIONS) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
     }
 
-    /** The Operations tab's real widgets: just the two count boxes. Every other control is painted. */
+    /** Every transient Operations overlay, folded at once -- a tab switch or card must not leave one up. */
+    private fun closeOpsMenus() {
+        ammoMenuOpen = false
+        fuelPopupOpen = false
+        crewLayerMenuOpen = false
+        ctrlLayerMenuOpen = false
+    }
+
+    /** Whether any Operations overlay is up. The body underneath is inert while one is. */
+    private fun opsMenuOpen(): Boolean = ammoMenuOpen || fuelPopupOpen || crewLayerMenuOpen || ctrlLayerMenuOpen
+
+    /**
+     * The Operations tab's real widgets: just the two count boxes. Every other control is painted. Their
+     * positions here are provisional -- the body scrolls, so [render] re-seats them every frame.
+     */
     private fun initOperations() {
         gunnerCountBox = addRenderableWidget(
-            countBox(left + OPS_BOX_X, top + OPS_ROW_G, gunnerCount) { gunnerCount = it }
+            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_G), gunnerCount) { gunnerCount = it }
         )
         fireCountBox = addRenderableWidget(
-            countBox(left + OPS_BOX_X, top + OPS_ROW_F, fireCount) { fireCount = it }
+            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_F), fireCount) { fireCount = it }
         )
         // First look at the holds: asked once, not polled -- every action answers with a fresh tally.
         if (stores == null) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
@@ -516,19 +549,27 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
         if (activeTab == Tab.OPERATIONS) {
             val holds = stores
-            if (fuelPopupOpen && holds != null) {
-                val max = (holds.fuels.size - FUEL_ROWS).coerceAtLeast(0)
-                fuelPopupScroll = (fuelPopupScroll - scrollY.toInt()).coerceIn(0, max)
-            } else if (ammoMenuOpen && holds != null) {
+            if (ammoMenuOpen && holds != null) {
                 val max = (holds.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
                 ammoMenuScroll = (ammoMenuScroll - scrollY.toInt()).coerceIn(0, max)
+            } else if (crewLayerMenuOpen || ctrlLayerMenuOpen) {
+                val max = (deckCounts.size + 1 - LAYER_MENU_ROWS).coerceAtLeast(0)
+                layerMenuScroll = (layerMenuScroll - scrollY.toInt()).coerceIn(0, max)
+            } else if (!fuelPopupOpen) {
+                // The body itself scrolls now: three categories of rows outgrew one panel.
+                opsScroll -= scrollY.toInt() * OPS_SCROLL_STEP
+                clampOpsScroll()
             }
-            // Swallowed either way: there is no list behind the Operations rows to scroll into.
+            // Swallowed either way: nothing behind the Operations body should hear the wheel.
             return true
         }
         scroll -= scrollY.toInt()
         clampScroll()
         return true
+    }
+
+    private fun clampOpsScroll() {
+        opsScroll = opsScroll.coerceIn(0, (OPS_CONTENT_H - OPS_BODY_H).coerceAtLeast(0))
     }
 
     // region the pad drives the screen
@@ -547,7 +588,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         super.tick()
         // The bumpers walk the tab strip, exactly as they do on the helm menu -- but only while the strip
         // is actually on screen: under a card or a popup they are inert, so backing out stays one gesture.
-        if (openCard == null && !renamingCrew && !ammoMenuOpen && !fuelPopupOpen) {
+        if (openCard == null && !renamingCrew && !opsMenuOpen()) {
             if (ShipGamepad.bumperLeftPressed() || ShipGamepad.bumperRightPressed()) {
                 switchTab(if (activeTab == Tab.OPERATIONS) Tab.ROSTER else Tab.OPERATIONS)
             }
@@ -602,6 +643,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             fuelPopupOpen -> 5
             ammoMenuOpen -> 4
             cardAmmoMenuOpen -> 6
+            crewLayerMenuOpen -> 7
+            ctrlLayerMenuOpen -> 8
             stationMenuOpen -> 2
             openCard != null -> 1
             activeTab == Tab.OPERATIONS -> 3
@@ -618,13 +661,36 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (step == 0 && !choose && !back) return
 
         when (context) {
+            8 -> padLayerMenu(step, choose, back, crew = false)
+            7 -> padLayerMenu(step, choose, back, crew = true)
             6 -> padCardAmmo(step, choose, back)
-            5 -> padFuel(step, back, choose)
+            5 -> padFuel(back, choose)
             4 -> padOpsAmmo(step, choose, back)
             3 -> padOps(step, choose, back)
             2 -> padMenu(step, choose, back)
             1 -> padCard(step, choose, back)
             else -> padRoster(step, choose)
+        }
+    }
+
+    /** One deck dropdown, walked entry by entry: "All decks" first, then every deck keel-up. */
+    private fun padLayerMenu(step: Int, choose: Boolean, back: Boolean, crew: Boolean) {
+        if (back) {
+            crewLayerMenuOpen = false
+            ctrlLayerMenuOpen = false
+            return
+        }
+        val entries = deckCounts.size + 1
+        if (step != 0) {
+            padSel = (if (padSel < 0) (if (step > 0) 0 else entries - 1) else padSel + step)
+                .coerceIn(0, entries - 1)
+            if (padSel < layerMenuScroll) layerMenuScroll = padSel
+            if (padSel >= layerMenuScroll + LAYER_MENU_ROWS) layerMenuScroll = padSel - LAYER_MENU_ROWS + 1
+        }
+        if (choose && padSel >= 0) {
+            if (crew) crewLayer = padSel else ctrlLayer = padSel
+            crewLayerMenuOpen = false
+            ctrlLayerMenuOpen = false
         }
     }
 
@@ -650,7 +716,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
     }
 
-    /** The Operations rows, walked top to bottom. Choose is the click; back only clears the selection. */
+    /**
+     * The Operations rows, walked top to bottom. Choose is the click; back only clears the selection.
+     * The selection drags the body with it, the way the roster's does -- a stop the pad rests on is
+     * always in view, however far the body was scrolled.
+     */
     private fun padOps(step: Int, choose: Boolean, back: Boolean) {
         if (back) {
             padSel = -1
@@ -659,6 +729,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (step != 0) {
             padSel = (if (padSel < 0) (if (step > 0) 0 else OPS_STOP_COUNT - 1) else padSel + step)
                 .coerceIn(0, OPS_STOP_COUNT - 1)
+            val v = opsVirtualRect(padSel)
+            if (v[1] < opsScroll + 2) opsScroll = (v[1] - 4).coerceAtLeast(0)
+            if (v[1] + v[3] > opsScroll + OPS_BODY_H - 2) opsScroll = v[1] + v[3] - OPS_BODY_H + 4
+            clampOpsScroll()
         }
         if (choose) {
             if (padSel < 0) {
@@ -690,16 +764,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
     }
 
-    private fun padFuel(step: Int, back: Boolean, choose: Boolean) {
-        if (back || choose) {
-            fuelPopupOpen = false
-            return
-        }
-        val holds = stores ?: return
-        if (step != 0) {
-            val max = (holds.fuels.size - FUEL_ROWS).coerceAtLeast(0)
-            fuelPopupScroll = (fuelPopupScroll + step).coerceIn(0, max)
-        }
+    /** The fuel popup shows the top of the plan and nothing else -- any decisive press just closes it. */
+    private fun padFuel(back: Boolean, choose: Boolean) {
+        if (back || choose) fuelPopupOpen = false
     }
 
     private fun padRoster(step: Int, choose: Boolean) {
@@ -802,12 +869,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
         // Escape steps back out of whatever is innermost: a popup, then a rename, then a card, then out.
         if (keyEvent.key() == GLFW.GLFW_KEY_ESCAPE) {
-            if (fuelPopupOpen) {
-                fuelPopupOpen = false
-                return true
-            }
-            if (ammoMenuOpen) {
-                ammoMenuOpen = false
+            if (opsMenuOpen()) {
+                closeOpsMenus()
                 return true
             }
             if (cardAmmoMenuOpen) {
@@ -847,12 +910,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             drawList(guiGraphics, mouseX, mouseY)
         }
         if (openCard != null) drawCard(guiGraphics, mouseX, mouseY)
-        // The count boxes are real widgets, which super paints LAST -- over the fuel popup, whose panel
-        // covers their pixels. Hiding them while it is up is the honest fix; a popup owns the screen.
-        val boxesVisible = !fuelPopupOpen
-        gunnerCountBox?.visible = boxesVisible
-        fireCountBox?.visible = boxesVisible
+        // The count boxes are real widgets, which super paints LAST and OUTSIDE the body's scissor -- so
+        // they are re-seated from the scrolled layout every frame, and shown only while their row is
+        // fully inside the body and no overlay owns the screen. A widget half over the tab strip, or
+        // painted through a popup, would be the scissor's one leak.
+        positionCountBox(gunnerCountBox, OPS_V_ROW_G)
+        positionCountBox(fireCountBox, OPS_V_ROW_F)
         super.render(guiGraphics, mouseX, mouseY, partialTicks)
+    }
+
+    private fun positionCountBox(box: EditBox?, vy: Int) {
+        if (box == null) return
+        box.x = left + OPS_BOX_X
+        box.y = opsRowY(vy)
+        box.visible = activeTab == Tab.OPERATIONS && openCard == null && !opsMenuOpen() &&
+            vy >= opsScroll && vy + OPS_CTRL_H <= opsScroll + OPS_BODY_H
     }
 
     private fun drawHeader(guiGraphics: GuiGraphics) {
@@ -971,61 +1043,62 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private fun drawOperations(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
         val holds = stores
 
-        small(guiGraphics, OPS_CREW_TEXT, left + 8, top + OPS_CREW_LABEL_Y, DIM)
+        // The body clips to a viewport and scrolls: three categories of rows outgrew one panel when the
+        // guns learned decks. Rows live at virtual offsets and meet the screen through [opsRowY] and
+        // [opsStopRect]; the tabs above and the holds line below hold still.
+        guiGraphics.enableScissor(left + 1, top + OPS_BODY_TOP, left + PANEL_W - 1, top + OPS_BODY_BOTTOM)
 
-        // Gunners: [-] [count] [+], the battery to deal to, and the order itself.
-        small(guiGraphics, OPS_GUNNERS_TEXT, left + 8, top + OPS_ROW_G + 4, TEXT)
+        small(guiGraphics, OPS_CREW_TEXT, left + 8, opsRowY(OPS_V_CREW_LABEL), DIM)
+
+        // Gunners: [-] [count] [+] and the order; the scope it deals to sits on the row below it.
+        small(guiGraphics, OPS_GUNNERS_TEXT, left + 8, opsRowY(OPS_V_ROW_G) + 4, TEXT)
         opsButton(guiGraphics, STOP_G_MINUS, MINUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_PLUS, PLUS_TEXT, mouseX, mouseY)
-        drawSides(guiGraphics, STOP_G_SIDE, top + OPS_ROW_G, crewSide, OPS_SIDE_BOTH_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_G_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_G_SIDE, opsRowY(OPS_V_ROW_GSCOPE), crewSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_G_LAYER, layerButtonText(crewLayer), mouseX, mouseY)
 
-        // Fire watch: a count and the order. No sides -- a fire does not care which battery you favour.
-        small(guiGraphics, OPS_FIRE_TEXT, left + 8, top + OPS_ROW_F + 4, TEXT)
+        // Fire watch: a count and the order. No scope -- a fire does not care which battery you favour.
+        small(guiGraphics, OPS_FIRE_TEXT, left + 8, opsRowY(OPS_V_ROW_F) + 4, TEXT)
         opsButton(guiGraphics, STOP_F_MINUS, MINUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_F_PLUS, PLUS_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_F_ASSIGN, OPS_ASSIGN_TEXT, mouseX, mouseY)
 
-        guiGraphics.fill(left + 8, top + OPS_SEP_Y, left + PANEL_W - 8, top + OPS_SEP_Y + 1, SEPARATOR)
-        small(guiGraphics, OPS_STORES_TEXT, left + 8, top + OPS_STORES_LABEL_Y, DIM)
+        guiGraphics.fill(left + 8, opsRowY(OPS_V_SEP1), left + PANEL_W - 8, opsRowY(OPS_V_SEP1) + 1, SEPARATOR)
+        small(guiGraphics, OPS_CTRL_TEXT, left + 8, opsRowY(OPS_V_CTRL_LABEL), DIM)
 
-        // The stores side selector, shared by both restock orders, with the powder count alongside --
-        // the readout lives where the orders that spend it are aimed.
-        small(guiGraphics, OPS_SIDE_TEXT, left + 8, top + OPS_ROW_SIDE + 4, TEXT)
-        drawSides(guiGraphics, STOP_S_SIDE, top + OPS_ROW_SIDE, storesSide, OPS_SIDE_BOTH_TEXT, mouseX, mouseY)
-        val powder = Component.translatable(
-            "gui.vs_eureka.crew_ops_powder_count", holds?.gunpowder?.toString() ?: "--"
-        )
-        small(
-            guiGraphics, powder,
-            left + PANEL_W - 8 - (font.width(powder) * SMALL).toInt(), top + OPS_ROW_SIDE + 4,
-            if (holds == null) DIM else ACCENT
-        )
+        // The controls' scope: ONE side + deck pair that Set Angle, Set Power, the ammunition pick and
+        // the cannonball restock below all read. "Deck 1's port guns" is said once, not four times.
+        drawSides(guiGraphics, STOP_C_SIDE, opsRowY(OPS_V_ROW_CSCOPE), ctrlSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_C_LAYER, layerButtonText(ctrlLayer), mouseX, mouseY)
 
-        opsButton(guiGraphics, STOP_POWDER, OPS_RESTOCK_POWDER_TEXT, mouseX, mouseY)
+        // Set Angle and Set Power: the LABEL is the trigger -- press it and the scoped battery is laid
+        // or set in one order. Locked gunners' guns keep their own settings, as everywhere bulk.
+        opsButton(guiGraphics, STOP_LAY, OPS_ELEVATION_TEXT, mouseX, mouseY)
+        drawAngles(guiGraphics, opsRowY(OPS_V_ROW_ELEV), mouseX, mouseY)
+        opsButton(guiGraphics, STOP_PWR, OPS_POWER_TEXT, mouseX, mouseY)
+        drawPowers(guiGraphics, opsRowY(OPS_V_ROW_PWR), mouseX, mouseY)
 
-        opsButton(guiGraphics, STOP_SHOT, OPS_RESTOCK_SHOT_TEXT, mouseX, mouseY)
+        // The round the battery is being worked with -- a selection, not an order: the restock below
+        // spends it, and one day a bulk re-arm may too.
+        small(guiGraphics, OPS_AMMO_LABEL_TEXT, left + 8, opsRowY(OPS_V_ROW_AMMO) + 4, TEXT)
         opsButton(guiGraphics, STOP_AMMO_MENU, ammoButtonText(), mouseX, mouseY)
 
-        // Elevation: the LABEL is the trigger -- press "Elevation" and the guns are laid per the
-        // selectors beside it. Its first draft was a separate "Lay Guns" button on the row below, which
-        // read as unrelated to the selectors it served; the label-as-button puts the order and its
-        // arguments on one line, the way the Assign rows already work. Sides are independent of the
-        // restock selector on purpose: "port guns up, then resupply everything" is one trip here, not two.
-        opsButton(guiGraphics, STOP_LAY, OPS_ELEVATION_TEXT, mouseX, mouseY)
-        drawSides(guiGraphics, STOP_ELEV_SIDE, top + OPS_ROW_ELEV, elevSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
-        drawAngles(guiGraphics, top + OPS_ROW_ELEV, mouseX, mouseY)
+        guiGraphics.fill(left + 8, opsRowY(OPS_V_SEP2), left + PANEL_W - 8, opsRowY(OPS_V_SEP2) + 1, SEPARATOR)
+        small(guiGraphics, OPS_RESTOCK_TEXT, left + 8, opsRowY(OPS_V_RESTOCK_LABEL), DIM)
 
-        // Power: the elevation row's twin, one line down -- the same order-and-arguments shape, setting
-        // the battery's powder measure. Locked gunners' guns keep theirs, exactly as they do the angle.
-        opsButton(guiGraphics, STOP_PWR, OPS_POWER_TEXT, mouseX, mouseY)
-        drawSides(guiGraphics, STOP_PWR_SIDE, top + OPS_ROW_PWR, powerSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
-        drawPowers(guiGraphics, top + OPS_ROW_PWR, mouseX, mouseY)
-
+        // Cannonballs first -- its own side, spending the controls' deck and round; then the engines;
+        // then powder, which takes no aim at all: every gun aboard, split evenly.
+        opsButton(guiGraphics, STOP_SHOT, OPS_RESTOCK_SHOT_TEXT, mouseX, mouseY)
+        drawSides(guiGraphics, STOP_SHOT_SIDE, opsRowY(OPS_V_ROW_SHOT), shotSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_REFUEL, OPS_REFUEL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_FUEL_LIST, OPS_FUEL_LIST_TEXT, mouseX, mouseY)
+        opsButton(guiGraphics, STOP_POWDER, OPS_RESTOCK_POWDER_TEXT, mouseX, mouseY)
 
-        // Bottom-left corner, under everything: a summary reads last, and the rows above needed its room.
+        guiGraphics.disableScissor()
+        drawOpsScrollbar(guiGraphics)
+
+        // Bottom-left corner, pinned OUTSIDE the scrolled body: a summary reads last, and reads always.
         val line = when {
             holds == null -> OPS_READING_TEXT
             else -> Component.translatable(
@@ -1037,9 +1110,71 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
         small(guiGraphics, line, left + 8, top + OPS_HOLDS_Y, DIM)
 
-        // Popups last, over everything, exactly as the station dropdown is.
+        // Popups last, over everything and outside the scissor, exactly as the station dropdown is.
         if (ammoMenuOpen) drawAmmoMenu(guiGraphics, mouseX, mouseY)
+        if (crewLayerMenuOpen) drawLayerMenu(guiGraphics, STOP_G_LAYER, crewLayer, mouseX, mouseY)
+        if (ctrlLayerMenuOpen) drawLayerMenu(guiGraphics, STOP_C_LAYER, ctrlLayer, mouseX, mouseY)
         if (fuelPopupOpen) drawFuelPopup(guiGraphics)
+    }
+
+    /** Where a virtual body row sits on screen this frame. */
+    private fun opsRowY(vy: Int): Int = top + OPS_BODY_TOP + vy - opsScroll
+
+    /** What a deck dropdown's button reads: the scope it is set to, with the unfold marker. */
+    private fun layerButtonText(layer: Int): Component =
+        if (layer == 0) Component.literal("${OPS_LAYER_ALL_TEXT.string} ▾")
+        else Component.literal("${Component.translatable("gui.vs_eureka.crew_ops_deck", layer).string} ▾")
+
+    /**
+     * A deck dropdown: "All decks", then every deck keel-up with its gun count. Every entry answers a
+     * click -- unlike the station list there is nothing here to be "taken" -- and a click outside folds
+     * it, the station dropdown's rule.
+     */
+    private fun drawLayerMenu(guiGraphics: GuiGraphics, anchorStop: Int, current: Int, mouseX: Int, mouseY: Int) {
+        val anchor = opsStopRect(anchorStop) ?: return
+        val x = anchor[0]
+        val y = anchor[1] + anchor[3]
+        val entries = deckCounts.size + 1
+        val visible = minOf(entries, LAYER_MENU_ROWS)
+        layerMenuScroll = layerMenuScroll.coerceIn(0, (entries - LAYER_MENU_ROWS).coerceAtLeast(0))
+        panel(guiGraphics, x, y, OPS_LAYER_BTN_W, visible * LAYER_MENU_ROW_H + 2)
+
+        for (row in 0 until visible) {
+            val index = layerMenuScroll + row
+            if (index >= entries) break
+            val rowY = y + 1 + row * LAYER_MENU_ROW_H
+            val hovered = ((padContext == 7 || padContext == 8) && padSel == index) ||
+                (mouseX >= x && mouseX < x + OPS_LAYER_BTN_W && mouseY >= rowY && mouseY < rowY + LAYER_MENU_ROW_H)
+            if (hovered) guiGraphics.fill(x + 1, rowY, x + OPS_LAYER_BTN_W - 1, rowY + LAYER_MENU_ROW_H, ACCENT)
+            val text = if (index == 0) OPS_LAYER_ALL_TEXT else {
+                val guns = deckCounts[index - 1]
+                if (guns == 1) Component.translatable("gui.vs_eureka.crew_ops_deck_gun", index)
+                else Component.translatable("gui.vs_eureka.crew_ops_deck_guns", index, guns)
+            }
+            small(
+                guiGraphics, text, x + 4, rowY + 3,
+                when {
+                    hovered -> 0xFFFFFFFF.toInt()
+                    index == current -> ACCENT
+                    else -> TEXT
+                }
+            )
+        }
+        if (layerMenuScroll > 0) small(guiGraphics, MORE_ABOVE, x + OPS_LAYER_BTN_W - 10, y + 3, DIM)
+        if (layerMenuScroll + visible < entries) {
+            small(guiGraphics, MORE_BELOW, x + OPS_LAYER_BTN_W - 10, y + visible * LAYER_MENU_ROW_H - 8, DIM)
+        }
+    }
+
+    private fun drawOpsScrollbar(guiGraphics: GuiGraphics) {
+        val span = OPS_CONTENT_H - OPS_BODY_H
+        if (span <= 0) return
+        val trackTop = top + OPS_BODY_TOP
+        val x = left + PANEL_W - 7
+        guiGraphics.fill(x, trackTop, x + 3, trackTop + OPS_BODY_H, ROW_LOCKED)
+        val thumbH = (OPS_BODY_H * OPS_BODY_H / OPS_CONTENT_H).coerceAtLeast(12)
+        val thumbY = trackTop + (OPS_BODY_H - thumbH) * opsScroll / span
+        guiGraphics.fill(x, thumbY, x + 3, thumbY + thumbH, ACCENT)
     }
 
     /** What the shot dropdown's button reads: the chosen round and how many the holds hold of it. */
@@ -1181,30 +1316,46 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         (padContext == 3 && padSel == stop) ||
             (mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h)
 
-    /** Every stop's rectangle, absolute. The single source both the mouse and the pad walk against. */
-    private fun opsStopRect(stop: Int): IntArray? = when (stop) {
-        STOP_G_MINUS -> intArrayOf(left + OPS_MINUS_X, top + OPS_ROW_G, OPS_STEP_W, OPS_CTRL_H)
-        STOP_G_BOX -> intArrayOf(left + OPS_BOX_X, top + OPS_ROW_G, OPS_BOX_W, OPS_CTRL_H)
-        STOP_G_PLUS -> intArrayOf(left + OPS_PLUS_X, top + OPS_ROW_G, OPS_STEP_W, OPS_CTRL_H)
-        STOP_G_SIDE -> intArrayOf(left + OPS_SIDES_X, top + OPS_ROW_G, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
-        STOP_G_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, top + OPS_ROW_G, OPS_ASSIGN_W, OPS_CTRL_H)
-        STOP_F_MINUS -> intArrayOf(left + OPS_MINUS_X, top + OPS_ROW_F, OPS_STEP_W, OPS_CTRL_H)
-        STOP_F_BOX -> intArrayOf(left + OPS_BOX_X, top + OPS_ROW_F, OPS_BOX_W, OPS_CTRL_H)
-        STOP_F_PLUS -> intArrayOf(left + OPS_PLUS_X, top + OPS_ROW_F, OPS_STEP_W, OPS_CTRL_H)
-        STOP_F_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, top + OPS_ROW_F, OPS_ASSIGN_W, OPS_CTRL_H)
-        STOP_S_SIDE -> intArrayOf(left + OPS_S_SIDES_X, top + OPS_ROW_SIDE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
-        STOP_POWDER -> intArrayOf(left + 8, top + OPS_ROW_POWDER, OPS_WIDE_W, OPS_CTRL_H)
-        STOP_SHOT -> intArrayOf(left + 8, top + OPS_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
-        STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_SHOT, OPS_AMMO_W, OPS_CTRL_H)
-        STOP_ELEV_SIDE -> intArrayOf(left + OPS_ELEV_SIDES_X, top + OPS_ROW_ELEV, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
-        STOP_ELEV_ANGLE -> intArrayOf(left + OPS_ELEV_ANGLES_X, top + OPS_ROW_ELEV, ELEV_SEG_W * 5 + SEG_GAP * 4, OPS_CTRL_H)
-        STOP_LAY -> intArrayOf(left + 8, top + OPS_ROW_ELEV, OPS_ELEV_BTN_W, OPS_CTRL_H)
-        STOP_PWR -> intArrayOf(left + 8, top + OPS_ROW_PWR, OPS_ELEV_BTN_W, OPS_CTRL_H)
-        STOP_PWR_SIDE -> intArrayOf(left + OPS_ELEV_SIDES_X, top + OPS_ROW_PWR, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
-        STOP_PWR_LEVEL -> intArrayOf(left + OPS_ELEV_ANGLES_X, top + OPS_ROW_PWR, ELEV_SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
-        STOP_REFUEL -> intArrayOf(left + 8, top + OPS_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
-        STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, top + OPS_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
-        else -> null
+    /**
+     * Every stop's rectangle in BODY coordinates: absolute x, VIRTUAL y, width, height. Always answers,
+     * scrolled out of view or not -- the pad's scroll-follow needs the true position of what it cannot see.
+     */
+    private fun opsVirtualRect(stop: Int): IntArray = when (stop) {
+        STOP_G_MINUS -> intArrayOf(left + OPS_MINUS_X, OPS_V_ROW_G, OPS_STEP_W, OPS_CTRL_H)
+        STOP_G_BOX -> intArrayOf(left + OPS_BOX_X, OPS_V_ROW_G, OPS_BOX_W, OPS_CTRL_H)
+        STOP_G_PLUS -> intArrayOf(left + OPS_PLUS_X, OPS_V_ROW_G, OPS_STEP_W, OPS_CTRL_H)
+        STOP_G_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, OPS_V_ROW_G, OPS_ASSIGN_W, OPS_CTRL_H)
+        STOP_G_SIDE -> intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_GSCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_G_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_GSCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
+        STOP_F_MINUS -> intArrayOf(left + OPS_MINUS_X, OPS_V_ROW_F, OPS_STEP_W, OPS_CTRL_H)
+        STOP_F_BOX -> intArrayOf(left + OPS_BOX_X, OPS_V_ROW_F, OPS_BOX_W, OPS_CTRL_H)
+        STOP_F_PLUS -> intArrayOf(left + OPS_PLUS_X, OPS_V_ROW_F, OPS_STEP_W, OPS_CTRL_H)
+        STOP_F_ASSIGN -> intArrayOf(left + OPS_ASSIGN_X, OPS_V_ROW_F, OPS_ASSIGN_W, OPS_CTRL_H)
+        STOP_C_SIDE -> intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_CSCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_C_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_CSCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
+        STOP_LAY -> intArrayOf(left + 8, OPS_V_ROW_ELEV, OPS_ELEV_BTN_W, OPS_CTRL_H)
+        STOP_ELEV_ANGLE -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_ELEV, ELEV_SEG_W * 5 + SEG_GAP * 4, OPS_CTRL_H)
+        STOP_PWR -> intArrayOf(left + 8, OPS_V_ROW_PWR, OPS_ELEV_BTN_W, OPS_CTRL_H)
+        STOP_PWR_LEVEL -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_PWR, ELEV_SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_AMMO, OPS_AMMO_W, OPS_CTRL_H)
+        STOP_SHOT -> intArrayOf(left + 8, OPS_V_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
+        STOP_SHOT_SIDE -> intArrayOf(left + OPS_SHOT_SIDES_X, OPS_V_ROW_SHOT, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_REFUEL -> intArrayOf(left + 8, OPS_V_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
+        STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
+        STOP_POWDER -> intArrayOf(left + 8, OPS_V_ROW_POWDER, OPS_WIDE_W, OPS_CTRL_H)
+        else -> intArrayOf(left + 8, 0, 0, 0)
+    }
+
+    /**
+     * Every stop's ON-SCREEN rectangle this frame, or null while it is scrolled out of the body -- the
+     * single source both the mouse and the pad walk against, so nothing invisible can be hovered, lit,
+     * or clicked.
+     */
+    private fun opsStopRect(stop: Int): IntArray? {
+        val v = opsVirtualRect(stop)
+        if (v[2] == 0) return null
+        if (v[1] + v[3] <= opsScroll || v[1] >= opsScroll + OPS_BODY_H) return null
+        return intArrayOf(v[0], top + OPS_BODY_TOP + v[1] - opsScroll, v[2], v[3])
     }
 
     /**
@@ -1217,34 +1368,39 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_G_PLUS -> adjustCount(gunners = true, delta = +1)
             STOP_G_BOX -> gunnerCountBox?.let { this.focused = it }
             STOP_G_SIDE -> crewSide = pickSide(crewSide, STOP_G_SIDE, mouseX)
+            STOP_G_LAYER -> openLayerMenu(crew = true)
             STOP_G_ASSIGN ->
-                PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide)
+                PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide, crewLayer)
             STOP_F_MINUS -> adjustCount(gunners = false, delta = -1)
             STOP_F_PLUS -> adjustCount(gunners = false, delta = +1)
             STOP_F_BOX -> fireCountBox?.let { this.focused = it }
             STOP_F_ASSIGN ->
                 PathNetworkingFabric.sendCrewAssignFirefighters(snapshot.helm, fireCount)
-            STOP_S_SIDE -> storesSide = pickSide(storesSide, STOP_S_SIDE, mouseX)
-            STOP_POWDER -> PathNetworkingFabric.sendCrewRestockPowder(snapshot.helm, storesSide)
-            STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
-                PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, storesSide, ball, charge)
-            }
+            STOP_C_SIDE -> ctrlSide = pickSide(ctrlSide, STOP_C_SIDE, mouseX)
+            STOP_C_LAYER -> openLayerMenu(crew = false)
+            STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, ctrlSide, elevIndex, ctrlLayer)
+            STOP_ELEV_ANGLE -> elevIndex = pickAngle(mouseX)
+            STOP_PWR -> PathNetworkingFabric.sendCrewSetPower(snapshot.helm, ctrlSide, powerLevel, ctrlLayer)
+            STOP_PWR_LEVEL -> powerLevel = pickPower(mouseX)
             STOP_AMMO_MENU -> if (stores?.ammo?.isNotEmpty() == true) {
                 ammoMenuOpen = true
                 ammoMenuScroll = 0
             }
-            STOP_ELEV_SIDE -> elevSide = pickSide(elevSide, STOP_ELEV_SIDE, mouseX)
-            STOP_ELEV_ANGLE -> elevIndex = pickAngle(mouseX)
-            STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, elevSide, elevIndex)
-            STOP_PWR_SIDE -> powerSide = pickSide(powerSide, STOP_PWR_SIDE, mouseX)
-            STOP_PWR_LEVEL -> powerLevel = pickPower(mouseX)
-            STOP_PWR -> PathNetworkingFabric.sendCrewSetPower(snapshot.helm, powerSide, powerLevel)
-            STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
-            STOP_FUEL_LIST -> if (stores != null) {
-                fuelPopupOpen = true
-                fuelPopupScroll = 0
+            STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
+                PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, shotSide, ball, charge, ctrlLayer)
             }
+            STOP_SHOT_SIDE -> shotSide = pickSide(shotSide, STOP_SHOT_SIDE, mouseX)
+            STOP_POWDER -> PathNetworkingFabric.sendCrewRestockPowder(snapshot.helm)
+            STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
+            STOP_FUEL_LIST -> if (stores != null) fuelPopupOpen = true
         }
+    }
+
+    /** Unfold one deck dropdown. With no guns censused there is nothing to list, so nothing opens. */
+    private fun openLayerMenu(crew: Boolean) {
+        if (deckCounts.isEmpty()) return
+        layerMenuScroll = 0
+        if (crew) crewLayerMenuOpen = true else ctrlLayerMenuOpen = true
     }
 
     private fun pickSide(current: CrewOperations.Side, stop: Int, mouseX: Int?): CrewOperations.Side {
@@ -1277,10 +1433,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             fuelPopupOpen = false
             return true
         }
+        if (crewLayerMenuOpen || ctrlLayerMenuOpen) {
+            handleLayerMenuClick(mx, my)
+            return true
+        }
         if (ammoMenuOpen) {
-            if (holds != null) {
-                val x = left + OPS_AMMO_X
-                val menuY = top + OPS_ROW_SHOT + OPS_CTRL_H
+            val anchor = opsStopRect(STOP_AMMO_MENU)
+            if (holds != null && anchor != null) {
+                val x = anchor[0]
+                val menuY = anchor[1] + anchor[3]
                 if (mx >= x && mx < x + OPS_AMMO_W && my >= menuY) {
                     val index = ammoMenuScroll + (my - menuY) / AMMO_MENU_ROW_H
                     holds.ammo.getOrNull(index)?.let { pick ->
@@ -1294,6 +1455,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             return true
         }
 
+        // Only the body answers body clicks: a row half-scrolled off the top must not catch a click
+        // meant for the strip above it, nor one below for the holds line.
+        if (my < top + OPS_BODY_TOP || my >= top + OPS_BODY_BOTTOM) return false
+
         for (stop in 0 until OPS_STOP_COUNT) {
             val rect = opsStopRect(stop) ?: continue
             if (mx >= rect[0] && mx < rect[0] + rect[2] && my >= rect[1] && my < rect[1] + rect[3]) {
@@ -1304,10 +1469,31 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         return false
     }
 
+    /** A click while a deck dropdown is up: an entry picks the scope, anywhere else just folds it. */
+    private fun handleLayerMenuClick(mx: Int, my: Int) {
+        val crew = crewLayerMenuOpen
+        val anchor = opsStopRect(if (crew) STOP_G_LAYER else STOP_C_LAYER)
+        if (anchor != null) {
+            val x = anchor[0]
+            val menuY = anchor[1] + anchor[3]
+            val entries = deckCounts.size + 1
+            val visible = minOf(entries, LAYER_MENU_ROWS)
+            if (mx >= x && mx < x + OPS_LAYER_BTN_W && my >= menuY + 1 && my < menuY + 1 + visible * LAYER_MENU_ROW_H) {
+                val index = layerMenuScroll + (my - (menuY + 1)) / LAYER_MENU_ROW_H
+                if (index in 0 until entries) {
+                    if (crew) crewLayer = index else ctrlLayer = index
+                }
+            }
+        }
+        crewLayerMenuOpen = false
+        ctrlLayerMenuOpen = false
+    }
+
     private fun drawAmmoMenu(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
         val holds = stores ?: return
-        val x = left + OPS_AMMO_X
-        val y = top + OPS_ROW_SHOT + OPS_CTRL_H
+        val anchor = opsStopRect(STOP_AMMO_MENU) ?: return
+        val x = anchor[0]
+        val y = anchor[1] + anchor[3]
         val visible = minOf(holds.ammo.size, AMMO_MENU_ROWS)
         if (visible == 0) return
         panel(guiGraphics, x, y, OPS_AMMO_W, visible * AMMO_MENU_ROW_H + 2)
@@ -1336,28 +1522,28 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val holds = stores ?: return
         val x = left + FUEL_POPUP_X
         val y = top + FUEL_POPUP_Y
-        panel(guiGraphics, x, y, FUEL_POPUP_W, FUEL_POPUP_H)
+        // The top three fuels and no more: the refuel spends best-burn-first, so the head of the list IS
+        // the plan, and a captain who wants the full inventory has the holds themselves. The panel
+        // shrinks to what it shows -- one fuel gets one line, not two blank ones.
+        val shown = holds.fuels.take(FUEL_ROWS)
+        val height = FUEL_POPUP_HEADER + maxOf(shown.size, 1) * AMMO_MENU_ROW_H + 6
+        panel(guiGraphics, x, y, FUEL_POPUP_W, height)
         guiGraphics.drawString(font, OPS_FUEL_TITLE_TEXT, x + 6, y + 5, TEXT, false)
         guiGraphics.fill(x + 4, y + 16, x + FUEL_POPUP_W - 4, y + 17, SEPARATOR)
 
-        if (holds.fuels.isEmpty()) {
-            small(guiGraphics, OPS_FUEL_NONE_TEXT, x + 6, y + 22, DIM)
+        if (shown.isEmpty()) {
+            small(guiGraphics, OPS_FUEL_NONE_TEXT, x + 6, y + FUEL_POPUP_HEADER + 2, DIM)
             return
         }
-
-        for (row in 0 until FUEL_ROWS) {
-            val index = fuelPopupScroll + row
-            val fuel = holds.fuels.getOrNull(index) ?: break
-            val rowY = y + 20 + row * AMMO_MENU_ROW_H
+        for ((row, fuel) in shown.withIndex()) {
             small(
                 guiGraphics,
                 Component.literal("${fuelName(fuel.itemId)} x ${fuel.count} -- ${fuel.burnTicks / 20}s"),
-                x + 6, rowY, TEXT
+                x + 6, y + FUEL_POPUP_HEADER + row * AMMO_MENU_ROW_H, TEXT
             )
         }
-        if (fuelPopupScroll > 0) small(guiGraphics, MORE_ABOVE, x + FUEL_POPUP_W - 10, y + 20, DIM)
-        if (fuelPopupScroll + FUEL_ROWS < holds.fuels.size) {
-            small(guiGraphics, MORE_BELOW, x + FUEL_POPUP_W - 10, y + FUEL_POPUP_H - 10, DIM)
+        if (holds.fuels.size > FUEL_ROWS) {
+            small(guiGraphics, MORE_BELOW, x + FUEL_POPUP_W - 10, y + height - 10, DIM)
         }
     }
 
@@ -1366,17 +1552,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             .orElse(itemId)
 
     /** A fresh count of the holds. Also picks a default round -- the most plentiful -- if none is chosen. */
-    private fun acceptStoresNow(next: ShipStores.Stores) {
+    private fun acceptStoresNow(next: ShipStores.Stores, decks: List<Int>) {
         stores = next
+        deckCounts = decks
         val chosen = selectedAmmo
         val stillThere = chosen != null && next.ammo.any { it.ball == chosen.first && it.charge == chosen.second }
         if (!stillThere) {
             selectedAmmo = next.ammo.maxByOrNull { it.count }?.let { it.ball to it.charge }
         }
-        val maxFuel = (next.fuels.size - FUEL_ROWS).coerceAtLeast(0)
-        fuelPopupScroll = fuelPopupScroll.coerceIn(0, maxFuel)
+        // A deck that stopped existing -- guns torn out, the ship rebuilt under the open book -- falls
+        // back to All rather than pointing an order at nothing.
+        if (crewLayer > decks.size) crewLayer = 0
+        if (ctrlLayer > decks.size) ctrlLayer = 0
         val maxAmmo = (next.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
         ammoMenuScroll = ammoMenuScroll.coerceIn(0, maxAmmo)
+        layerMenuScroll = layerMenuScroll.coerceIn(0, (decks.size + 1 - LAYER_MENU_ROWS).coerceAtLeast(0))
     }
 
     // endregion
@@ -2010,11 +2200,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             (Minecraft.getInstance().screen as? CrewManifestScreen)?.applyDetail(detail)
         }
 
-        /** A stores tally arriving. Ignored unless the manifest on screen is about that same wheel. */
-        fun acceptStores(helm: Long, stores: ShipStores.Stores) {
+        /** A stores tally arriving, decks census riding along. Ignored unless it is about this wheel. */
+        fun acceptStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>) {
             val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
             if (screen.snapshot.helm != helm) return
-            screen.acceptStoresNow(stores)
+            screen.acceptStoresNow(stores, decks)
         }
 
         private val TITLE: Component = Component.translatable("gui.vs_eureka.crew_manifest")
@@ -2042,11 +2232,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val TAB_OPERATIONS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_operations")
         private val TAB_ROSTER_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_roster")
         private val OPS_CREW_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_crew")
-        private val OPS_STORES_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_stores")
+        private val OPS_CTRL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_cannon_controls")
+        private val OPS_RESTOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_restock")
         private val OPS_GUNNERS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_gunners")
         private val OPS_FIRE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_fire_watch")
         private val OPS_ASSIGN_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_assign")
-        private val OPS_SIDE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_side")
+        private val OPS_AMMO_LABEL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_ammo")
+        private val OPS_LAYER_ALL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_layer_all")
         private val OPS_SIDE_PORT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_port")
         private val OPS_SIDE_BOTH_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_both")
         private val OPS_SIDE_STBD_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_starboard")
@@ -2118,20 +2310,38 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val TAB_GAP = 4
         private const val TAB_W = (PANEL_W - 2 * TAB_MARGIN - TAB_GAP) / 2
 
-        // region Operations geometry (panel-relative rows; every control 14px tall)
+        // region Operations geometry (virtual body rows; every control 14px tall)
+        //
+        // The body SCROLLS: rows live at virtual Y offsets inside a scissored viewport from OPS_BODY_TOP
+        // to OPS_BODY_BOTTOM, and meet the screen only through opsRowY/opsStopRect -- which is what lets
+        // one hit-test source keep the mouse, the pad and the paint honest about what is actually in
+        // view. The holds line below the body is pinned and never moves.
 
         private const val OPS_CTRL_H = 14
-        private const val OPS_CREW_LABEL_Y = 42
-        private const val OPS_ROW_G = 52
-        private const val OPS_ROW_F = 72
-        private const val OPS_SEP_Y = 94
-        private const val OPS_STORES_LABEL_Y = 100
-        private const val OPS_ROW_SIDE = 110
-        private const val OPS_ROW_POWDER = 128
-        private const val OPS_ROW_SHOT = 146
-        private const val OPS_ROW_ELEV = 164
-        private const val OPS_ROW_PWR = 182
-        private const val OPS_ROW_REFUEL = 200
+        private const val OPS_BODY_TOP = 38
+        private const val OPS_BODY_BOTTOM = 212
+        private const val OPS_BODY_H = OPS_BODY_BOTTOM - OPS_BODY_TOP
+
+        /** One wheel notch's worth of body travel: a whole row pitch, so rows land aligned. */
+        private const val OPS_SCROLL_STEP = 18
+
+        private const val OPS_V_CREW_LABEL = 4
+        private const val OPS_V_ROW_G = 14
+        private const val OPS_V_ROW_GSCOPE = 32
+        private const val OPS_V_ROW_F = 50
+        private const val OPS_V_SEP1 = 68
+        private const val OPS_V_CTRL_LABEL = 74
+        private const val OPS_V_ROW_CSCOPE = 84
+        private const val OPS_V_ROW_ELEV = 102
+        private const val OPS_V_ROW_PWR = 120
+        private const val OPS_V_ROW_AMMO = 138
+        private const val OPS_V_SEP2 = 156
+        private const val OPS_V_RESTOCK_LABEL = 162
+        private const val OPS_V_ROW_SHOT = 172
+        private const val OPS_V_ROW_REFUEL = 190
+        private const val OPS_V_ROW_POWDER = 208
+        private const val OPS_CONTENT_H = OPS_V_ROW_POWDER + OPS_CTRL_H + 4
+
         private const val OPS_HOLDS_Y = 219
 
         private const val OPS_MINUS_X = 64
@@ -2139,34 +2349,47 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_BOX_W = 30
         private const val OPS_PLUS_X = 114
         private const val OPS_STEP_W = 12
-        private const val OPS_SIDES_X = 136
-        private const val OPS_S_SIDES_X = 64
         private const val OPS_ASSIGN_X = 244
         private const val OPS_ASSIGN_W = 48
+
+        /** The mode toggle, in the gap the count stepper and Assign left between them. */
         private const val OPS_WIDE_W = 100
         private const val OPS_AMMO_X = 116
         private const val OPS_AMMO_W = 176
         private const val OPS_FUEL_BTN_W = 50
+
+        /** A scope row: the three side segments, then the deck dropdown's button beside them. */
+        private const val OPS_SCOPE_SIDES_X = 64
+        private const val OPS_LAYER_X = 172
+        private const val OPS_LAYER_BTN_W = 88
+
+        /** The cannonball restock's own side segments, right of its button. */
+        private const val OPS_SHOT_SIDES_X = 116
 
         private const val SEG_W = 32
         private const val SEG_GAP = 2
 
         /** The five elevation steps' segments: narrower, since "-45" is as wide as a label gets. */
         private const val ELEV_SEG_W = 22
-        private const val OPS_ELEV_SIDES_X = 64
-        private const val OPS_ELEV_ANGLES_X = 172
 
-        /** The Elevation label-button: the row's trigger, sized to its own word. */
+        /** Where the angle/power segments start: right of their label-buttons, no selector between now. */
+        private const val OPS_SEGS_X = 72
+
+        /** The Set Angle / Set Power label-buttons: the rows' triggers, sized to their own words. */
         private const val OPS_ELEV_BTN_W = 52
 
         private const val AMMO_MENU_ROWS = 6
         private const val AMMO_MENU_ROW_H = 12
+        private const val LAYER_MENU_ROWS = 6
+        private const val LAYER_MENU_ROW_H = 12
 
         private const val FUEL_POPUP_X = 40
         private const val FUEL_POPUP_Y = 56
         private const val FUEL_POPUP_W = 220
-        private const val FUEL_POPUP_H = 110
-        private const val FUEL_ROWS = 7
+        private const val FUEL_POPUP_HEADER = 20
+
+        /** The refuel plan's preview depth: the top three fuels, or the one there is. */
+        private const val FUEL_ROWS = 3
 
         /** The card's pad stops -- IDs, not positions; [cardStops] builds the per-card walk order. */
         private const val CARD_STOP_DUTY = 0
@@ -2182,29 +2405,30 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         /** The card's ammo control and its dropdown: a round's name plus a count needs the room. */
         private const val GUN_AMMO_BTN_W = 150
 
-        /** The pad's walk order over the Operations rows; indexes into [opsStopRect]. */
+        /** The pad's walk order over the Operations rows -- reading order; indexes into [opsVirtualRect]. */
         private const val STOP_G_MINUS = 0
         private const val STOP_G_BOX = 1
         private const val STOP_G_PLUS = 2
-        private const val STOP_G_SIDE = 3
-        private const val STOP_G_ASSIGN = 4
-        private const val STOP_F_MINUS = 5
-        private const val STOP_F_BOX = 6
-        private const val STOP_F_PLUS = 7
-        private const val STOP_F_ASSIGN = 8
-        private const val STOP_S_SIDE = 9
-        private const val STOP_POWDER = 10
-        private const val STOP_SHOT = 11
-        private const val STOP_AMMO_MENU = 12
-        private const val STOP_ELEV_SIDE = 13
-        private const val STOP_ELEV_ANGLE = 14
-        private const val STOP_LAY = 15
-        private const val STOP_PWR = 16
-        private const val STOP_PWR_SIDE = 17
-        private const val STOP_PWR_LEVEL = 18
+        private const val STOP_G_ASSIGN = 3
+        private const val STOP_G_SIDE = 4
+        private const val STOP_G_LAYER = 5
+        private const val STOP_F_MINUS = 6
+        private const val STOP_F_BOX = 7
+        private const val STOP_F_PLUS = 8
+        private const val STOP_F_ASSIGN = 9
+        private const val STOP_C_SIDE = 10
+        private const val STOP_C_LAYER = 11
+        private const val STOP_LAY = 12
+        private const val STOP_ELEV_ANGLE = 13
+        private const val STOP_PWR = 14
+        private const val STOP_PWR_LEVEL = 15
+        private const val STOP_AMMO_MENU = 16
+        private const val STOP_SHOT = 17
+        private const val STOP_SHOT_SIDE = 18
         private const val STOP_REFUEL = 19
         private const val STOP_FUEL_LIST = 20
-        private const val OPS_STOP_COUNT = 21
+        private const val STOP_POWDER = 21
+        private const val OPS_STOP_COUNT = 22
 
         // endregion
 
