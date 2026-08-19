@@ -10,6 +10,7 @@ import net.minecraft.core.component.DataComponentMap
 import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
+import com.mojang.serialization.Codec
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.ComponentSerialization
@@ -125,6 +126,15 @@ private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
 private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
 private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
 private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
+
+// The pirate wheel's papers. The first two are DESIGN facts -- written by the authoring command, baked into
+// the template a pirate hull ships as, identical on every copy. The second two are INSTANCE facts -- written
+// by the pirate manager for one placed ship, and stripped at capture so no copy inherits another's crew or
+// berth (ShipTemplate mirrors these key names for exactly that strip).
+private const val PIRATE_TEMPLATE_KEY = "vs_eureka:pirate_template"
+private const val PIRATE_CREW_KEY = "vs_eureka:pirate_crew"
+private const val PIRATE_CREW_UUIDS_KEY = "vs_eureka:pirate_crew_uuids"
+private const val PIRATE_BERTH_KEY = "vs_eureka:pirate_berth"
 
 // How long after a ship loads before its remembered name is applied. Long enough for vs-core to have finished
 // building the ship -- a slug set while it is still doing so does not survive -- and far too short to see.
@@ -447,6 +457,29 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         private set
 
     /**
+     * Which shipped hull design this pirate wheel belongs to ("pirate/sloop"), or null on every honest
+     * wheel. Written once by the authoring command and baked into the template, so a generated ship knows
+     * its own design -- which is what the crew respawn and the 30-minute site regeneration select by.
+     */
+    var pirateTemplate: String? = null
+
+    /**
+     * The ship's crew complement as full entity snapshots, taken at authoring time. This is the DESIGN of
+     * the crew -- who stands on this hull when it is whole -- not the live roster; the pirate manager
+     * restores from these (fresh UUIDs) whenever the complement must come back.
+     */
+    var pirateCrew: List<CompoundTag> = emptyList()
+
+    /** The LIVE crew: entity UUIDs the pirate manager spawned or adopted for this one placed ship. */
+    var pirateCrewUuids: List<UUID> = emptyList()
+
+    /**
+     * The spawn site this wheel was adopted into, as a packed BlockPos, or null before first adoption.
+     * Null is load-bearing: it is what makes the manager's adoption idempotent.
+     */
+    var pirateBerth: Long? = null
+
+    /**
      * Shut this wheel's menu on everyone reading it, because the wheel is about to stop being here.
      *
      * Assembling and disassembling both RELOCATE the helm -- into the shipyard and back -- and a relocation
@@ -599,6 +632,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // As a string rather than an int array: ShipTemplate.stripShipName edits this tag as raw NBT in a
         // template palette, and a string key can be removed there without agreeing on an encoding.
         bottleBinding?.let { output.putString(BOTTLE_BINDING_KEY, it.toString()) }
+        // The pirate papers. UUIDs as strings for the same strip-as-raw-NBT reason as the binding above.
+        pirateTemplate?.let { output.putString(PIRATE_TEMPLATE_KEY, it) }
+        if (pirateCrew.isNotEmpty()) output.store(PIRATE_CREW_KEY, CompoundTag.CODEC.listOf(), pirateCrew)
+        if (pirateCrewUuids.isNotEmpty()) {
+            output.store(PIRATE_CREW_UUIDS_KEY, Codec.STRING.listOf(), pirateCrewUuids.map { it.toString() })
+        }
+        pirateBerth?.let { output.putLong(PIRATE_BERTH_KEY, it) }
     }
 
     override fun loadAdditional(input: ValueInput) {
@@ -611,6 +651,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         shipSlug = input.getString(SHIP_SLUG_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
         bottleBinding = input.getString(BOTTLE_BINDING_KEY).orElse(null)
             ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        pirateTemplate = input.getString(PIRATE_TEMPLATE_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+        pirateCrew = input.read(PIRATE_CREW_KEY, CompoundTag.CODEC.listOf()).orElse(emptyList())
+        pirateCrewUuids = input.read(PIRATE_CREW_UUIDS_KEY, Codec.STRING.listOf()).orElse(emptyList())
+            .mapNotNull { runCatching { UUID.fromString(it) }.getOrNull() }
+        pirateBerth = input.read(PIRATE_BERTH_KEY, Codec.LONG).orElse(null)
     }
 
     private val seats = mutableListOf<ShipMountingEntity>()

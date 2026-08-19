@@ -101,7 +101,7 @@ object CrewStations {
      * Every wheel aboard [ship], or null while its chunks are not readable. The [ShipGuns] chunk-walk,
      * asked for helms: a hull carries a handful at most, and this runs only on misses and at assembly.
      */
-    private fun helmsAboard(level: ServerLevel, ship: LoadedServerShip): List<ShipHelmBlockEntity>? {
+    internal fun helmsAboard(level: ServerLevel, ship: LoadedServerShip): List<ShipHelmBlockEntity>? {
         val aabb = ship.shipAABB ?: return null
         val wheels = ArrayList<ShipHelmBlockEntity>()
         val minChunkX = aabb.minX() shr 4

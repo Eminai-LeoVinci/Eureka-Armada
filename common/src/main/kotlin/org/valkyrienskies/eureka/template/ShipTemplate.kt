@@ -13,6 +13,7 @@ import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
@@ -97,12 +98,24 @@ object ShipTemplate {
      *
      * Ship-in-a-bottle is the case that wants this ON: that really is the same vessel, and it should come back
      * under its own name.
+     *
+     * @param admitRaiders whether pillagers and their kin standing aboard are written into the template.
+     *
+     * Off everywhere but pirate-hull authoring. The living-things exclusion in [captureEntities] exists
+     * because crew, pets and livestock are cargo -- but a pirate ship's crew IS the design: the author
+     * stands pillagers on the deck and the template carries them, which is how a generated hull arrives
+     * crewed and how the respawn knows its complement. Each admitted raider is stamped persistent (a mob
+     * generated an ocean away must not despawn before anyone sails near) and stripped of its patrol
+     * ambitions (patrol AI would march the crew off the deck toward some village). Turning this on also
+     * strips the pirate INSTANCE keys from the captured helm -- crew UUIDs, berth -- so every hull placed
+     * from the template adopts fresh instead of inheriting the author's ship's identity.
      */
     fun capture(
         level: ServerLevel,
         ship: LoadedServerShip,
         name: String,
-        keepShipName: Boolean = false
+        keepShipName: Boolean = false,
+        admitRaiders: Boolean = false
     ): Outcome {
         val id = idFor(name) ?: return Failed("'$name' is not a usable template name.")
         val aabb = ship.shipAABB ?: return Failed("That ship has no blocks.")
@@ -163,8 +176,9 @@ object ShipTemplate {
 
         // MUST follow the fill: vs$fillFromVoxelSet ends by clearing entityInfoList, so anything added before it
         // would be silently dropped.
-        val entities = captureEntities(level, ship, template, min, max)
+        val entities = captureEntities(level, ship, template, min, max, admitRaiders)
         if (!keepShipName) stripShipName(template)
+        if (admitRaiders) stripPirateInstanceState(template)
 
         if (!manager.save(id)) {
             // Don't leave a half-made template in the repository shadowing a real one.
@@ -213,7 +227,8 @@ object ShipTemplate {
         ship: LoadedServerShip,
         template: StructureTemplate,
         min: BlockPos,
-        max: BlockPos
+        max: BlockPos,
+        admitRaiders: Boolean = false
     ): Int {
         val box = AABB(
             min.x.toDouble(), min.y.toDouble(), min.z.toDouble(),
@@ -230,7 +245,10 @@ object ShipTemplate {
 
         var captured = 0
         val candidates = level.getEntitiesOfClass(Entity::class.java, box) {
-            it !is Player && !it.isPassenger && (it !is LivingEntity || it is ArmorStand) &&
+            it !is Player && !it.isPassenger &&
+                // Living things are cargo, not ship -- except furniture (armour stands) and, for pirate-hull
+                // authoring only, the raider crew that IS the design. See the capture() doc on admitRaiders.
+                (it !is LivingEntity || it is ArmorStand || (admitRaiders && it is Raider)) &&
                 // Loose items and orbs are not part of a ship, and capturing them is how a bottle turns into
                 // a duplicator. A dropped stack is written into the template as an entity, laid back out on
                 // release, and -- because it is on the deck of the ship that just came out -- captured again
@@ -286,6 +304,17 @@ object ShipTemplate {
                 continue // one bad fixture must not cost us the whole ship
             }
 
+            if (admitRaiders && entity is Raider) {
+                // A crew member generated an ocean from anywhere must still be aboard when someone finally
+                // sails near, so no despawning; and no patrolling, because patrol AI is a marching order to
+                // the nearest village and the deck is where these two belong. Done on the TAG rather than the
+                // live entity so the author's build props are left exactly as they stood.
+                tag.putBoolean("PersistenceRequired", true)
+                tag.remove("Patrolling")
+                tag.remove("patrol_target")
+                tag.remove("PatrolLeader")
+            }
+
             // Hanging things are positioned by the block they cling to, not by their own centre. Anchoring on the
             // attachment point keeps an item frame on its wall instead of a block off it. Everything else anchors
             // on its own position, clamped because placeEntities bounds-tests this and silently drops what is
@@ -330,11 +359,32 @@ object ShipTemplate {
         }
     }
 
+    /**
+     * Forget, in every captured helm, which PLACED pirate ship this was.
+     *
+     * The design keys stay -- template name and crew snapshots are what the copies are for -- but the live
+     * crew's UUIDs and the berth key are facts about one ship on one site, and a copy inheriting them would
+     * arrive claiming to be a ship that still exists. A null berth is precisely what tells the pirate
+     * manager "adopt me fresh".
+     */
+    private fun stripPirateInstanceState(template: StructureTemplate) {
+        for (palette in template.palettes) {
+            for (info in palette.blocks()) {
+                if (info.state.block !is ShipHelmBlock) continue
+                val tag = info.nbt ?: continue
+                tag.remove(PIRATE_CREW_UUIDS_KEY)
+                tag.remove(PIRATE_BERTH_KEY)
+            }
+        }
+    }
+
     /** Mirrors the private constants in ShipHelmBlockEntity; the tags are written by that class, not this one. */
     private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
     private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
     private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
     private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
+    private const val PIRATE_CREW_UUIDS_KEY = "vs_eureka:pirate_crew_uuids"
+    private const val PIRATE_BERTH_KEY = "vs_eureka:pirate_berth"
 
     /**
      * Place a saved template into the world with its corner at [at], as loose blocks -- no ship is created.

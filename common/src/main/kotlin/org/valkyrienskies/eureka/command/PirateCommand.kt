@@ -1,30 +1,45 @@
 package org.valkyrienskies.eureka.command
 
 import com.mojang.brigadier.CommandDispatcher
+import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.context.CommandContext
 import net.minecraft.ChatFormatting
 import net.minecraft.commands.CommandSourceStack
+import net.minecraft.commands.Commands.argument
 import net.minecraft.commands.Commands.literal
+import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.server.permissions.Permissions
+import net.minecraft.util.ProblemReporter
+import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.storage.TagValueOutput
+import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
+import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.crew.CrewStations
+import org.valkyrienskies.eureka.template.ShipTemplate
+import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
 /**
  * "/vs pirate ..." -- the harness for the pirate-ship machinery.
  *
  * DEV ONLY, remove before release with the other debug commands (see ROADMAP 6c). Like
  * [ShipTemplateCommand] it merges into VS2's "vs" root and is gated on COMMANDS_GAMEMASTER --
- * `set-mark` mints the two helm states that are deliberately unobtainable in survival and creative alike.
+ * `set-mark` mints the two helm states that are deliberately unobtainable in survival and creative alike,
+ * and `capture` is the authoring pen every shipped pirate hull is written with.
  *
  * `set-mark` is also the testing vehicle for the whole gate: mark any placed helm PIRATE and every one of
  * the fourteen doors can be walked in game without a single generated ship existing yet.
  */
 object PirateCommand {
+
+    /** Standing this close to the hull counts as aboard -- the same margin every crew box-test uses. */
+    private const val DECK_MARGIN = 2.0
 
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
@@ -37,8 +52,124 @@ object PirateCommand {
                             .then(literal("pirate").executes { setMark(it, HelmMark.PIRATE) })
                             .then(literal("taken").executes { setMark(it, HelmMark.TAKEN) })
                     )
+                    .then(
+                        literal("capture").then(
+                            argument("ship", ShipArgument.ships()).then(
+                                // greedyString, not word(): pirate hulls are namespaced "pirate/sloop" and
+                                // word() refuses the slash.
+                                argument("name", StringArgumentType.greedyString()).executes { capture(it) }
+                            )
+                        )
+                    )
             )
         )
+    }
+
+    /**
+     * Author a pirate hull: capture [ship] -- pillagers, papers, black wheel and all -- as a template a
+     * generated pirate ship can be placed from.
+     *
+     * The wheel is marked PIRATE and given its papers (template name, crew snapshots) BEFORE the capture,
+     * because the capture reads live block entities: that is what bakes the mark into the palette and the
+     * papers into the wheel's NBT, so a hull placed from this file arrives already pirate. The author's own
+     * ship is then restored to whatever mark it had -- the command borrows the wheel, it does not keep it.
+     *
+     * The crew is whoever is standing aboard: every live raider inside the hull's box. Their snapshots go
+     * into the wheel as the ship's COMPLEMENT (what the respawn brings back), and the same raiders ride the
+     * template's own entity list (what generation places on deck) -- two copies, two different jobs.
+     */
+    private fun capture(ctx: CommandContext<CommandSourceStack>): Int {
+        val ship = ShipArgument.getShip(ctx, "ship")
+        if (ship !is LoadedServerShip) {
+            ctx.source.sendFailure(
+                Component.literal("Ship '${ship.slug}' is not loaded -- get closer to it and try again.")
+            )
+            return 0
+        }
+        val name = StringArgumentType.getString(ctx, "name").trim()
+        val level = ctx.source.level
+
+        val helms = CrewStations.helmsAboard(level, ship) ?: run {
+            ctx.source.sendFailure(Component.literal("That ship's chunks are not readable right now."))
+            return 0
+        }
+        if (helms.size != 1) {
+            ctx.source.sendFailure(
+                Component.literal(
+                    "A pirate ship carries exactly one wheel -- this hull has ${helms.size}."
+                )
+            )
+            return 0
+        }
+        val helm = helms.single()
+
+        val hull = ship.worldAABB
+        val box = AABB(
+            hull.minX() - DECK_MARGIN, hull.minY() - DECK_MARGIN, hull.minZ() - DECK_MARGIN,
+            hull.maxX() + DECK_MARGIN, hull.maxY() + DECK_MARGIN, hull.maxZ() + DECK_MARGIN
+        )
+        val raiders = level.getEntitiesOfClass(Raider::class.java, box) { it.isAlive }
+        if (raiders.isEmpty()) {
+            ctx.source.sendFailure(
+                Component.literal("No pillagers aboard -- stand the crew on the deck before capturing.")
+            )
+            return 0
+        }
+        val snapshots = raiders.mapNotNull { snapshot(it) }
+        if (snapshots.isEmpty()) {
+            ctx.source.sendFailure(Component.literal("None of the crew aboard could be recorded."))
+            return 0
+        }
+
+        // Borrow the wheel: mark + papers on, capture, then put the author's mark back whatever happens.
+        val original = helm.blockState
+        level.setBlock(helm.blockPos, original.setValue(EurekaProperties.MARK, HelmMark.PIRATE), Block.UPDATE_ALL)
+        helm.pirateTemplate = name
+        helm.pirateCrew = snapshots
+        helm.setChanged()
+        val outcome = try {
+            ShipTemplate.capture(level, ship, name, keepShipName = false, admitRaiders = true)
+        } finally {
+            level.setBlock(helm.blockPos, original, Block.UPDATE_ALL)
+        }
+
+        return when (outcome) {
+            is ShipTemplate.Failed -> {
+                ctx.source.sendFailure(Component.literal(outcome.message))
+                0
+            }
+            is ShipTemplate.Captured -> {
+                val size = outcome.size
+                ctx.source.sendSuccess({
+                    Component.literal(
+                        "Captured pirate hull '${outcome.id}' -- ${"%,d".format(outcome.blocks)} blocks, " +
+                            "${snapshots.size} crew, ${size.x}x${size.y}x${size.z}. " +
+                            "Load-test it with /vs template load $name"
+                    ).withStyle(ChatFormatting.GREEN)
+                }, true)
+                1
+            }
+            else -> 0
+        }
+    }
+
+    /**
+     * A raider written down as this hull's complement: persistent (a ship generated an ocean from anywhere
+     * must still be crewed when someone sails near) and stripped of patrol ambitions (patrol AI is a
+     * marching order to the nearest village). Tag-level on purpose -- the author's live build props are
+     * left exactly as they stood. Stale position and UUID stay in the snapshot; every restore path assigns
+     * both fresh.
+     */
+    private fun snapshot(raider: Raider): CompoundTag? = try {
+        val output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, raider.registryAccess())
+        if (!raider.save(output)) null else output.buildResult().also {
+            it.putBoolean("PersistenceRequired", true)
+            it.remove("Patrolling")
+            it.remove("patrol_target")
+            it.remove("PatrolLeader")
+        }
+    } catch (ex: Exception) {
+        null
     }
 
     /**
