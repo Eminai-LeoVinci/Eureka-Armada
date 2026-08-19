@@ -10,6 +10,7 @@ import org.valkyrienskies.eureka.EurekaScreens
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
 import org.valkyrienskies.eureka.command.AssemblerPreferences
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.ship.ControlProfile
 import kotlin.math.roundToInt
 
@@ -350,6 +351,11 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     override fun clickMenuButton(player: Player, id: Int): Boolean {
         if (blockEntity == null) return false
         val server = !player.level().isClientSide
+
+        // Pirate gate, door 9 of 14: the menu cannot OPEN on a pirate wheel, but a modified client can
+        // still send clicks at one. Swallow everything server-side -- same shape as the armada-child
+        // lock just below.
+        if (server && PirateHelm.gated(blockEntity.blockState)) return true
 
         // A ship bound as an armada child is read-only from its own helm: swallow every ship-control action
         // server-side (the client greys these out too, but a modified client could still send the click). The

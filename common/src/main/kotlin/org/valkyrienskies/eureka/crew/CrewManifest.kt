@@ -20,6 +20,7 @@ import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import java.util.UUID
 
 /**
@@ -683,6 +684,13 @@ object CrewManifest {
     fun stationAt(level: ServerLevel, player: ServerPlayer, helm: Long): ShipHelmBlockEntity? {
         val station = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return null
         if (!station.isCrewStation) return null
+
+        // Pirate gate, door 12 of 14: every manifest card action AND every CrewOperations.request* funnels
+        // through this lookup, so one refusal here closes the whole payload band at once.
+        if (PirateHelm.gated(station.blockState)) {
+            PirateHelm.deny(player)
+            return null
+        }
 
         // Helms live at SHIPYARD coordinates once assembled, so the player's world position has to be compared
         // against where the wheel actually is, not against the address it is filed under.

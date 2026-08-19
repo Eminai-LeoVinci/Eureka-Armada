@@ -15,6 +15,7 @@ import net.minecraft.world.item.component.CustomData
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.template.ShipManifest
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
@@ -71,6 +72,12 @@ object Blueprint {
      * page, and even that is only spent once the template is safely on disk.
      */
     fun draft(level: ServerLevel, player: ServerPlayer, helm: BlockPos): ItemStack? {
+        // Pirate gate, door 7 of 14: a drafted pirate ship is a pirate ship handed to the shipwright.
+        // The blank page is kept -- nothing is spent on a refusal.
+        if (PirateHelm.gated(level.getBlockState(helm))) {
+            PirateHelm.deny(player)
+            return null
+        }
         val ship = level.getLoadedShipManagingPos(helm) as? LoadedServerShip ?: run {
             PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
             return null

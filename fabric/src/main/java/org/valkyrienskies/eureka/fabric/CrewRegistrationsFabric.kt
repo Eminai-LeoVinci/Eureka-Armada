@@ -13,6 +13,8 @@ import net.fabricmc.fabric.api.`object`.builder.v1.trade.TradeOfferHelper
 import net.fabricmc.fabric.api.`object`.builder.v1.world.poi.PointOfInterestHelper
 import net.minecraft.world.InteractionResult
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.crew.CrewBerths
 import org.valkyrienskies.eureka.crew.CrewLedger
@@ -48,11 +50,18 @@ object CrewRegistrationsFabric {
         // Exactly one call site, deliberately: PoiTypes.registerBlockStates throws
         // "<state> is defined in more than one PoI type" on a duplicate, and it is wrapped in Util.pauseInIde,
         // so a second registration is a hard startup crash rather than a warning.
+        //
+        // Pirate gate, door 13 of 14: only NORMAL-marked states are job sites. A pirate's wheel must never
+        // employ a villager, and TAKEN is excluded with it -- POI membership is baked here once and cannot
+        // follow the TAKEN->PIRATE flip when the crew respawns, so a claim made in that window would leave a
+        // stale ticket on a hostile ship. Nothing is lost: conquest ends with a fresh NORMAL helm placed.
         PointOfInterestHelper.register(
             CrewProfession.POI_ID,
             EurekaConfig.SERVER.crewmanHelmPoiTickets,
             EurekaConfig.SERVER.crewmanHelmPoiRange,
-            *CrewProfession.helmBlocks()
+            CrewProfession.helmBlocks()
+                .flatMap { it.stateDefinition.possibleStates }
+                .filter { it.getValue(EurekaProperties.MARK) == HelmMark.NORMAL }
         )
 
         // The shipwright's bench: an ORDINARY job site, one ticket, like a lectern. The helm above is the odd

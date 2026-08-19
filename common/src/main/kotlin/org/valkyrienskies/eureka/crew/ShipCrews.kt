@@ -17,6 +17,7 @@ import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.getShipMountedTo
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -418,6 +419,11 @@ object ShipCrews {
     @JvmStatic
     fun openHelm(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
         if (!withinBookReach(level, player, helm)) return
+        // Pirate gate, door 10 of 14: the manifest's Back button is its own road to the menu.
+        if (PirateHelm.gated(helm.blockState)) {
+            PirateHelm.deny(player)
+            return
+        }
         player.openMenu(helm)
     }
 
@@ -436,6 +442,11 @@ object ShipCrews {
     }
 
     private fun showArticles(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
+        // Pirate gate, door 8 of 14: Sneak+C at the wheel and the helm menu's book both land here.
+        if (PirateHelm.gated(helm.blockState)) {
+            PirateHelm.deny(player)
+            return
+        }
         val ship = CrewStations.shipOf(level, helm)
         if (ship == null) {
             PathMessages.send(player, "Assemble the ship first -- articles are kept by a ship's wheel.", PathMessages.Kind.ERROR)

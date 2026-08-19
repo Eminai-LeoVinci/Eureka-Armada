@@ -17,6 +17,7 @@ import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.valkyrienskies.eureka.EurekaConfig;
+import org.valkyrienskies.eureka.pirate.PirateHelm;
 import org.valkyrienskies.eureka.util.ShipFireBurn;
 import org.valkyrienskies.mod.common.VSGameUtilsKt;
 
@@ -159,6 +160,31 @@ public class MixinShipFireContainment {
         if (level.getBlockState(neighbour) != before) {
             ShipFireBurn.INSTANCE.forget(serverLevel, firePos);
         }
+    }
+
+    /**
+     * A pirate's wheel never burns -- at sea or ashore. Helms are registered flammable, and a generated
+     * pirate hull is ordinary world blocks until it assembles, so a deck fire walking the hull would
+     * otherwise consume the conquest objective with nobody even aboard. Zero burn odds is the one
+     * interception that covers BOTH of vanilla's consumption branches (replace-with-fire and removeBlock):
+     * {@code random.nextInt(chance) < 0} is never true, so the wheel chars in place and outlives the fire.
+     * The predicate is PIRATE-only; a TAKEN or ordinary wheel burns exactly as before.
+     */
+    @WrapOperation(
+        method = "checkBurnOut",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/level/block/FireBlock;getBurnOdds"
+                + "(Lnet/minecraft/world/level/block/state/BlockState;)I"
+        )
+    )
+    private int vs_eureka$aPirateWheelNeverBurns(
+        final FireBlock self, final BlockState state, final Operation<Integer> getBurnOdds) {
+
+        if (PirateHelm.inviolable(state)) {
+            return 0;
+        }
+        return getBurnOdds.call(self, state);
     }
 
     /**

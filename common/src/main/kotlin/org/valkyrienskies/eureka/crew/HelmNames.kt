@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.state.BlockState
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.mod.common.vsCore
 
 /**
@@ -119,6 +120,8 @@ object HelmNames {
     fun rename(level: ServerLevel, player: ServerPlayer, pos: BlockPos, raw: String): Boolean {
         val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: return false
         if (!withinReach(level, player, helm)) return false
+        // Pirate gate, door 11 of 14 (first half): silent -- these arrive from screens door 1 already refused.
+        if (PirateHelm.gated(helm.blockState)) return false
 
         val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
         val ledger = CrewLedger.get(level.server)
@@ -179,6 +182,8 @@ object HelmNames {
     fun renameShip(level: ServerLevel, player: ServerPlayer, pos: BlockPos, raw: String): Boolean {
         val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: return false
         if (!withinReach(level, player, helm)) return false
+        // Pirate gate, door 11 of 14 (second half).
+        if (PirateHelm.gated(helm.blockState)) return false
         val ship = CrewStations.shipOf(level, helm) ?: return false
         val slug = slugOf(Component.literal(StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)))
             ?: return false

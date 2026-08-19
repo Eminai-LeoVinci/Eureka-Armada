@@ -24,6 +24,7 @@ import org.valkyrienskies.eureka.crew.CrewMuster
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
@@ -75,6 +76,11 @@ object ShipBottle {
      * thing you then *throw*, and the throw is where the ship goes.
      */
     fun mark(level: ServerLevel, player: ServerPlayer, helm: BlockPos, stack: ItemStack): Boolean {
+        // Pirate gate, door 5 of 14: without this, a Ship Bottle is a free ship -- walk up, click, throw.
+        if (PirateHelm.gated(level.getBlockState(helm))) {
+            PirateHelm.deny(player)
+            return false
+        }
         val ship = level.getLoadedShipManagingPos(helm) as? LoadedServerShip ?: run {
             PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
             return false
@@ -188,6 +194,15 @@ object ShipBottle {
     // that failed after deletion would trade somebody's ship for an empty bottle.
     fun take(level: ServerLevel, player: ServerPlayer, helm: BlockPos): ItemStack? {
         val helmEntity = level.getBlockEntity(helm) as? ShipHelmBlockEntity ?: return null
+
+        // Pirate gate, door 6 of 14 -- the DEFERRED door. A bottle marked while this ship was still honest
+        // resolves its wheel all the way to the taking, so the gate at mark() alone would leave a pre-marked
+        // bottle as a free conquest. Null here is the flight's own "could not take" answer: the thrown
+        // bottle keeps its empty self and flies home.
+        if (PirateHelm.gated(level.getBlockState(helm))) {
+            PirateHelm.deny(player)
+            return null
+        }
 
         // A wheel sitting in the world steers nothing -- only an assembled hull can be bottled. Resolved here
         // rather than at the call site because VS2's ship lookups are Kotlin extensions that only resolve in

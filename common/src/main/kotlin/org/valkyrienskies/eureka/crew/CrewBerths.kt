@@ -11,6 +11,7 @@ import net.minecraft.world.item.Items
 import net.minecraft.world.level.Level
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.pirate.PirateHelm
 
 /**
  * A Heart of the Sea offered to a helm buys one more berth.
@@ -41,6 +42,14 @@ object CrewBerths {
         if (!stack.`is`(Items.HEART_OF_THE_SEA)) return InteractionResult.PASS
         if (level.isClientSide) return InteractionResult.SUCCESS
         val serverPlayer = player as? ServerPlayer ?: return InteractionResult.PASS
+
+        // Pirate gate, door 3+4 of 14: both arms of the Heart gesture funnel here (standing via
+        // ShipHelmBlock.useItemOn, crouching via the UseBlockCallback in CrewRegistrationsFabric).
+        // CONSUME spends the click but not the heart, and stops the fall-through opening anything.
+        if (PirateHelm.gated(level.getBlockState(pos))) {
+            PirateHelm.deny(serverPlayer)
+            return InteractionResult.CONSUME
+        }
 
         val cap = EurekaConfig.SERVER.crewSlotsMax
         val current = CrewData.slots(serverPlayer)

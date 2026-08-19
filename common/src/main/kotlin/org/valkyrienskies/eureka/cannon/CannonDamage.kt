@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.block.BaseFireBlock
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.gameevent.GameEvent
+import org.valkyrienskies.eureka.pirate.PirateHelm
 
 /**
  * Taking a measured bite out of whatever the shot hit.
@@ -66,6 +67,10 @@ object CannonDamage {
                 // Bedrock and its kin report a negative hardness. A gun that could chew through those would
                 // make the world's floor a suggestion.
                 if (state.getDestroySpeed(level, pos) < 0) continue
+                // A pirate's wheel is inviolable while its crew lives. Without this, one lucky round pops
+                // the conquest objective off the hull and skips the whole fight -- and hands nobody an item,
+                // which reads as a bug twice over.
+                if (PirateHelm.inviolable(state)) continue
                 taken.add(pos)
             }
 

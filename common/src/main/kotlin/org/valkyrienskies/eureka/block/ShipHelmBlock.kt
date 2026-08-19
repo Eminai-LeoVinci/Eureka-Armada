@@ -24,13 +24,17 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.state.StateDefinition
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.pathfinder.PathComputationType
+import net.minecraft.world.level.storage.loot.LootParams
+import net.minecraft.world.level.Explosion
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
+import java.util.function.BiConsumer
 import org.valkyrienskies.core.api.attachment.getAttachment
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewBerths
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
@@ -112,6 +116,11 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         blockHitResult: BlockHitResult
     ): InteractionResult {
         if (level.isClientSide) return InteractionResult.SUCCESS
+        // Pirate gate, door 1+2 of 14: the menu and the seat. See PirateHelm for the census.
+        if (PirateHelm.gated(state)) {
+            PirateHelm.deny(player)
+            return InteractionResult.CONSUME
+        }
         val blockEntity = level.getBlockEntity(pos) as ShipHelmBlockEntity
 
         return if (player.isSecondaryUseActive) {
@@ -123,6 +132,52 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         } else if (blockEntity.sit(player)) {
             InteractionResult.CONSUME
         } else InteractionResult.PASS
+    }
+
+    /**
+     * A PIRATE wheel cannot be mined -- by anyone, with anything. Zero progress is what makes the block
+     * FEEL inviolable (no cracks, no swing progress) rather than snapping back after the fact. This is the
+     * break half of the pirate gate; the interaction half is in [useWithoutItem]. The server consults this
+     * once per break attempt, which is where the refusal message comes from; TAKEN falls through and breaks
+     * normally, because breaking a dead pirate's wheel is the conquest.
+     */
+    override fun getDestroyProgress(
+        state: BlockState,
+        player: Player,
+        level: BlockGetter,
+        pos: BlockPos
+    ): Float {
+        if (PirateHelm.inviolable(state)) {
+            PirateHelm.denyBreak(player)
+            return 0.0f
+        }
+        return super.getDestroyProgress(state, player, level, pos)
+    }
+
+    /**
+     * A PIRATE wheel is never an item -- not by silk touch, not by any loot path. One override here beats
+     * conditions in nine per-wood loot JSONs, and it also covers destroyBlock(drop=true) and explosion
+     * drops in a single place. TAKEN drops the ordinary wood helm: that is loot, and it is sanctioned.
+     */
+    override fun getDrops(state: BlockState, params: LootParams.Builder): MutableList<ItemStack> {
+        if (PirateHelm.inviolable(state)) return mutableListOf()
+        return super.getDrops(state, params)
+    }
+
+    /**
+     * Explosions cannot pop a PIRATE wheel either -- a creeper on deck or a lucky TNT raft must not hand
+     * out the conquest for free. Cannon fire is guarded separately in CannonDamage (it removes blocks
+     * directly, never through the explosion path), and deck fires in MixinShipFireContainment.
+     */
+    override fun onExplosionHit(
+        state: BlockState,
+        level: ServerLevel,
+        pos: BlockPos,
+        explosion: Explosion,
+        dropConsumer: BiConsumer<ItemStack, BlockPos>
+    ) {
+        if (PirateHelm.inviolable(state)) return
+        super.onExplosionHit(state, level, pos, explosion, dropConsumer)
     }
 
     override fun getRenderShape(blockState: BlockState): RenderShape {
