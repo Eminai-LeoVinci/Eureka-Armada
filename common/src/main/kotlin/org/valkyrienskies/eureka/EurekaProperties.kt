@@ -3,9 +3,16 @@ package org.valkyrienskies.eureka
 import net.minecraft.world.level.block.state.properties.EnumProperty
 import net.minecraft.world.level.block.state.properties.IntegerProperty
 import org.valkyrienskies.eureka.block.CannonPart
+import org.valkyrienskies.eureka.block.HelmMark
 
 object EurekaProperties {
     val HEAT = IntegerProperty.create("heat", 0, 4)
+
+    /**
+     * Who a ship helm answers to. See [HelmMark]. Shared by ShipHelmBlock and the virtual
+     * ShipHelmWheelBlock so the renderer can copy it across with a single setValue.
+     */
+    val MARK: EnumProperty<HelmMark> = EnumProperty.create("mark", HelmMark::class.java)
 
     /** Which half of a two-block cannon this is. See [CannonPart]. */
     val CANNON_PART: EnumProperty<CannonPart> = EnumProperty.create("part", CannonPart::class.java)

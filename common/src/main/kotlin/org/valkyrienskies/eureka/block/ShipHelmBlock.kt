@@ -28,6 +28,7 @@ import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
 import org.valkyrienskies.core.api.attachment.getAttachment
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewBerths
 import org.valkyrienskies.eureka.ship.EurekaShipControl
@@ -43,7 +44,11 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     val HELM_SHAPE = DirectionalShape(RotShapes.or(HELM_BASE, HELM_POLE))
 
     init {
-        registerDefaultState(this.stateDefinition.any().setValue(HORIZONTAL_FACING, Direction.NORTH))
+        registerDefaultState(
+            this.stateDefinition.any()
+                .setValue(HORIZONTAL_FACING, Direction.NORTH)
+                .setValue(EurekaProperties.MARK, HelmMark.NORMAL)
+        )
     }
 
     override fun onPlace(state: BlockState, level: Level, pos: BlockPos, oldState: BlockState, isMoving: Boolean) {
@@ -130,7 +135,7 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     }
 
     override fun createBlockStateDefinition(builder: StateDefinition.Builder<Block, BlockState>) {
-        builder.add(HORIZONTAL_FACING)
+        builder.add(HORIZONTAL_FACING, EurekaProperties.MARK)
     }
 
     override fun newBlockEntity(blockPos: BlockPos, state: BlockState): BlockEntity {

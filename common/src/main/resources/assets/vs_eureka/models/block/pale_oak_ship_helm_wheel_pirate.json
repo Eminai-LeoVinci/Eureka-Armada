@@ -1,0 +1,11 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_wheel",
+    "textures": {
+        "log": "block/pale_oak_log",
+        "log_top": "block/pale_oak_log_top",
+        "planks": "block/pale_oak_planks",
+        "iron_block": "block/iron_block",
+        "particle": "block/pale_oak_planks",
+        "gold_block": "block/black_concrete_powder"
+    }
+}

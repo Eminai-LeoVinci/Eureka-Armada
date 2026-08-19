@@ -51,6 +51,7 @@ import org.valkyrienskies.eureka.path.PathCommand;
 import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
+import org.valkyrienskies.eureka.command.PirateCommand;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
@@ -91,6 +92,8 @@ public class EurekaModFabric implements ModInitializer {
             // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
             // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
             ShipTemplateCommand.INSTANCE.register(dispatcher);
+            // "/vs pirate set-mark ..." -- DEV ONLY, remove before release. The pirate machinery's harness.
+            PirateCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
             ArmadaCommand.INSTANCE.register(dispatcher);
             // "/armada route list|info|rename|delete|stop" -- merges onto the same "armada" literal.

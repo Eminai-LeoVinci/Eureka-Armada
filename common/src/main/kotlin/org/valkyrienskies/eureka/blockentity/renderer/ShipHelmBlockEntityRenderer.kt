@@ -12,6 +12,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.phys.Vec3
 import org.joml.Quaternionf
 import org.valkyrienskies.eureka.EurekaBlocks
+import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.block.ShipHelmWheelBlock
 import org.valkyrienskies.eureka.block.WoodType
@@ -55,6 +56,8 @@ class ShipHelmBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         val woodType = helmBlock.woodType as? WoodType ?: return
         val wheelState = EurekaBlocks.SHIP_HELM_WHEEL.get().defaultBlockState()
             .setValue(ShipHelmWheelBlock.WOOD, woodType)
+            // The hub colour follows the helm's mark: blue, pirate black, or conquered white.
+            .setValue(EurekaProperties.MARK, state.blockState.getValue(EurekaProperties.MARK))
 
         poseStack.pushPose()
         // Wheel pivot above the helm base.
