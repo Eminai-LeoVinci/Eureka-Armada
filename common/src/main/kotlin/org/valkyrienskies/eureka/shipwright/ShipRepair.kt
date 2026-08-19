@@ -14,6 +14,7 @@ import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.util.logger
 
 /**
  * Putting a damaged ship back the way its plans say it should be.
@@ -28,8 +29,10 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  * Three questions have to agree before a repair is allowed, and they are asked in cheapening order so a
  * mismatch costs as little as possible:
  *
- *  1. **Dimensions.** A hull that is not the same size as the plans is not that ship, and this is one integer
- *     comparison.
+ *  1. **Dimensions.** A hull must FIT INSIDE the plans, which is one integer comparison per axis. Not match
+ *     them: a damaged hull measures smaller than its plans by definition, so demanding equality turned away
+ *     every ship actually worth mending. Bigger than the plans is what disqualifies a hull, because no amount
+ *     of damage grows a ship.
  *  2. **Name.** The plans are filed under a ship's name, and that is the identity the whole shelf is keyed on.
  *  3. **Shape.** At least [matchPercent] of the plans' non-air blocks must already be in place, counted as a
  *     total rather than per block-type. A ship stripped of its entire rigging is still that ship; a per-type
@@ -40,11 +43,15 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  * overwritten by somebody else's.
  *
  * ## Where the blocks are
- * A template captured from a ship is anchored at that ship's `shipAABB` minimum, so template position `p` is
- * shipyard position `min + p`. That is the whole of the coordinate maths, and it is why a repair can compare
- * block for block without transforming anything: both sides are in the ship's own space.
+ * Both sides live in the ship's own space, so a repair compares block for block without transforming anything.
+ * What it cannot do is assume the two are laid down from the same corner: the plans were drawn round a whole
+ * ship and the hull is measured round a damaged one, and damage moves that corner. [align] is what finds the
+ * corner the plans actually belong on, and everything -- the match, the bill, the blocks written back -- hangs
+ * off its answer.
  */
 object ShipRepair {
+
+    private val logger by logger()
 
     /**
      * How much of a hull must still match its plans before a shipwright accepts it as the same ship, as a
@@ -84,7 +91,8 @@ object ShipRepair {
      * same thing as saying there is nothing to do.
      */
     class Assessment(
-        val sizeMatches: Boolean,
+        /** Whether the hull is small enough to BE these plans -- see the fit test in [assess]. */
+        val fits: Boolean,
         val nameMatches: Boolean,
         /** 0..1 of the plans' non-air blocks already correct. */
         val match: Float,
@@ -92,13 +100,13 @@ object ShipRepair {
         /** Shipyard positions that need writing, with the state to write. Empty unless [accepted]. */
         val repairs: List<Pair<BlockPos, BlockState>>
     ) {
-        val accepted: Boolean get() = sizeMatches && nameMatches && match >= matchThreshold
+        val accepted: Boolean get() = fits && nameMatches && match >= matchThreshold
         val sound: Boolean get() = accepted && missing.isEmpty()
 
         /** Why a shipwright turned this away, or null if it did not. */
         val refusal: String?
             get() = when {
-                !sizeMatches -> "That hull is not the size these plans describe."
+                !fits -> "That hull is bigger than these plans describe."
                 !nameMatches -> "These plans are for a different ship."
                 match < matchThreshold ->
                     "Too little of that hull matches these plans -- ${(match * 100).toInt()}% of it, and a " +
@@ -107,8 +115,94 @@ object ShipRepair {
             }
     }
 
-    /** A hull's tight block bounds: the corner its plans are anchored at, and how big it actually is. */
+    /** A hull's tight block bounds: the corner it is measured from, and how big it actually is. */
     class Bounds(val min: BlockPos, val width: Int, val height: Int, val length: Int, val blocks: Int)
+
+    /**
+     * Where the plans' own (0,0,0) belongs in the shipyard -- the corner the whole comparison hangs off.
+     *
+     * ## Why this cannot simply be the wreck's corner
+     * It used to be, and that was a real bug rather than a simplification. Both sides measure a TIGHT box
+     * round the solid blocks they can see: `ShipTemplate.capture` did it to a whole ship, [bounds] does it to
+     * what is left of one. So the moment damage takes a block off the minimum face -- the lowest X, Y or Z
+     * anywhere on the hull -- the wreck's corner stops being the corner the plans were drawn from, and every
+     * block in the plans gets compared one step out of place.
+     *
+     * A real case: a 29x88x98 ship came back 28x88x98, having lost its outermost column. Compared from its
+     * own corner it scored 29% and was turned away as a stranger. Shifted one block, the same hull and the
+     * same plans agreed 81%. Nothing was wrong with the ship, the threshold, or the plans -- the two were
+     * being laid on top of each other askew.
+     *
+     * ## Finding it
+     * Damage only ever removes blocks, so the wreck sits somewhere INSIDE the plans and each axis can only be
+     * short by the difference between the two spans. That difference IS the search: an axis that still
+     * measures full width offers exactly one candidate, and a normal wreck offers a handful in total. Each is
+     * scored on a sample of the plans' blocks and the best-fitting corner wins, nearest-first so an
+     * unambiguous hull keeps the corner it already had.
+     */
+    private fun align(level: ServerLevel, template: StructureTemplate, hull: Bounds): BlockPos {
+        val size = template.size
+        val xs = candidates(hull.width, size.x)
+        val ys = candidates(hull.height, size.y)
+        val zs = candidates(hull.length, size.z)
+
+        // Nothing to hunt for: every axis still measures its full span, so the wreck's corner IS the plans'.
+        // The common case, and it costs nothing.
+        if (xs.size == 1 && ys.size == 1 && zs.size == 1) return hull.min
+
+        val infos = template.palettes.firstOrNull()?.blocks()?.filter { !it.state.isAir }.orEmpty()
+        if (infos.isEmpty()) return hull.min
+        val step = maxOf(1, infos.size / ALIGN_SAMPLE)
+        val sample = infos.filterIndexed { index, _ -> index % step == 0 }
+
+        var best = BlockPos.ZERO
+        var bestHits = -1
+        val cursor = BlockPos.MutableBlockPos()
+
+        for (dx in xs) {
+            for (dy in ys) {
+                for (dz in zs) {
+                    var hits = 0
+                    for (info in sample) {
+                        cursor.set(
+                            hull.min.x + info.pos.x + dx,
+                            hull.min.y + info.pos.y + dy,
+                            hull.min.z + info.pos.z + dz
+                        )
+                        if (!level.hasChunkAt(cursor)) continue
+                        if (level.getBlockState(cursor).block == info.state.block) hits++
+                    }
+                    // Strictly better, and the candidates run nearest-first, so a tie keeps the smaller shift.
+                    if (hits > bestHits) {
+                        bestHits = hits
+                        best = BlockPos(dx, dy, dz)
+                    }
+                }
+            }
+        }
+
+        if (best != BlockPos.ZERO) {
+            logger.info(
+                "[shipwright] plans laid ${best.x},${best.y},${best.z} off the hull's own corner " +
+                    "(${hull.width}x${hull.height}x${hull.length} of ${size.x}x${size.y}x${size.z}); " +
+                    "$bestHits of ${sample.size} sampled blocks agree there"
+            )
+        }
+        return hull.min.offset(best.x, best.y, best.z)
+    }
+
+    /**
+     * How far the plans might have to slide along one axis, nearest first.
+     *
+     * Zero when the hull still spans as much as the plans do, and one step per block it has lost off that
+     * axis -- all of them negative, because a wreck can only have lost its lower face, never grown past it.
+     * A hull measuring LONGER than its plans gets the single zero candidate: it is about to be refused for
+     * not fitting, and there is no sense hunting for the corner of a ship this is not.
+     */
+    private fun candidates(hullSpan: Int, templateSpan: Int): List<Int> {
+        val reach = (templateSpan - hullSpan).coerceIn(0, ALIGN_REACH)
+        return (0..reach).map { -it }
+    }
 
     /**
      * The box a hull's **solid blocks** occupy, which is not the same thing as its `shipAABB`.
@@ -118,8 +212,8 @@ object ShipRepair {
      * min and max while walking them. Comparing one against the other is comparing two different measurements
      * of the same ship, and it reports every hull as the wrong size by however much slack its AABB carries.
      *
-     * This is also the anchor. Template position `p` is world position `min + p` where `min` is **this** min,
-     * not the AABB's -- they coincide often enough that getting it wrong still looks like it works.
+     * This is where the anchor is hunted from, not the anchor itself: on an undamaged hull the two are the
+     * same block, which is exactly why using this directly worked for so long. See [align].
      */
     fun bounds(level: ServerLevel, ship: LoadedServerShip): Bounds? {
         val aabb = ship.shipAABB ?: return null
@@ -193,8 +287,13 @@ object ShipRepair {
         val hull = bounds(level, ship) ?: return null
 
         val size = template.size
-        val sizeMatches = size.x == hull.width && size.y == hull.height && size.z == hull.length
+        // Fits INSIDE the plans, not matches them exactly. A damaged hull measures smaller than its plans by
+        // definition -- that is what damage IS -- so demanding equality rejected every ship worth mending and
+        // let through only the ones with nothing wrong. What genuinely disqualifies a hull is being BIGGER
+        // than the plans describe: no amount of damage grows a ship, so that is a different vessel.
+        val fits = hull.width <= size.x && hull.height <= size.y && hull.length <= size.z
         val nameMatches = ship.slug == plans.shipName
+        val anchor = align(level, template, hull)
 
         var wanted = 0
         var correct = 0
@@ -208,9 +307,9 @@ object ShipRepair {
                 wanted++
 
                 cursor.set(
-                    hull.min.x + info.pos.x,
-                    hull.min.y + info.pos.y,
-                    hull.min.z + info.pos.z
+                    anchor.x + info.pos.x,
+                    anchor.y + info.pos.y,
+                    anchor.z + info.pos.z
                 )
                 // Compared by BLOCK, not by full state. A door left open or a stair turned round is wear, not
                 // damage, and charging a player a fresh door for having opened one would be absurd.
@@ -226,7 +325,7 @@ object ShipRepair {
         }
 
         val match = if (wanted == 0) 1.0f else correct.toFloat() / wanted.toFloat()
-        return Assessment(sizeMatches, nameMatches, match, missing, repairs)
+        return Assessment(fits, nameMatches, match, missing, repairs)
     }
 
     /**
@@ -344,4 +443,16 @@ object ShipRepair {
     /** The ends of the match range, both excluded -- see [matchPercent] for why neither is a usable answer. */
     private const val MIN_PERCENT = 1
     private const val MAX_PERCENT = 99
+
+    /**
+     * The most [align] will shift the plans along one axis while hunting for the corner.
+     *
+     * A cap on work, not on meaning. The candidates come from the size difference, so an ordinary wreck
+     * offers one or two per axis and this is never reached; it only bites on a hull so comprehensively
+     * dismantled that the answer to "is this the same ship" was going to be no regardless.
+     */
+    private const val ALIGN_REACH = 16
+
+    /** How many of the plans' blocks [align] scores a candidate corner with. Enough to be decisive, cheaply. */
+    private const val ALIGN_SAMPLE = 512
 }
