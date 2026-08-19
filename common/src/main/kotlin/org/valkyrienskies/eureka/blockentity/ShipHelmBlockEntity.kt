@@ -70,6 +70,7 @@ import org.valkyrienskies.eureka.crew.CrewTickets
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
 import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipIntegrity
 import org.valkyrienskies.eureka.util.BuoyancyMath
 import org.valkyrienskies.eureka.util.EurekaAssembler
 import org.valkyrienskies.eureka.util.ShipAssembler
@@ -255,6 +256,19 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     // Live ship mass (kg) for the helm menu's read-only "Ship's Weight" box; 0 when this helm has no ship yet.
     // Same source as /vs get-ship-weight (ship.inertiaData.mass), synced to the client via two DataSlots.
     val shipMass: Int get() = (ship?.inertiaData?.mass ?: 0.0).roundToInt()
+
+    // What the hull's damage is costing, for the readout suffixes ("... | -X from Damage"). The speed cut
+    // and the missing blocks are recomputed from the live counts so the menu is current the tick it opens;
+    // the settle rate is the one the physics ACTUALLY applied last tick (damageSinkApplied), so a beached
+    // boat honestly reads no loss -- it has nowhere lower to go. All zero on a sound ship, which is what
+    // hides the suffixes. See ShipIntegrity.
+    val damageSpeedLossPercent: Int get() = control?.let {
+        ((1.0 - ShipIntegrity.speedMultiplier(ShipIntegrity.integrityPercent(it))) * 100).roundToInt()
+    } ?: 0
+    val damageSinkTenths: Int get() = ((control?.damageSinkApplied ?: 0.0) * 10).roundToInt()
+    val damageBlocksLost: Int get() = control?.let {
+        if (!it.blocksCounted) 0 else (it.assembledBlocks - it.currentBlocks).coerceAtLeast(0)
+    } ?: 0
 
     // Water Lock lives on the BOATS & SHIPS settings block, and the helm only offers it on that tab. It is
     // still a server-wide setting rather than a per-ship one -- ticking it turns the waterline hold on for
@@ -804,6 +818,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // altitude hold engage on man-made / elevated water bodies, not just the ocean at sea level.
         val sLevel = level
         if (curControl != null && curShip != null && sLevel is ServerLevel) {
+            // One-time bridge for ships that predate the damage system: count the hull as it actually
+            // stands (a ship damaged before the update owns that damage). Assembly stamps blocksCounted,
+            // so this is a no-op for everything assembled since. See ShipIntegrity.census.
+            if (!curControl.blocksCounted) ShipIntegrity.census(sLevel, curShip, curControl)
             // ~36 fluid reads per helm per sample, so only every 4th tick, staggered by block position so a
             // fleet of helms doesn't all sample on the same one. The hysteresis downstream (wet on contact,
             // dry only on a full clear -- see EurekaShipControl) absorbs a verdict up to 0.2s stale.
@@ -1159,6 +1177,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.anchorsActive = activeAnchorCount
             control.engines = engineCount
             control.assembledBlocks = blockCount
+            // The live count starts life equal to the baseline -- an assembly IS the definition of 100%
+            // integrity -- and this reset is also what heals any drift the per-block deltas ever picked up.
+            control.currentBlocks = blockCount
+            control.blocksCounted = true
             control.crewStationPos = crewStation
             // One station per ship, and a written record of where it landed. This wheel flagged itself
             // before the relocation; the wheels that did NOT win keep old flags forever unless somebody

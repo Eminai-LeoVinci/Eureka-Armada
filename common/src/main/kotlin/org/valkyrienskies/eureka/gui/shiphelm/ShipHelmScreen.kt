@@ -640,16 +640,25 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
         val s = ship ?: return
 
-        // Bottom-left info boxes -- the same three whatever the ship is.
-        val topLine = "Top Speed: ${menu.topSpeed}m/s~"
-        val blockLine = "Blocks: " + String.format("%,d", menu.blockCount)
+        // Bottom-left info boxes -- the same three whatever the ship is. The "from Damage" suffixes appear
+        // only once the hull is hurt enough for the number to be non-zero, so a sound ship's boxes read
+        // exactly as they always did; the suffixed lines outgrow their boxes and scroll (drawBoxText).
+        val speedLoss = menu.damageSpeedLossPercent
+        val speedSuffix = if (speedLoss > 0) " | -$speedLoss% from Damage" else ""
+        val lost = menu.damageBlocksLost
+        val topLine = "Top Speed: ${menu.topSpeed}m/s~$speedSuffix"
+        val blockLine = "Blocks: " + String.format("%,d", menu.blockCount) +
+            if (lost > 0) " | -" + String.format("%,d", lost) + " from Damage" else ""
         val dimLine = dimensionsText(s)
         drawBoxText(guiGraphics, topLine, INFO_X, boxRelY(INFO_Y0, 0), INFO_W)
         drawBoxText(guiGraphics, blockLine, INFO_X, boxRelY(INFO_Y0, 1), INFO_W)
         drawBoxText(guiGraphics, dimLine, INFO_X, boxRelY(INFO_Y0, 2), INFO_W)
 
         // Bottom-right: engine power, then the two readouts the category on show actually cares about.
-        val powerLine = if (menu.hasEngines) "Engine Power: ${menu.enginePower}%" else "Engine Power: --"
+        // The engines themselves are fine -- the suffix mirrors Top Speed's because a damaged hull wastes
+        // the same share of whatever they put out.
+        val powerLine = (if (menu.hasEngines) "Engine Power: ${menu.enginePower}%" else "Engine Power: --") +
+            (if (menu.hasEngines) speedSuffix else "")
         drawBoxText(guiGraphics, powerLine, ENG_X, boxRelY(INFO_Y0, 0), ENG_W)
         val (line1, line2) = categoryReadouts(s)
         drawBoxText(guiGraphics, line1, ENG_X, boxRelY(INFO_Y0, 1), ENG_W)
@@ -666,18 +675,30 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
      */
     private fun categoryReadouts(s: Ship): Pair<String, String> = when (viewedTab) {
         ControlProfile.BOAT ->
-            "Depth: " + blocks(menu.seabedDistance) to
+            "Depth: " + blocks(menu.seabedDistance) + sinkSuffix() to
                 // Shore means nothing once the hull is under; swap in the climb back to air, which is the
                 // reading that matters then -- and it is how the submersion detection can be seen working
                 // before there is a submarine control law to see it with.
                 if (menu.isSubmerged) "Surface: " + blocks(menu.surfaceDistance)
                 else "Shore: " + blocks(menu.shoreDistance)
         ControlProfile.AIRSHIP ->
-            "Altitude: " + s.transform.positionInWorld.y().roundToInt() to
+            "Altitude: " + s.transform.positionInWorld.y().roundToInt() + sinkSuffix() to
                 "Ground: " + blocks(menu.groundDistance)
         ControlProfile.SUBMARINE ->
-            "Seabed: " + blocks(menu.seabedDistance) to
+            "Seabed: " + blocks(menu.seabedDistance) + sinkSuffix() to
                 "Surface: " + blocks(menu.surfaceDistance)
+    }
+
+    /**
+     * The settle-rate suffix for the height/depth readout, or nothing while the ship is holding her own.
+     *
+     * The rate is the one the physics actually applied last tick, so it honestly reads nothing on a beached
+     * boat (nowhere lower to go) and on a hull already in freefall (falling is not settling).
+     */
+    private fun sinkSuffix(): String {
+        val tenths = menu.damageSinkTenths
+        if (tenths <= 0) return ""
+        return " | -" + String.format("%.1f", tenths / 10.0) + "m/s from Damage"
     }
 
     /** A block distance, or "--" for the server's "not known" sentinel (out of range / unloaded chunk). */
@@ -741,16 +762,40 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     }
 
     // Draw dark text centred in a bottom box (panel-relative x), auto-scaled so it fits the box width.
+    /**
+     * One info-box line, scrolled rather than shrunk when it outgrows its box.
+     *
+     * These boxes used to scale their text down to fit, which was fine while the longest thing in one was
+     * a dimensions string. The damage readouts changed that: "Top Speed: 24m/s~ | -50% from Damage" shrunk
+     * to fit 92 pixels is not text, it is a smudge -- and the whole point of a damage suffix is being read.
+     * So an over-long line keeps its size, is clipped to its box, and walks end to end on the shared
+     * [Marquee] clock, exactly as an over-long button label does. A line that fits never moves.
+     *
+     * The scissor takes the same panel-relative coordinates the draw does: enableScissor transforms its
+     * rectangle by the current pose, and renderLabels runs under the panel translation.
+     */
     private fun drawBoxText(guiGraphics: GuiGraphics, text: String, boxX: Int, topY: Int, boxW: Int) {
-        val widest = font.width(text).toFloat()
-        val scale = if (widest <= 0f) INFO_MAX_SCALE else minOf(INFO_MAX_SCALE, (boxW - 3) / widest)
+        val scale = INFO_MAX_SCALE
+        val shown = font.width(text) * scale
+        val inner = boxW - 3
         val pose = guiGraphics.pose()
+        val ty = (topY + (BOX_H - font.lineHeight * scale) / 2f) / scale
+
+        if (shown <= inner) {
+            pose.pushMatrix()
+            pose.scale(scale, scale)
+            guiGraphics.drawString(font, text, Math.round((boxX + 2) / scale), Math.round(ty), INFO_TEXT, false)
+            pose.popMatrix()
+            return
+        }
+
+        guiGraphics.enableScissor(boxX + 2, topY, boxX + inner, topY + BOX_H)
         pose.pushMatrix()
         pose.scale(scale, scale)
-        val tx = (boxX + 2) / scale
-        val ty = (topY + (BOX_H - font.lineHeight * scale) / 2f) / scale
-        guiGraphics.drawString(font, text, Math.round(tx), Math.round(ty), INFO_TEXT, false)
+        val slide = Marquee.offset(Math.round(shown - inner))
+        guiGraphics.drawString(font, text, Math.round((boxX + 2 - slide) / scale), Math.round(ty), INFO_TEXT, false)
         pose.popMatrix()
+        guiGraphics.disableScissor()
     }
 
     override fun keyPressed(keyEvent: KeyEvent): Boolean {

@@ -13,6 +13,7 @@ import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.path.ShipPaths
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.ship.ShipFootprint
+import org.valkyrienskies.eureka.ship.ShipIntegrity
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -94,6 +95,16 @@ object ShipFollows {
         val leader = world.loadedShips.getById(follower.leaderId)
         if (leader == null || leader.chunkClaimDimension != ship.chunkClaimDimension) {
             breakOff(level, ship, follower, "Lost contact -- the leader is gone.")
+            return
+        }
+
+        // A leader going down is not a leader to station on. Attachment gone means every helm aboard was
+        // broken (the control deletes itself with its last helm); too far gone means the damage floor put it
+        // in freefall. Either way the ship ahead is falling, and a follower that kept station would follow
+        // it faithfully into the ground or the seabed -- pursuit is for ships that are going somewhere.
+        val leaderControl = leader.getAttachment(EurekaShipControl::class.java)
+        if (leaderControl == null || ShipIntegrity.freefall(ShipIntegrity.integrityPercent(leaderControl))) {
+            breakOff(level, ship, follower, "Breaking off -- the leader is going down.")
             return
         }
 

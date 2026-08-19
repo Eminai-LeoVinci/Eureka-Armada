@@ -540,9 +540,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // server and not of whether this particular hull has anything to do this tick. [estimateTopSpeed]
         // needs it to work out how fast engines burn their heat off.
         physTickCount++
-        if (helms < 1) {
+        // A hull too far gone stands down exactly as a helmless one does: no forces, no gyro, plain physics
+        // and fluid drag. Everything is behind this return, so recovery is free too -- repair her back over
+        // the line and the very next tick stabilizes and answers the wheel. See ShipIntegrity.
+        damageIntegrity = ShipIntegrity.integrityPercent(this)
+        if (helms < 1 || ShipIntegrity.freefall(damageIntegrity)) {
             // Enable fluid drag if all the helms have been destroyed
             physShip.doFluidDrag = true
+            // Falling is not settling; the readout suffix would just be noise under a ship in freefall.
+            damageSinkApplied = 0.0
             return
         }
         // Disable fluid drag when helms are present, because it makes ships hard to drive. Per-category, and
@@ -662,6 +668,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         vesselSubmerged = pooledFullySubmerged
         hybridWet = inWater || (hybridWet && stillInWater)
         activeProfile = ControlProfile.classify(pooledBalloons, pooledFloaters, hybridWet)
+
+        // What the damage costs this tick. An airship settles wherever it is -- there is nothing under it
+        // but air -- while a boat loses buoyancy, which only means anything while the keel is actually in
+        // water: a beached wreck has nowhere lower to go. Computed once here, from THIS hull's integrity
+        // (a welded child never reaches this line; pooling child integrity is future work), and published
+        // so the helm's readouts report what was actually applied rather than a recomputation.
+        val damageSink = when {
+            activeProfile == ControlProfile.AIRSHIP -> ShipIntegrity.sinkRate(damageIntegrity)
+            stillInWater -> ShipIntegrity.sinkRate(damageIntegrity)
+            else -> 0.0
+        }
+        damageSinkApplied = damageSink
 
         var balloonForceProvided = pooledBalloons * forcePerBalloon
 
@@ -919,15 +937,22 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // verticalInputActive (computed above) is true whenever the pilot actively presses
             // ascend/descend -- including while cruising -- so cruise holds the depth only until you
             // press a key, and ascend/descend never drops cruise.
-            applyWaterAltitudeHold(body, idealUpwardVel, verticalInputActive)
+            applyWaterAltitudeHold(body, idealUpwardVel, verticalInputActive, damageSink)
         } else {
-            val idealUpwardForce = (idealUpwardVel.y() - vel.y() - (GRAVITY / cfg.elevationSnappiness)) *
+            // Damage biases BOTH terms of the vertical system down by the settle rate. The drag term used
+            // to damp vertical motion toward zero; damping it toward -sink instead makes a wounded airship
+            // settle at exactly that rate with no other change -- and the same subtraction from the
+            // commanded velocity means the pilot's ascend force fights the settling rather than being
+            // measured against a target the damage already moved. Identical to the old arithmetic when the
+            // sink is zero. See ShipIntegrity.
+            val idealUpwardForce =
+                (idealUpwardVel.y() - damageSink - vel.y() - (GRAVITY / cfg.elevationSnappiness)) *
                     mass * cfg.elevationSnappiness
 
             body.applyForce(Vector3d(0.0,
                 min(balloonForceProvided, max(idealUpwardForce, 0.0)) +
-                // Add drag to the y-component
-                vel.y() * -mass,
+                // Add drag to the y-component, damped toward the damage settle rate rather than zero.
+                (-damageSink - vel.y()) * mass,
                 0.0)
             )
         }
@@ -1013,10 +1038,18 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     private fun applyWaterAltitudeHold(
         body: ArmadaBody,
         idealUpwardVel: Vector3dc,
-        verticalInputActive: Boolean
+        verticalInputActive: Boolean,
+        damageSink: Double
     ) {
         val vel = body.velocity
         val mass = body.mass
+        // A damaged hull is losing its buoyancy, so the water lock is not allowed to hold what the ship can
+        // no longer hold: the latched setpoint itself slides down at the settle rate, and the lock then does
+        // its ordinary faithful job of keeping the hull ON a line that is now sinking. The pilot's ascend
+        // drives against the same offset, so power spent climbing genuinely buys height back.
+        if (damageSink > 0.0) {
+            holdTargetY = holdTargetY?.minus(damageSink * PHYS_DT)
+        }
         // The armada's own centre, so a formation holds ITS depth rather than the lead hull's -- and the hold
         // force, being distributed by mass share, lifts it level instead of tipping it about that hull.
         val currentY = body.centerOfMass.y()
@@ -1025,7 +1058,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // (so it feels identical), and keep the setpoint pinned here so releasing the key holds at
             // this exact depth. Net force = mass * elevationSnappiness * (targetVel - vel.y).
             holdTargetY = currentY
-            ((idealUpwardVel.y() - vel.y()) * cfg.elevationSnappiness - GRAVITY) * mass
+            ((idealUpwardVel.y() - damageSink - vel.y()) * cfg.elevationSnappiness - GRAVITY) * mass
         } else {
             // Holding: critically-damped spring to the latched Y. -GRAVITY cancels weight; the spring
             // and damping (the net force after gravity) pull the ship back to exactly holdTargetY and
@@ -1288,6 +1321,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             for (member in armadaMembers) member.physConsumption += consumption
         }
 
+        // Damage takes its cut of the WHOLE command -- base speed and engine term together -- and it takes
+        // it here, before the drag trim: the trim integrates the gap between commanded and actual speed, so
+        // scaled after it, the trim would spend its whole budget winding against the damage. Scaled before,
+        // the trim faithfully converges the ship onto the reduced command instead. The typed-cruise loop
+        // needs no separate handling -- it trims the throttle, the throttle saturates at 1.0, and full
+        // throttle through this multiplier IS the damaged ceiling; asking for more simply means full power,
+        // exactly as the clamp comment in setCruiseValueMenu promises. Integrity was published by physTick
+        // at the head of this same physics tick.
+        speed *= ShipIntegrity.speedMultiplier(damageIntegrity)
+
         // Drag trim: integrate the shortfall between the speed being asked for and the speed actually
         // being made, so the ship converges on the former instead of stalling out below it (see
         // dragTrimMps). Skipped while a typed cruise target is set, because that path already closes its
@@ -1448,6 +1491,26 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // non-air block count shown as "Blocks:". Plain vars (no deleteIfEmpty) so they never drop the attachment.
     var engines = 0
     var assembledBlocks = 0
+
+    // The ship's block count RIGHT NOW, kept honest by ShipIntegrity.onSetBlock one delta at a time --
+    // every block shot off, burned away, mined or repaired moves it the moment it happens. Against
+    // assembledBlocks this is the hull's integrity, which is what the damage repercussions run on.
+    var currentBlocks = 0
+
+    // Whether currentBlocks has ever been established from a REAL count -- an assembly, or the one-time
+    // census ShipIntegrity.census takes of a ship that predates the count. False means currentBlocks is
+    // meaningless (integrity reads 100 and no deltas apply), and false is exactly what every ship from an
+    // older save loads with, which is what gets a pre-damaged hull its true count instead of a guess: the
+    // first version of this seeded old ships AT their baseline, and a ship shot half to pieces before the
+    // feature existed then read 81% while the shipwright could plainly count 41% of it still standing.
+    var blocksCounted = false
+
+    // The hull's integrity as physTick last computed it, and the settle rate it actually applied -- zero
+    // when the ship is sound, out of the water (a beached boat cannot sink), or already ungoverned. Both
+    // published for the game thread: the helm's readouts show what the physics is really doing rather than
+    // recomputing what it ought to be, so a suffix can never disagree with the ship under the player's feet.
+    @JsonIgnore @Volatile var damageIntegrity = 100
+    @JsonIgnore @Volatile var damageSinkApplied = 0.0
 
     // Engine fuel-tank aggregate for the helm's "Engine Power: X%" readout. Each engine reports its fuel level
     // (a 0..1 fraction of a full fuel slot) once per tick via [reportEngineFuel]; onServerTick averages last
@@ -2024,6 +2087,14 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             get() = EurekaConfig.SERVER.massPerBalloon * -GRAVITY * EurekaConfig.SERVER.balloonLiftMultiplier
 
         private const val GRAVITY = -10.0
+
+        /**
+         * One physics tick, in seconds. VS-core steps its physics at 60 Hz (the same figure the path
+         * servo's stability note at [pathServo] is written against), and this file has always leaned on
+         * that rate implicitly; the water lock's sliding setpoint is just the first place that needs the
+         * number spelled out.
+         */
+        private const val PHYS_DT = 1.0 / 60.0
     }
 
     override fun onServerTick() {

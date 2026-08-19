@@ -6,7 +6,6 @@ import net.minecraft.client.gui.components.Button
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.util.FormattedCharSequence
-import net.minecraft.util.Util
 
 /**
  * A flat, code-drawn button for the ship-helm menu (border + fill + centred label), mirroring
@@ -58,28 +57,8 @@ class ShipHelmButton(
         // named by their captain, and captains do not name ships to fit a dropdown -- the old draw simply
         // centred whatever it was given and let long names spill across the panel.
         guiGraphics.enableScissor(x + LABEL_PAD, y + 1, x + width - LABEL_PAD, y + height - 1)
-        guiGraphics.drawString(font, label, x + LABEL_PAD - marquee(labelWidth - inner), baseline, textColor, false)
+        guiGraphics.drawString(font, label, x + LABEL_PAD - Marquee.offset(labelWidth - inner), baseline, textColor, false)
         guiGraphics.disableScissor()
-    }
-
-    /**
-     * How far the label is currently wound back, for an [overflow] of hidden pixels.
-     *
-     * Rests at each end before setting off again, and travels at a fixed speed rather than over a fixed
-     * time, so a very long name scrolls at the same readable pace as a slightly long one. Driven by the
-     * wall clock, which every button reads at once: a list of them scrolls together rather than each in
-     * its own rhythm.
-     */
-    private fun marquee(overflow: Int): Int {
-        val travel = (overflow * MS_PER_PIXEL).toLong().coerceAtLeast(1L)
-        val period = 2 * (PAUSE_MS + travel)
-        val t = Util.getMillis() % period
-        return when {
-            t < PAUSE_MS -> 0
-            t < PAUSE_MS + travel -> (overflow * (t - PAUSE_MS) / travel).toInt()
-            t < 2 * PAUSE_MS + travel -> overflow
-            else -> overflow - (overflow * (t - 2 * PAUSE_MS - travel) / travel).toInt()
-        }
     }
 
     override fun onClick(mouseButtonEvent: MouseButtonEvent, bl: Boolean) {
@@ -103,9 +82,5 @@ class ShipHelmButton(
 
         /** Breathing room either side of a label, and the strip an over-long one is clipped to. */
         private const val LABEL_PAD = 3
-
-        /** How long a scrolling label rests at each end, and how long it spends crossing one pixel. */
-        private const val PAUSE_MS = 1200L
-        private const val MS_PER_PIXEL = 30.0
     }
 }

@@ -63,6 +63,10 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedMassLow = 0      // low 16 bits of the ship mass (kg) for the read-only weight box
     private var syncedMassHigh = 0     // remaining high bits (a DataSlot transmits only a 16-bit short)
     private var syncedAssembled = false // is THIS helm's ship assembled (authoritative, not the client raycast)
+    private var syncedDamageSpeedLoss = 0 // percent of top speed lost to hull damage (0 = sound, hides suffix)
+    private var syncedDamageSink = 0      // damage settle rate in TENTHS of m/s, as the physics applied it
+    private var syncedDamageLostLow = 0   // blocks lost to damage, low 16 bits (counts can exceed a short)
+    private var syncedDamageLostHigh = 0  // blocks lost to damage, high bits
     private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
     private var syncedKeepName = true    // does this WHEEL re-apply the last ship name it saw
     private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
@@ -85,6 +89,24 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
         addDataSlot(object : DataSlot() {
             override fun get(): Int = blockEntity?.estimatedTopSpeed ?: 0
             override fun set(value: Int) { syncedTopSpeed = value }
+        })
+        // Damage readouts for the "... from Damage" suffixes: speed loss %, settle rate (tenths of m/s),
+        // and blocks lost (split like the block count -- a big ship can lose more than a short holds).
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.damageSpeedLossPercent ?: 0
+            override fun set(value: Int) { syncedDamageSpeedLoss = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.damageSinkTenths ?: 0
+            override fun set(value: Int) { syncedDamageSink = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (blockEntity?.damageBlocksLost ?: 0) and 0xFFFF
+            override fun set(value: Int) { syncedDamageLostLow = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (blockEntity?.damageBlocksLost ?: 0) ushr 16
+            override fun set(value: Int) { syncedDamageLostHigh = value }
         })
         // Water altitude-hold (global server flag) so the checkbox reflects the real value.
         addDataSlot(object : DataSlot() {
@@ -260,6 +282,11 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     val blockCount: Int get() = blockEntity?.assembledBlockCount
         ?: ((syncedBlockHigh shl 16) or (syncedBlockLow and 0xFFFF))
     val topSpeed: Int get() = blockEntity?.estimatedTopSpeed ?: syncedTopSpeed
+    // The damage suffixes' numbers. All zero on a sound ship, which is what hides the suffixes entirely.
+    val damageSpeedLossPercent: Int get() = blockEntity?.damageSpeedLossPercent ?: syncedDamageSpeedLoss
+    val damageSinkTenths: Int get() = blockEntity?.damageSinkTenths ?: syncedDamageSink
+    val damageBlocksLost: Int get() = blockEntity?.damageBlocksLost
+        ?: ((syncedDamageLostHigh shl 16) or (syncedDamageLostLow and 0xFFFF))
     val waterAltitudeHold: Boolean get() = blockEntity?.waterAltitudeHold ?: syncedWaterHold
 
     // The category this vessel is actually steering by. The helm's tab strip follows this; clicking a tab is

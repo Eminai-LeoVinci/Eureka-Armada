@@ -1243,6 +1243,64 @@ object EurekaConfig {
         )
         var shipwrightRepairPercentage = 60
 
+        // region Ship damage repercussions
+        // Integrity = the ship's current block count as a percentage of its count at assembly, so 100 is
+        // pristine and the numbers below are integrity thresholds, not damage amounts. Maintained live: every
+        // block shot off, burned away or mined lowers it the moment it happens; repairs raise it the same way.
+
+        @JsonSchema(
+            description = "Whether damage slows, sinks and eventually ungoverns a ship at all. Off, a hull " +
+                "shot half to pieces sails exactly like a new one. Default true."
+        )
+        var shipDamageRepercussions = true
+
+        @JsonSchema(
+            description = "Ship integrity (percent of its assembled block count) at which damage starts to " +
+                "cost speed. Default 95 -- a ship feels its first scratches almost at once, which is what " +
+                "makes the readout worth watching."
+        )
+        var damageSpeedLossStart = 95
+
+        @JsonSchema(
+            description = "Ship integrity at which the speed loss reaches its full damageSpeedLossMaxPercent " +
+                "-- the loss ramps linearly between this and damageSpeedLossStart, and worse damage costs no " +
+                "more. Default 45, which is a few points above the freefall line: a ship is at her slowest " +
+                "for a little while before she stops answering at all."
+        )
+        var damageSpeedLossFull = 45
+
+        @JsonSchema(
+            description = "The most speed a damaged ship can lose, as a percent of its top speed. Default 50."
+        )
+        var damageSpeedLossMaxPercent = 50
+
+        @JsonSchema(
+            description = "Ship integrity at which a damaged ship starts to settle -- airships lose altitude, " +
+                "boats lose buoyancy while their keel is in water. The rate ramps linearly from nothing here " +
+                "to damageSinkMaxMetersPerSecond at damageSinkFull. Ascend still applies its full force, so " +
+                "a ship with the power can fight the descent while repairs are made. Default 85."
+        )
+        var damageSinkStart = 85
+
+        @JsonSchema(
+            description = "Ship integrity at which the settle rate reaches its full " +
+                "damageSinkMaxMetersPerSecond; worse damage sinks no faster. Default 45."
+        )
+        var damageSinkFull = 45
+
+        @JsonSchema(
+            description = "The fastest a damaged ship settles, in m/s, reached at damageSinkFull. Default 2.5."
+        )
+        var damageSinkMaxMetersPerSecond = 2.5
+
+        @JsonSchema(
+            description = "Below this integrity the ship goes ungoverned -- it ragdolls exactly as if every " +
+                "helm aboard were broken, and cannot be driven until repaired back to this line, at which " +
+                "point the gyro rights it and the wheel answers again. Default 40."
+        )
+        var damageFreefallBelow = 40
+        // endregion
+
         @JsonSchema(
             description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
                 "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
