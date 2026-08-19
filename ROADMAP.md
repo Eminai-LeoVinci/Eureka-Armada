@@ -379,14 +379,14 @@ page, and guessing at it is not something to do silently.
 
 **Auto-selection, with the obvious trap avoided.** The shipwright pre-selects a blueprint by
 comparing each hull against the shelf. Match on **dimensions and helm variant** (birch, dark oak…),
-then rank the survivors by the 70% shape comparison and pre-select the best scorer.
+then rank the survivors by the shape comparison and pre-select the best scorer.
 
 > ⚠ Do **not** gate auto-selection on block count. A damaged hull has fewer blocks than its plans by
 > definition — that is what damage *is* — so an equality test would auto-select only for ships in
 > perfect repair and silently fail on every ship anyone actually brings to a shipwright. Block count
 > is a tiebreaker at most.
 
-Auto-selection is a convenience and changes nothing else: the 70% check still runs, and the player
+Auto-selection is a convenience and changes nothing else: the shape check still runs, and the player
 can always override the dropdown.
 
 **Paying for a repair** works like paying for a build — the bill is the difference between the plans
@@ -877,11 +877,14 @@ because it needs a permission level.
    over there swinging a sword. The timer then runs to completion underneath you, and
    disassembly with a player aboard is the deck fall-through case. **Self-disassembly must be
    blocked while any player is aboard.**
-2. ~~**Repair threshold.**~~ **Settled: 70%.** A ship must match at least 70% of the blueprint's
-   non-air blocks for the shipwright to accept it as the same vessel. Measured as a **total
-   count**, not per block-type: a hull that lost its whole rigging is still the same ship, and a
-   per-type rule would reject it for being 0% wool. Harbor bounds were already settled — partial
-   overlap suffices.
+2. ~~**Repair threshold.**~~ **Settled: the player's, defaulting to 60%** (was a hardcoded 70%,
+   lowered once partial repair made a badly mauled hull worth bringing in, then handed over as
+   `shipwrightRepairPercentage`). A ship must match at least that much of the blueprint's non-air
+   blocks for the shipwright to accept it as the same vessel. Measured as a **total count**, not per
+   block-type: a hull that lost its whole rigging is still the same ship, and a per-type rule would
+   reject it for being 0% wool. The setting is clamped to 1–99 rather than 0–100, because both ends
+   destroy the question it answers: 0 makes every hull match every set of plans, and 100 accepts only
+   a hull with nothing wrong with it. Harbor bounds were already settled — partial overlap suffices.
 3. **Does a cannon's group come from its facing or its position?** A cannon sitting on the port
    rail but pointed forward could be `L2` or `F1`. Facing is the more useful answer for fixed
    guns — you want the label to tell a gunner where the shot goes — but the note describes the

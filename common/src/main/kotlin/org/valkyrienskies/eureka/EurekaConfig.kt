@@ -1234,6 +1234,16 @@ object EurekaConfig {
         var shipwrightCrew = true
 
         @JsonSchema(
+            description = "How much of a hull must still match a set of plans before a shipwright accepts it " +
+                "as the same vessel, as a percentage, 1 to 99. Counted as a total of the plans' non-air " +
+                "blocks, not per block-type. Lower it to let a shipwright take on a wreck; raise it to stop " +
+                "one set of plans being used to rebuild a different ship. Clamped: anything at or below 0 " +
+                "reads as 1, anything at or above 100 reads as 99 -- 0 would let any hull pass as any ship, " +
+                "and 100 would accept only a hull with nothing wrong with it. Default 60."
+        )
+        var shipwrightRepairPercentage = 60
+
+        @JsonSchema(
             description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
                 "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
                 "weights are the whole distribution. At the defaults (100/12/5/1) plain comes up about half the " +

@@ -143,7 +143,8 @@ object ShipwrightYard {
      * to a shipwright, which is the exact opposite of useful. Dimensions and the wheel survive damage; the
      * count does not.
      *
-     * A guess is only ever a guess: the player can override it, and the 70% check runs regardless.
+     * A guess is only ever a guess: the player can override it, and the [ShipRepair.matchPercent] check runs
+     * regardless.
      */
     fun guessPlans(
         level: ServerLevel,

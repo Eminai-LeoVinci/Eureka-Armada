@@ -9,6 +9,7 @@ import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.dimensionId
@@ -30,7 +31,7 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  *  1. **Dimensions.** A hull that is not the same size as the plans is not that ship, and this is one integer
  *     comparison.
  *  2. **Name.** The plans are filed under a ship's name, and that is the identity the whole shelf is keyed on.
- *  3. **Shape.** At least [MATCH_THRESHOLD] of the plans' non-air blocks must already be in place, counted as a
+ *  3. **Shape.** At least [matchPercent] of the plans' non-air blocks must already be in place, counted as a
  *     total rather than per block-type. A ship stripped of its entire rigging is still that ship; a per-type
  *     rule would reject it for being nought percent wool.
  *
@@ -45,8 +46,26 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  */
 object ShipRepair {
 
-    /** How much of a hull must still match its plans before a shipwright accepts it as the same ship. */
-    const val MATCH_THRESHOLD = 0.70f
+    /**
+     * How much of a hull must still match its plans before a shipwright accepts it as the same ship, as a
+     * percentage.
+     *
+     * Read fresh every time rather than captured at load, so a `/reload` of the config takes effect on the
+     * next hull looked at rather than the next restart -- and so a hand-edited file can never leave a stale
+     * value behind somewhere.
+     *
+     * The clamp is what makes the two useless ends unreachable. At 0 every hull matches every set of plans,
+     * which turns the shipwright into a machine for quietly rebuilding one ship as another; at 100 only a
+     * ship with nothing wrong with it qualifies, and a ship with nothing wrong with it does not need
+     * repairing. Both are answers to the question "what is the same vessel?" that stop it meaning anything,
+     * so the range is 1 to 99 and out-of-range values are pulled to the nearest end rather than refused --
+     * a config typo should cost a captain a surprising threshold, not a shipwright who will not work.
+     */
+    val matchPercent: Int
+        get() = EurekaConfig.SERVER.shipwrightRepairPercentage.coerceIn(MIN_PERCENT, MAX_PERCENT)
+
+    /** [matchPercent] as the 0..1 fraction the comparison actually runs against. */
+    val matchThreshold: Float get() = matchPercent / 100.0f
 
     /**
      * How far from the bench a shipwright can see a ship, and work on it.
@@ -73,7 +92,7 @@ object ShipRepair {
         /** Shipyard positions that need writing, with the state to write. Empty unless [accepted]. */
         val repairs: List<Pair<BlockPos, BlockState>>
     ) {
-        val accepted: Boolean get() = sizeMatches && nameMatches && match >= MATCH_THRESHOLD
+        val accepted: Boolean get() = sizeMatches && nameMatches && match >= matchThreshold
         val sound: Boolean get() = accepted && missing.isEmpty()
 
         /** Why a shipwright turned this away, or null if it did not. */
@@ -81,9 +100,9 @@ object ShipRepair {
             get() = when {
                 !sizeMatches -> "That hull is not the size these plans describe."
                 !nameMatches -> "These plans are for a different ship."
-                match < MATCH_THRESHOLD ->
+                match < matchThreshold ->
                     "Too little of that hull matches these plans -- ${(match * 100).toInt()}% of it, and a " +
-                        "shipwright needs ${(MATCH_THRESHOLD * 100).toInt()}%. This is not the same ship."
+                        "shipwright needs $matchPercent%. This is not the same ship."
                 else -> null
             }
     }
@@ -321,4 +340,8 @@ object ShipRepair {
     private val BED_PART = net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART
     private val HEAD = net.minecraft.world.level.block.state.properties.BedPart.HEAD
     private val BED_FACING = net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
+
+    /** The ends of the match range, both excluded -- see [matchPercent] for why neither is a usable answer. */
+    private const val MIN_PERCENT = 1
+    private const val MAX_PERCENT = 99
 }
