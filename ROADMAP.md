@@ -421,6 +421,11 @@ back hot and fuelled.
 
 ### Phase 4 — Cannons
 
+**Status: complete.** The block, all five metals, the three charge variants (explosive,
+incendiary, armor-piercing), elevation, the flint-and-steel trigger, deck-aware gun labels,
+gunner stations, the fire brigade, and ship-fire containment are all built and confirmed in
+game. What follows is the design as specified; deviations are noted inline.
+
 Independent of the template foundation, moved ahead of pirates so combat exists before the
 threat does — which also means pirate hulls can be authored with guns already aboard.
 
@@ -471,8 +476,9 @@ swingy, netherite is the hammer.
 Netherite uses the plus shape with **raw gold** in the corners. Steel is 5 raw iron plus 4
 charcoal or coal.
 
-**Variants.** Both are 4 matching cannonballs + the respective raw material in the upper-left
-corner (ancient debris for netherite) + 4 of the charge in the remaining slots.
+**Variants.** All three are 4 matching cannonballs + the respective raw material in the
+upper-left corner (netherite scrap for netherite — refined metal, not the ore) + 4 of the
+filling in the remaining slots: gunpowder, blaze powder, or diamonds. Four in, four out.
 
 - **Explosive** (gunpowder): +4 blocks total. Two go to raising the guaranteed count by +2.
   The other two roll separately — a third at 60% and a fourth at 30% — rather than extending
@@ -480,6 +486,15 @@ corner (ancient debris for netherite) + 4 of the charge in the remaining slots.
 - **Incendiary** (blaze powder): sets blocks alight *after* destruction is resolved, chosen
   from the survivors, so burning never adds free damage. Copper 2, iron 3, steel 4, gold 5,
   netherite 6.
+- **Armor-Piercing** (diamond): the round strikes **four times** instead of one, punching
+  through walls and flying on. The first impact rolls the metal's ladder normally; the second,
+  third and fourth take 75%, 50% and 25% **of that first roll** — of the first, never of each
+  other, so one lucky opening carries the whole chain. Rounded half-up (.50–.99 climbs), floor
+  of 1 block per impact always. Netherite at its best runs 12-9-6-3; copper 4-3-2-1. No damage
+  bonus per hit — like incendiary, the extra impacts are the whole purchase. It punches through
+  *entities* too: a body costs the round one strike and the wall behind still takes the next.
+  Block deletion is synchronous with each impact, so a continuing ball can never collide with a
+  block its previous impact already destroyed.
 
 **Aiming: cannons never track**, but the barrel elevates by hand. Sneak + right-click cycles it
 through five fixed positions — **−45°, −22.5°, level, +22.5°, +45°** — wrapping from the top

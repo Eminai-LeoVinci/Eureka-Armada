@@ -89,7 +89,21 @@ enum class CannonCharge(
      * given none, it is a different weapon. How many blocks it lights is a property of the *metal*, since a
      * heavier ball carries more of the stuff -- see [Cannonball.incendiary].
      */
-    INCENDIARY("incendiary_", 0, doubleArrayOf());
+    INCENDIARY("incendiary_", 0, doubleArrayOf()),
+
+    /**
+     * Diamond: no extra damage per hit, and the round does not stop.
+     *
+     * An armor-piercing round takes [Load.IMPACTS] bites instead of one. The first is the metal's own roll,
+     * unchanged; the follow-throughs are 75%, 50% and 25% **of that first roll** -- of the first, not each of
+     * the last, so one lucky opening hit carries the whole chain and one poor one dooms it. Rounded half-up
+     * and never below one block: a spent ball still stings. Netherite at its best runs 12-9-6-3; copper at
+     * its best runs 4-3-2-1.
+     *
+     * Like blaze powder, the coating adds nothing to any single ladder -- the extra IMPACTS are the whole
+     * purchase. Appended per the ladder philosophy: a diamond is the same diamond whatever ball wears it.
+     */
+    ARMOR_PIERCING("armor_piercing_", 0, doubleArrayOf());
 }
 
 /** A round as it actually exists: a metal, and whatever is packed behind it. */
@@ -106,6 +120,31 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
 
     /** How many surviving blocks this round sets alight, or 0 if it starts no fires. */
     val incendiaryBlocks: Int get() = if (charge == CannonCharge.INCENDIARY) ball.incendiary else 0
+
+    /** How many times this round strikes before it is spent. One, unless it is armor-piercing. */
+    val impacts: Int get() = if (charge == CannonCharge.ARMOR_PIERCING) IMPACTS else 1
+
+    /**
+     * What the [ordinal]-th block strike takes (0 = the opening hit's own roll), given what that opening
+     * hit rolled.
+     *
+     * Half rounds UP -- .50 to .99 climbs, .01 to .49 falls -- and the floor is one block always: the
+     * fourth impact of the weariest copper ball still breaks something. Deterministic past the first hit on
+     * purpose, so the chain reads as one shot losing steam rather than four separate lotteries.
+     */
+    fun followThrough(base: Int, ordinal: Int): Int {
+        val share = FOLLOW_THROUGH.getOrElse(ordinal) { return 0 }
+        // Round-half-up of base * share/4, in integers: floor((base*share + 2) / 4).
+        return Math.floorDiv(base * share + 2, 4).coerceAtLeast(1)
+    }
+
+    companion object {
+        /** How many strikes an armor-piercing round gets. */
+        const val IMPACTS = 4
+
+        /** Each strike's share of the opening roll, in quarters: 4/4, then 3/4, 2/4, 1/4. */
+        private val FOLLOW_THROUGH = intArrayOf(4, 3, 2, 1)
+    }
 
     /**
      * Roll this round's damage.

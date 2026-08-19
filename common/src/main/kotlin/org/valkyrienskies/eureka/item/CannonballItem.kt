@@ -52,6 +52,13 @@ class CannonballItem(val ball: Cannonball, val charge: CannonCharge, properties:
                 Component.translatable("item.vs_eureka.cannonball.incendiary", load.incendiaryBlocks)
                     .withStyle(ChatFormatting.GOLD)
             )
+            // Same blindness as incendiary: the range line is the plain metal's, and the diamonds bought
+            // something the range cannot show -- the round strikes four times, shedding a quarter of its
+            // opening hit each time.
+            CannonCharge.ARMOR_PIERCING -> adder.accept(
+                Component.translatable("item.vs_eureka.cannonball.armor_piercing", load.impacts)
+                    .withStyle(ChatFormatting.AQUA)
+            )
         }
     }
 }

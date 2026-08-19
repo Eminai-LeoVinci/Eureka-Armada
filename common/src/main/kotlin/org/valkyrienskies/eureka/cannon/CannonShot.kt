@@ -79,6 +79,29 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
     private var age = 0
 
+    /**
+     * Strikes this round has left: four for armor-piercing, one for everything else -- see [Load.impacts].
+     * A round with strikes remaining flies on through whatever it just hit instead of being spent on it.
+     */
+    private var impactsLeft = 1
+
+    /**
+     * What the opening block strike rolled, which every follow-through is a share of. The chain hangs off
+     * the FIRST hit alone -- 75%, 50%, 25% of it, never of each other -- so a lucky opening carries the
+     * whole run and a poor one dooms it. Zero until that first hit lands.
+     */
+    private var baseRoll = 0
+
+    /** How many block strikes have landed, indexing [Load.followThrough]'s shares. */
+    private var blockImpacts = 0
+
+    /**
+     * Entities this round has already gone through, so a target as wide as the step never soaks two of an
+     * armor-piercing round's strikes in consecutive ticks. Not persisted, same as [firedBy] and for the same
+     * reason: nothing here outlives a flight measured in seconds.
+     */
+    private val pierced = HashSet<Int>()
+
     /** A cannonball is not a thing you can attack. */
     override fun hurtServer(level: ServerLevel, source: DamageSource, amount: Float): Boolean = false
 
@@ -107,6 +130,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      */
     fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack, charge: PowderCharge) {
         this.load = load
+        this.impactsLeft = load.impacts
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         entityData.set(POWDER, charge.ordinal)
         setPos(from.x, from.y, from.z)
@@ -143,13 +167,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         }
 
         // Entities first: a round that punches through a crew to hit the hull behind them is not a
-        // cannonball, it is a rumour.
+        // cannonball, it is a rumour. Except an armor-piercing one, whose whole purchase is that it does not
+        // stop -- flesh costs it a strike like a wall does, and the ball flies on to whatever stands behind.
         val struck = level().getEntities(this, AABB(from, to).inflate(0.5))
-            .firstOrNull { it.isPickable && it !== firedBy }
+            .firstOrNull { it.isPickable && it !== firedBy && it.id !in pierced }
         if (struck != null) {
             struck.hurt(damageSources().explosion(this, firedBy), load.maxBlocks.toFloat())
-            burst(struck.position(), null)
-            return
+            pierced.add(struck.id)
+            strike(struck.position(), null)
+            if (isRemoved) return
+            // Spent a strike, kept flying: the rest of this tick's flight continues below, so a wall a
+            // hand's breadth behind the target is still hit this tick rather than slipped past.
         }
 
         val hit = level().clip(
@@ -159,7 +187,15 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // for the ground -- because CannonFire records them from the same block positions the clip walks.
         if (hit.type != HitResult.Type.MISS && !gun.contains(hit.blockPos)) {
             // location: world space, for the flash. blockPos: shipyard space, for the damage.
-            burst(hit.location, hit.blockPos)
+            strike(hit.location, hit.blockPos)
+            if (!isRemoved) {
+                // Punched through. Pick up a step past the point of impact and let the next tick carry on:
+                // the blocks this strike took are already air -- punch is synchronous -- so the ball can
+                // never collide with something its own previous impact should have removed. Whatever the
+                // hole's edge left standing in the path is a legitimate next wall.
+                val step = deltaMovement.normalize().scale(0.1)
+                setPos(hit.location.x + step.x, hit.location.y + step.y, hit.location.z + step.z)
+            }
             return
         }
 
@@ -177,13 +213,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
     }
 
     /**
-     * Land the shot: noise and flash in world space, blocks taken in shipyard space.
+     * Land one strike: noise and flash in world space, blocks taken in shipyard space.
      *
      * Deliberately not a vanilla explosion. A real one would pick its own blocks by blast resistance and
      * ignore the damage ladder entirely, and it would light fires and hurt everything nearby -- a cannon is
      * meant to punch a hole where it was aimed, not to level the deck around it.
+     *
+     * Most rounds get exactly one of these and are spent by it. An armor-piercing round gets four: the
+     * opening block strike rolls the metal's ladder and every later one takes its dwindling share of that
+     * roll -- see [Load.followThrough] -- until the strikes run out and the ball is spent like any other.
      */
-    private fun burst(where: Vec3, blockHit: BlockPos?) {
+    private fun strike(where: Vec3, blockHit: BlockPos?) {
         val level = level() as ServerLevel
 
         level.playSound(null, where.x, where.y, where.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 3.0f, 0.9f)
@@ -206,12 +246,20 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, 24, 1.0, 1.0, 1.0, 0.03)
 
         if (blockHit != null) {
+            val bite = if (blockImpacts == 0) {
+                load.roll(level.random).also { baseRoll = it }
+            } else {
+                load.followThrough(baseRoll, blockImpacts)
+            }
+            blockImpacts++
             // Destruction first, then fire. The order is the rule: an incendiary round lights what is left
             // standing, so burning can never be an extra helping of damage. See CannonDamage.kindle.
-            CannonDamage.punch(level, blockHit, load.roll(level.random))
+            CannonDamage.punch(level, blockHit, bite)
             CannonDamage.kindle(level, blockHit, load.incendiaryBlocks)
         }
-        discard()
+
+        impactsLeft--
+        if (impactsLeft <= 0) discard()
     }
 
     // "Charge" is the SHELL type (plain/explosive/incendiary) and predates this; the powder measure gets its
@@ -224,6 +272,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         )
         entityData.set(POWDER, input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal))
         entityData.set(SHOWN, input.read("Shown", ItemStack.CODEC).orElse(ItemStack.EMPTY))
+        // After load, which sets what "all of them" means for this round.
+        impactsLeft = input.getIntOr("ImpactsLeft", load.impacts)
+        baseRoll = input.getIntOr("BaseRoll", 0)
+        blockImpacts = input.getIntOr("BlockImpacts", 0)
     }
 
     override fun addAdditionalSaveData(output: ValueOutput) {
@@ -231,6 +283,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         output.putInt("Ball", load.ball.ordinal)
         output.putInt("Charge", load.charge.ordinal)
         output.putInt("PowderCharge", entityData.get(POWDER))
+        output.putInt("ImpactsLeft", impactsLeft)
+        output.putInt("BaseRoll", baseRoll)
+        output.putInt("BlockImpacts", blockImpacts)
         if (!item.isEmpty) output.store("Shown", ItemStack.CODEC, item)
     }
 
