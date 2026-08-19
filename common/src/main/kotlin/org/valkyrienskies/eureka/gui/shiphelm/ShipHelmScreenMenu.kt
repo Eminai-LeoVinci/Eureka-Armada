@@ -23,6 +23,14 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     // harmless fallback -- the assembler checkbox states come from the synced DataSlot, not from here.
     private val player: Player = playerInv.player
 
+    /**
+     * Whether this menu is reading [helm] itself -- the object, not the position.
+     *
+     * Identity is the question that matters: a helm that assembles or disassembles is relocated, and the
+     * menu keeps pointing at the discarded copy. That is exactly what this is used to find and close.
+     */
+    fun viewsHelm(helm: ShipHelmBlockEntity): Boolean = blockEntity === helm
+
     // TODO this isn't synced...
     val aligning = blockEntity?.aligning ?: false
 

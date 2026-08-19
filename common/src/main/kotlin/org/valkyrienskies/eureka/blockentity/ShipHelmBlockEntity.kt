@@ -446,6 +446,32 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     var bottleBinding: UUID? = null
         private set
 
+    /**
+     * Shut this wheel's menu on everyone reading it, because the wheel is about to stop being here.
+     *
+     * Assembling and disassembling both RELOCATE the helm -- into the shipyard and back -- and a relocation
+     * builds a new block entity at the destination and discards this one. An open menu holds a hard
+     * reference to the object it was opened on, so from that moment it is reading a ghost: every readout
+     * freezes at whatever the discarded copy last held, and a checkbox reads its constructor default rather
+     * than the wheel's real setting. That is not a stale number, it is a menu quietly telling lies -- it
+     * cost an afternoon chasing a Keep Name box that appeared to tick itself back on when the setting had
+     * in fact been saved correctly all along.
+     *
+     * Re-resolving by position instead would not save it: the wheel does not merely change object, it
+     * changes ADDRESS, out of the world and into the shipyard. There is nothing at the old position to look
+     * up. Closing is the honest answer, and it is what a player does by reflex anyway.
+     *
+     * Everyone, not just whoever pressed the button -- a second player reading the same wheel is looking at
+     * the same ghost.
+     */
+    private fun closeMenusOnThisHelm() {
+        val server = (level as? ServerLevel)?.server ?: return
+        for (viewer in server.playerList.players) {
+            val menu = viewer.containerMenu
+            if (menu is ShipHelmScreenMenu && menu.viewsHelm(this)) viewer.closeContainer()
+        }
+    }
+
     /** This wheel's bottle identity, minting one the first time a bottle is marked here. */
     fun mintBottleBinding(): UUID {
         bottleBinding?.let { return it }
@@ -1147,6 +1173,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         isCrewStation = true
         setChanged()
 
+        // Past every refusal, so a rejected assembly never shuts a menu for nothing. From here the wheel is
+        // moving into the shipyard and any menu open on it is about to be reading a ghost.
+        closeMenusOnThisHelm()
+
         val assembled = ShipAssembler.finishAssembly(level, blockPositions)
         val builtShip = assembled.ship
 
@@ -1356,6 +1386,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // still valid, and reused for both arms.
         val holdAABB = EntityShipCollisionUtils.worldAABBForShip(ship)
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L) // ~2s, mobs and other entities
+
+        // The teardown is really happening now -- past the canDisassemble gate, so a deferred one waiting on
+        // a ship to come to rest does not boot anybody early. The wheel is about to come back out into the
+        // world as a different object, taking every open menu's reference with it.
+        closeMenusOnThisHelm()
 
         val serverLevel = level as ServerLevel
         if (!ShipAssembler.unfillShip(serverLevel, ship, this.blockPos, BlockPos.containing(inWorld.x, inWorld.y, inWorld.z))) {
