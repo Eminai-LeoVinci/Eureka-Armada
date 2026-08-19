@@ -4,8 +4,10 @@ import java.util.UUID
 import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import net.minecraft.world.item.Item
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
 import org.valkyrienskies.eureka.block.ShipHelmBlock
@@ -216,7 +218,9 @@ object ShipwrightYard {
         val ledger = ShipwrightLedger.get(level.server)
         val bill = ledger.quoteRepair(player.uuid, slug, plans.shipName, assessment.missing)
 
-        if (!bill.ready) {
+        // All-or-nothing is a config choice now, not the design. With partial repair on, whatever is in the
+        // pot goes into the hull keel-up and the rest of the bill simply stays open.
+        if (!EurekaConfig.SERVER.shipwrightPartialRepair && !bill.ready) {
             PathMessages.send(
                 player,
                 "'${plans.shipName}' still needs ${bill.outstanding().values.sum()} more items to mend.",
@@ -225,13 +229,39 @@ object ShipwrightYard {
             return false
         }
 
-        ShipRepair.apply(level, assessment)
-        ledger.closeRepair(player.uuid, slug)
-        PathMessages.send(
-            player,
-            "'$slug' is mended -- ${assessment.repairs.size} blocks put back.",
-            PathMessages.Kind.GOOD
-        )
+        // The pot is what has been handed over, capped by the quote. A full pot is simply the whole bill,
+        // which is why there is no separate complete-repair path -- see ShipRepair.apply.
+        val pot = HashMap<Item, Int>()
+        for ((item, needed) in bill.cost) {
+            val held = minOf(bill.delivered[item] ?: 0, needed)
+            if (held > 0) pot[item] = held
+        }
+
+        val outcome = ShipRepair.apply(level, ShipRepair.ordered(level, ship, assessment), pot)
+        ledger.spendRepair(bill, outcome.consumed)
+
+        when {
+            outcome.remaining <= 0 -> {
+                ledger.closeRepair(player.uuid, slug)
+                PathMessages.send(
+                    player,
+                    "'$slug' is mended -- ${outcome.placed} blocks put back.",
+                    PathMessages.Kind.GOOD
+                )
+            }
+            outcome.placed <= 0 -> PathMessages.send(
+                player,
+                "Nothing in the pot covers what '$slug' is missing -- " +
+                    "${outcome.remaining} blocks still wanting. Hand the shipwright materials first.",
+                PathMessages.Kind.WARN
+            )
+            else -> PathMessages.send(
+                player,
+                "'$slug' patched keel-up -- ${outcome.placed} blocks put back, " +
+                    "${outcome.remaining} still wanting more materials.",
+                PathMessages.Kind.GOOD
+            )
+        }
         return true
     }
 }

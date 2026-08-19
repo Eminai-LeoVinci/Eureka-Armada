@@ -126,6 +126,8 @@ object ShipwrightNetworkingFabric {
         buf.writeVarInt(shelf.villager)
         buf.writeVarInt(shelf.slots)
         buf.writeBoolean(shelf.hasFreeBottle)
+        buf.writeBoolean(shelf.repairEnabled)
+        buf.writeBoolean(shelf.partialRepair)
         buf.writeVarInt(shelf.rows.size)
         for (row in shelf.rows) {
             buf.writeUtf(row.shipName)
@@ -173,6 +175,8 @@ object ShipwrightNetworkingFabric {
         val villager = buf.readVarInt()
         val slots = buf.readVarInt()
         val hasFreeBottle = buf.readBoolean()
+        val repairEnabled = buf.readBoolean()
+        val partialRepair = buf.readBoolean()
         val rows = List(buf.readVarInt()) {
             val shipName = buf.readUtf()
             val width = buf.readVarInt()
@@ -220,7 +224,7 @@ object ShipwrightNetworkingFabric {
             )
         }
 
-        return ShipwrightMenu.Shelf(villager, slots, hasFreeBottle, rows, vessels)
+        return ShipwrightMenu.Shelf(villager, slots, hasFreeBottle, rows, vessels, repairEnabled, partialRepair)
     }
 
     private fun toArray(buf: FriendlyByteBuf): ByteArray {

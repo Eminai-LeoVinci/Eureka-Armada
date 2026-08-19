@@ -17,6 +17,7 @@ import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.getShipMountedTo
 import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
@@ -121,6 +122,19 @@ object ShipCrews {
 
         if (villager.isBaby) {
             PathMessages.send(player, "They're too young to sign on.", PathMessages.Kind.ERROR)
+            return
+        }
+
+        // Below the discharge path on purpose: a shipwright signed on before the rule changed can always be
+        // paid off, whatever the config says now.
+        if (!EurekaConfig.SERVER.shipwrightCrew &&
+            villager.villagerData.profession().`is`(ShipwrightProfession.PROFESSION_KEY)
+        ) {
+            PathMessages.send(
+                player,
+                "A shipwright's place is the bench, not a berth -- they will not sign on.",
+                PathMessages.Kind.ERROR
+            )
             return
         }
 

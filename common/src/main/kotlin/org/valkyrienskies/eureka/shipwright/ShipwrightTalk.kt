@@ -69,7 +69,9 @@ object ShipwrightTalk {
         )
         return ShipwrightMenu.Shelf(
             shelf.villager, shelf.slots, shelf.hasFreeBottle, shelf.rows,
-            vesselsFor(level, player, villager)
+            vesselsFor(level, player, villager),
+            repairEnabled = EurekaConfig.SERVER.shipwrightRepair,
+            partialRepair = EurekaConfig.SERVER.shipwrightPartialRepair
         )
     }
 
@@ -84,6 +86,10 @@ object ShipwrightTalk {
         player: ServerPlayer,
         villager: Villager
     ): List<ShipwrightMenu.Vessel> {
+        // With repair off there is no Yard page, so assessing every hull in range would be work nobody
+        // can ever see.
+        if (!EurekaConfig.SERVER.shipwrightRepair) return emptyList()
+
         val ledger = ShipwrightLedger.get(level.server)
         val bench = yard(villager)
 
@@ -236,6 +242,11 @@ object ShipwrightTalk {
         slug: String,
         argument: String
     ) {
+        if (!EurekaConfig.SERVER.shipwrightRepair) {
+            PathMessages.send(player, "This shipwright takes no repair work.", PathMessages.Kind.WARN)
+            return
+        }
+
         val bench = yard(villager)
         // Re-resolved from what the shipwright can see rather than trusting the slug on the wire, so a client
         // cannot ask about a hull on the other side of the world.

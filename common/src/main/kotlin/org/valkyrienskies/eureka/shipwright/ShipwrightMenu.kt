@@ -88,7 +88,11 @@ object ShipwrightMenu {
         val slots: Int,
         val hasFreeBottle: Boolean,
         val rows: List<Row>,
-        val vessels: List<Vessel> = emptyList()
+        val vessels: List<Vessel> = emptyList(),
+        /** Whether this world's shipwrights take repair work at all -- off, the book has no Yard page. */
+        val repairEnabled: Boolean = true,
+        /** Whether Repair works from a part-paid bill. The client cannot read server config, so it rides here. */
+        val partialRepair: Boolean = true
     )
 
     /**

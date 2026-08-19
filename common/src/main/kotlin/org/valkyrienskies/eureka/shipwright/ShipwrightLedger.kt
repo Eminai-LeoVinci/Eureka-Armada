@@ -138,6 +138,20 @@ class ShipwrightLedger : SavedData() {
         return taken
     }
 
+    /**
+     * Materials actually built into the hull come OUT of the pot. What was handed over and not spent stays
+     * against the bill -- a partial repair that ran dry keeps the surplus for the next pass, and the next
+     * re-quote carries it forward exactly as an interrupted instalment would be.
+     */
+    fun spendRepair(bill: RepairBill, consumed: Map<Item, Int>) {
+        if (consumed.isEmpty()) return
+        for ((item, count) in consumed) {
+            val left = (bill.delivered[item] ?: 0) - count
+            if (left > 0) bill.delivered[item] = left else bill.delivered.remove(item)
+        }
+        setDirty()
+    }
+
     /** Called once a repair has been written into the hull. */
     fun closeRepair(player: UUID, shipSlug: String) {
         if (libraryOf(player).repairs.remove(shipSlug) != null) setDirty()

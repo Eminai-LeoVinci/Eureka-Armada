@@ -65,17 +65,23 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         clampScroll()
 
         // The two halves of the book. Always present, so switching between the shelf and the water is one
-        // click from anywhere rather than a Back first.
-        addRenderableWidget(
-            ShipHelmButton(left + 4, top + PANEL_H - 22, TAB_W, BTN_H, PLANS_TAB, font) {
-                onYard = false; openVessel = null; scroll = 0; rebuild()
-            }.also { it.active = onYard }
-        )
-        addRenderableWidget(
-            ShipHelmButton(left + 6 + TAB_W, top + PANEL_H - 22, TAB_W, BTN_H, YARD_TAB, font) {
-                onYard = true; openCard = null; scroll = 0; rebuild()
-            }.also { it.active = !onYard }
-        )
+        // click from anywhere rather than a Back first -- unless this world's shipwrights take no repair
+        // work, in which case the book has no Yard page and no tabs to switch between.
+        if (!shelf.repairEnabled) {
+            onYard = false
+            openVessel = null
+        } else {
+            addRenderableWidget(
+                ShipHelmButton(left + 4, top + PANEL_H - 22, TAB_W, BTN_H, PLANS_TAB, font) {
+                    onYard = false; openVessel = null; scroll = 0; rebuild()
+                }.also { it.active = onYard }
+            )
+            addRenderableWidget(
+                ShipHelmButton(left + 6 + TAB_W, top + PANEL_H - 22, TAB_W, BTN_H, YARD_TAB, font) {
+                    onYard = true; openCard = null; scroll = 0; rebuild()
+                }.also { it.active = !onYard }
+            )
+        }
 
         if (onYard) {
             initYard()
@@ -168,10 +174,13 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         }
 
         val repairable = hull.plansName != null && hull.refusal == null && !hull.sound
+        // With partial repair on, Repair goes live the moment ANYTHING is in the pot -- 1% funded or 100% --
+        // and the shipwright mends keel-up as far as it stretches. Off, it waits for the whole bill as before.
+        val funded = if (shelf.partialRepair) hull.given > 0 else hull.paid
         addRenderableWidget(
             ShipHelmButton(left + 12 + DROP_W, y, BTN_W, BTN_H, REPAIR_TEXT, font) {
                 ShipwrightNetworkingFabric.send(shelf.villager, ShipwrightMenu.Action.REPAIR, hull.slug)
-            }.also { it.active = repairable && hull.paid }
+            }.also { it.active = repairable && funded }
         )
 
         addRenderableWidget(

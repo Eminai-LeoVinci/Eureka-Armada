@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka.shipwright
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.Items
@@ -8,6 +9,7 @@ import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -209,21 +211,95 @@ object ShipRepair {
     }
 
     /**
-     * Write the repairs back into the hull.
+     * The repairs in the order a shipwright works: keel up.
+     *
+     * Lowest layer first, bow to stern within it, port to starboard within that -- so a pot that cannot cover
+     * everything mends the hull at the waterline before it mends the crow's nest. The bow is read off the
+     * crew-station helm exactly as [org.valkyrienskies.eureka.cannon.GunLabels] reads it for gun names; a ship
+     * with no wheel to say which end is forward falls back to its shipyard axes, which keeps the order total
+     * and stable even if it no longer means "bow".
+     */
+    fun ordered(level: ServerLevel, ship: LoadedServerShip, assessment: Assessment): List<Pair<BlockPos, BlockState>> {
+        val forward = GunLabels.forwardOf(level, ship) ?: Direction.SOUTH
+        val starboard = forward.clockWise
+        return assessment.repairs.sortedWith(
+            compareBy<Pair<BlockPos, BlockState>> { it.first.y }
+                .thenByDescending { it.first.dot(forward) }
+                .thenBy { it.first.dot(starboard) }
+        )
+    }
+
+    /** What one pass of the trowel actually did: blocks placed, materials spent, blocks still wanting. */
+    class Outcome(val placed: Int, val consumed: Map<Item, Int>, val remaining: Int)
+
+    /**
+     * Write as much of [repairs] back into the hull as [pot] will pay for.
+     *
+     * Two passes, and the split is load-bearing. Costed blocks go first, in the keel-up order handed in,
+     * each one spending its item from the pot or being skipped -- skipped, not stopped at, because the pot
+     * may still hold the makings of blocks further along. Free blocks (door uppers, bed heads -- the halves
+     * whose partner carried the whole price) go second, each only once its partner actually stands, so a
+     * head processed before its foot is never skipped on a full pot and never floated on an empty one.
+     *
+     * A full pot places everything, which is why this is the ONLY apply: a complete repair is a partial
+     * repair that never runs dry.
      *
      * `UPDATE_CLIENTS` and nothing more, matching how a ship's blocks are written everywhere else in the mod:
-     * these are shipyard positions, and asking for neighbour updates across a hull being rebuilt block by block
-     * is how you get a cascade of falling gravel and popped-off torches inside somebody's ship.
+     * these are shipyard positions, and asking for neighbour updates across a hull being rebuilt block by
+     * block is how you get a cascade of falling gravel and popped-off torches inside somebody's ship.
      */
-    fun apply(level: ServerLevel, assessment: Assessment) {
-        for ((pos, state) in assessment.repairs) {
+    fun apply(level: ServerLevel, repairs: List<Pair<BlockPos, BlockState>>, pot: MutableMap<Item, Int>): Outcome {
+        val consumed = LinkedHashMap<Item, Int>()
+        var placed = 0
+
+        val free = ArrayList<Pair<BlockPos, BlockState>>()
+        for ((pos, state) in repairs) {
+            val item = itemFor(state)
+            if (item == null) {
+                free.add(pos to state)
+                continue
+            }
+            val held = pot[item] ?: 0
+            if (held <= 0) continue
+
             // Cooled on the way in. A replacement engine is a NEW engine with an empty block entity, and
             // writing back the heat the old one died with gives a glowing gauge over an empty firebox --
             // which only corrects itself once somebody adds fuel and the next tick overwrites the state.
             // Bottled and blueprinted ships deliberately do not do this; see ShipTemplate.cooled.
             level.setBlock(pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
+            pot[item] = held - 1
+            consumed[item] = (consumed[item] ?: 0) + 1
+            placed++
         }
+
+        for ((pos, state) in free) {
+            if (!partnerStands(level, pos, state)) continue
+            level.setBlock(pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
+            placed++
+        }
+
+        return Outcome(placed, consumed, repairs.size - placed)
     }
+
+    /**
+     * Whether the block that paid for [state] is actually in the world.
+     *
+     * A door's upper half stands on its lower; a bed's head lies against its foot, which is one step behind
+     * the way the head faces. Anything else that came through free has no partner to wait for.
+     */
+    private fun partnerStands(level: ServerLevel, pos: BlockPos, state: BlockState): Boolean {
+        if (state.hasProperty(DOUBLE_HALF) && state.getValue(DOUBLE_HALF) == UPPER) {
+            return level.getBlockState(pos.below()).block == state.block
+        }
+        if (state.hasProperty(BED_PART) && state.getValue(BED_PART) == HEAD) {
+            val facing = state.getValue(BED_FACING)
+            return level.getBlockState(pos.relative(facing.opposite)).block == state.block
+        }
+        return true
+    }
+
+    private fun BlockPos.dot(direction: Direction): Int =
+        x * direction.stepX + y * direction.stepY + z * direction.stepZ
 
     /**
      * What one block costs to replace, mirroring [org.valkyrienskies.eureka.template.BillOfMaterials].
@@ -244,4 +320,5 @@ object ShipRepair {
     private val UPPER = net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER
     private val BED_PART = net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART
     private val HEAD = net.minecraft.world.level.block.state.properties.BedPart.HEAD
+    private val BED_FACING = net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 }

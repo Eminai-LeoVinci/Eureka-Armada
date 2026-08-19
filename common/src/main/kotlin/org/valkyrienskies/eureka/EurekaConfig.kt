@@ -1214,6 +1214,26 @@ object EurekaConfig {
         var shipwrightSlotsMax = 32
 
         @JsonSchema(
+            description = "Whether shipwrights take repair work at all. Off, the book has no Yard page and " +
+                "the bench builds only. Default true."
+        )
+        var shipwrightRepair = true
+
+        @JsonSchema(
+            description = "Whether a shipwright will start mending before the whole repair bill is paid. On, " +
+                "the Repair button works with whatever has been handed over, and blocks go back keel-up -- " +
+                "lowest first, bow to stern, port to starboard -- until the pot runs dry. Off, a repair is " +
+                "all-or-nothing as a build is. Default true."
+        )
+        var shipwrightPartialRepair = true
+
+        @JsonSchema(
+            description = "Whether a Shipwright-profession villager can be signed on as crew. Off, Sneak+C " +
+                "refuses them -- a shipwright's place is the bench. Default true."
+        )
+        var shipwrightCrew = true
+
+        @JsonSchema(
             description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
                 "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
                 "weights are the whole distribution. At the defaults (100/12/5/1) plain comes up about half the " +
