@@ -281,6 +281,20 @@ object PathNetworkingFabric {
      */
     const val ACTION_BROADSIDE: Byte = 8
 
+    /**
+     * CTRL+Sneak+C, and the controller's crouch + D-pad Left: sign on everyone the ship is carrying.
+     *
+     * Carries no target, and reads the same three ways [ACTION_CREW] does -- villager, wheel, or neither --
+     * for the same reason: only the server can see what the crosshair is on. It differs from [ACTION_CREW]
+     * only in what "neither" means, which is the whole feature. A crew of eighty was eighty presses before
+     * this.
+     *
+     * The pad sends this one rather than [ACTION_CREW] because crouch + D-pad Left is a controller's only
+     * crew gesture and hiring is what it is most often wanted for; a pad player keeps the individual toggle
+     * by aiming at the villager, which is how they would reach for it anyway.
+     */
+    const val ACTION_CREW_ALL: Byte = 9
+
     /** "This player's ship isn't flying a route." Route ids are positive, so 0 is free for this. */
     private const val NO_ROUTE = 0L
 
@@ -408,6 +422,7 @@ object PathNetworkingFabric {
                     ACTION_REQUEST_ROUTES -> sendRoutes(player, PathStore.get(level))
                     ACTION_FOLLOW_SHIP -> ShipFollows.begin(level, player)
                     ACTION_CREW -> ShipCrews.gesture(level, player)
+                    ACTION_CREW_ALL -> ShipCrews.gestureAll(level, player)
                     ACTION_BROADSIDE -> CrewDuties.broadside(level, player)
                 }
             }

@@ -223,7 +223,7 @@
   "key.vs_eureka.path_play": "Fly route — +Ctrl replays it exactly, hold to release (hold Sneak)",
   "key.vs_eureka.path_show": "Show saved routes (hold Sneak)",
   "key.vs_eureka.path_follow": "Follow the ship you're looking at (hold Sneak)",
-  "key.vs_eureka.path_crew": "Sign on the villager you're looking at, open a wheel's crew manifest, or name this ship's crew (hold Sneak)",
+  "key.vs_eureka.path_crew": "Sign on the villager you're looking at, open a wheel's crew manifest, or name this ship's crew — +Ctrl signs on everyone the ship is carrying (hold Sneak)",
   "key.vs_eureka.path_broadside": "Fire! — every manned gun aboard (no Sneak: works at the wheel)",
-  "key.vs_eureka.path_replay": "Replay modifier — hold with Fly route to replay a recording exactly (a Ctrl for controllers)"
+  "key.vs_eureka.path_replay": "Modifier — hold with Fly route to replay a recording exactly, or with Crew to sign on everyone aboard (a Ctrl for controllers)"
 }

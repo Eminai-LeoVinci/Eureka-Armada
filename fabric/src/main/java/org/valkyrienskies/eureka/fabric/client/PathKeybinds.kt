@@ -59,7 +59,7 @@ import kotlin.math.max
  * Four things make the whole file gamepad-clean. Sneak is taken from the binding, the shift flag, or the
  * crouch POSE ([sneakHeld]) -- the last is true whenever the player is visibly crouched, however a controller
  * mod expressed it. Crouched and on foot, the D-pad is read straight off the hardware (VS2's `ShipGamepad`,
- * no keybind delivery required): D-Left crew, D-Up follow, D-Down broadside. While crouching, a press that
+ * no keybind delivery required): D-Left crew-all, D-Up follow, D-Down broadside. While crouching, a press that
  * reaches one of our bindings by ANY route CLAIMS its whole button (the crouch layer in
  * [suppressVanillaCollisions]): a pad button usually carries a vanilla action of its own, both halves arrive
  * on one physical press, and crouch is what says which one was meant. And for pads driving the actions
@@ -211,22 +211,25 @@ object PathKeybinds {
         // which is exactly the chord it has always meant: crouch says "the next press is for the ship".
         //
         // The D-pad half reads the hardware itself (VS2's ShipGamepad) rather than any keybind, so it works
-        // whether or not a controller mod deigns to deliver emulated presses: crouched and on foot, D-Left is
-        // the crew, D-Up follows the ship you're looking at, D-Down orders the broadside. Standing only --
+        // whether or not a controller mod deigns to deliver emulated presses: crouched and on foot, D-Left
+        // signs on the crew, D-Up follows the ship you're looking at, D-Down orders the broadside. Standing
+        // only --
         // while mounted the wheel owns the D-pad (zoom and altitude, handled VS2-side), and a seated player
         // cannot crouch anyway. The keybind route feeds the same pending flags, so a press that arrives by
         // BOTH routes (pad read + a delivered keybind) is still exactly one action.
         if (client.player?.vehicle == null) {
             // Consume-latched reads, not edges: a press whose edge tick was spent hidden under the
             // controller mod's popup is still here to be taken once the popup is gone.
-            if (ShipGamepad.consumeLeftPress()) pendingCrew = true
+            // D-Left is the pad's crew-all: it hires the whole deck, and still toggles one villager or opens
+            // one wheel's articles when the crosshair is on either. See ACTION_CREW_ALL.
+            if (ShipGamepad.consumeLeftPress()) pendingCrewAll = true
             if (ShipGamepad.consumeUpPress()) pendingFollow = true
             if (ShipGamepad.consumeDownPress()) pendingBroadside = true
         }
         while (follow.consumeClick()) pendingFollow = true
-        while (crew.consumeClick()) pendingCrew = true
+        while (crew.consumeClick()) claimCrew(client)
         while (show.consumeClick()) pendingShow = true
-        val claimed = pendingFollow || pendingCrew || pendingShow || pendingBroadside ||
+        val claimed = pendingFollow || pendingCrew || pendingCrewAll || pendingShow || pendingBroadside ||
             record.isDown || play.isDown
         if (!claimed) return
         for (mapping in client.options.keyMappings) {
@@ -242,8 +245,21 @@ object PathKeybinds {
      */
     private var pendingFollow = false
     private var pendingCrew = false
+    private var pendingCrewAll = false
     private var pendingShow = false
     private var pendingBroadside = false
+
+    /**
+     * Take one press of the crew key, deciding there and then which of the two crew actions it was.
+     *
+     * CTRL is read as the press is CONSUMED rather than latched at its leading edge, which is what the
+     * tap-or-hold gestures do -- they have to, because a hold spans many ticks and the modifier could be let
+     * go of anywhere inside it. This is a single click with no duration, so the moment it is taken is the
+     * only moment there is, and holding CTRL+Sneak and tapping C reads exactly as the player meant it.
+     */
+    private fun claimCrew(client: Minecraft) {
+        if (isControlDown(client)) pendingCrewAll = true else pendingCrew = true
+    }
 
     /** Ticks since the D-pad was last held -- the window in which a popup appearing is the pad's own echo. */
     private var padGuard = 0
@@ -326,23 +342,27 @@ object PathKeybinds {
         // Claims made by the crouch layer at the head of the tick land regardless of whether sneak survived
         // to the tail -- letting go of crouch a fraction after the button is an ordinary way to end a chord,
         // and a claim already SPENT the press, so dropping it here would eat the input outright.
-        var doFollow = pendingFollow
-        var doCrew = pendingCrew
-        var doShow = pendingShow
-        val doBroadside = pendingBroadside
-        pendingFollow = false
-        pendingCrew = false
-        pendingShow = false
-        pendingBroadside = false
-
+        // A press arriving here rather than through the layer joins the same flags, so both routes are folded
+        // in one place below and an action can never be counted twice.
         if (sneaking) {
-            if (follow.consumeClick()) doFollow = true
-            if (crew.consumeClick()) doCrew = true
-            if (show.consumeClick()) doShow = true
-        } else if (!doFollow && !doCrew && !doShow && !doBroadside) {
+            if (follow.consumeClick()) pendingFollow = true
+            if (crew.consumeClick()) claimCrew(client)
+            if (show.consumeClick()) pendingShow = true
+        } else if (!pendingFollow && !pendingCrew && !pendingCrewAll && !pendingShow && !pendingBroadside) {
             drainClicks(show, follow, crew)
             return
         }
+
+        val doFollow = pendingFollow
+        val doCrew = pendingCrew
+        val doCrewAll = pendingCrewAll
+        val doShow = pendingShow
+        val doBroadside = pendingBroadside
+        pendingFollow = false
+        pendingCrew = false
+        pendingCrewAll = false
+        pendingShow = false
+        pendingBroadside = false
 
         // Single presses, not holds: each needs the crosshair on a target, and asking someone to hold a key
         // steady on a ship that is moving relative to them would be the fiddliest part of the whole feature.
@@ -352,6 +372,9 @@ object PathKeybinds {
         // can see what the crosshair is on.
         if (doFollow) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_FOLLOW_SHIP)
         if (doCrew) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_CREW)
+        // CTRL held, or the pad's D-Left: sign on everyone the ship is carrying. Still the individual toggle
+        // when the crosshair is on a villager -- the server decides, as it does for the plain crew key.
+        if (doCrewAll) PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_CREW_ALL)
         if (doShow) toggleShowAll(client)
         // The pad's broadside, claimed under crouch on deck: the same order the G key gives, and the server
         // applies the same refusals (aboard, guns, gunners).
@@ -423,6 +446,7 @@ object PathKeybinds {
         playGesture.ctrl = false
         pendingFollow = false
         pendingCrew = false
+        pendingCrewAll = false
         pendingShow = false
         PathHud.setHoldProgress(0.0f)
     }

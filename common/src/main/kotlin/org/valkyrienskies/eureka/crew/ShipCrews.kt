@@ -64,6 +64,34 @@ object ShipCrews {
         markCrewOnDeck(level, player)
     }
 
+    /**
+     * The same key with the crew-all modifier held (CTRL+Sneak+C), and the controller's crouch + D-pad Left.
+     *
+     * Reads exactly as [gesture] does, in the same most-deliberate-first order, and differs in one place: the
+     * fallback. Where the plain key marks the crew you already have, this signs on the crew you do not --
+     * everyone standing in the ship's influence. Aiming remains an override, because pointing at somebody is
+     * always a statement about that somebody: a villager under the crosshair is still toggled one at a time,
+     * and a wheel under it still opens the articles.
+     *
+     * That is why the pad and the keyboard send the same action rather than two. A controller cannot tell you
+     * what it is looking at any more than a keyboard can -- only the server's raycast knows -- so "hire
+     * everyone, unless I am pointing at someone in particular" has to be one decision made in one place.
+     */
+    @JvmStatic
+    fun gestureAll(level: ServerLevel, player: ServerPlayer) {
+        val villager = lookedAtVillager(level, player)
+        if (villager != null) {
+            toggleRecruit(level, player, villager)
+            return
+        }
+        val helm = lookedAtHelm(level, player)
+        if (helm != null) {
+            showArticles(level, player, helm)
+            return
+        }
+        hireEveryoneAboard(level, player)
+    }
+
     // region recruiting
 
     private fun toggleRecruit(level: ServerLevel, player: ServerPlayer, villager: Villager) {
@@ -162,19 +190,146 @@ object ShipCrews {
             return
         }
 
-        // The berth number is an identity, not a reservation: it names them and fixes their row in the
-        // manifest, and it is deliberately NOT what the limit above is counted from.
+        val name = signOn(ledger, key, villager)
+        PathMessages.send(
+            player,
+            "Signed on $name, a ${professionName(villager)}, " +
+                "to ${crewName.string}. Crew: ${signed + 1}/$slots.",
+            PathMessages.Kind.GOOD
+        )
+    }
+
+    /**
+     * Write one villager onto [key]'s articles, and return the name they now answer to.
+     *
+     * The berth number is an identity, not a reservation: it names them and fixes their row in the manifest,
+     * and it is deliberately NOT what the crew limit is counted from -- so the caller checks for room before
+     * calling, and this never refuses.
+     */
+    private fun signOn(ledger: CrewLedger, key: CrewLedger.Key, villager: Villager): String {
         val berth = ledger.freeSlot(key, EurekaConfig.SERVER.crewSlotsMax)
         CrewNames.applyDefault(villager, berth)
         // Written down from the moment they sign on, so a crew member is recoverable even if the very next
         // thing that happens is their chunk unloading. The copy is refreshed whenever they are next in hand.
         ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager), CrewSnapshot.capture(villager))
-        PathMessages.send(
-            player,
-            "Signed on ${CrewNames.displayName(villager)}, a ${professionName(villager)}, " +
-                "to ${crewName.string}. Crew: ${signed + 1}/$slots.",
-            PathMessages.Kind.GOOD
+        return CrewNames.displayName(villager)
+    }
+
+    /**
+     * Sign on everybody standing in the ship's influence at once.
+     *
+     * ## Why the whole influence, and not just the deck
+     * The influence border is the region that MOVES with the ship -- anyone inside it is carried along when
+     * she sails, which is the only definition of "aboard" that a player can actually see (VS2 draws it) and
+     * the only one that matches what happens when the ship gets under way. Someone standing on the gunwale or
+     * a step off the stern is coming with you whether they signed anything or not, so they are exactly who
+     * this should be offering a berth to. [CrewMuster.villagersIn] already sweeps that region: its
+     * `DECK_MARGIN` is two blocks a face, which is what `influenceExtend` defaults to.
+     *
+     * ## One-directional, unlike the single-villager gesture
+     * Pointing at one villager TOGGLES them, because you are unmistakably talking about that one. This hires
+     * and never pays off: a gesture that signed on some and dismissed others in the same press would be
+     * impossible to predict from the outside, and undoing it would mean pressing it again and getting the
+     * exact inverse. Anyone already on the articles is simply left where they are.
+     *
+     * Everything it declined to do is counted and reported, because a captain who asked for "everyone" needs
+     * to know who did not come -- particularly the ones left ashore for want of a berth.
+     */
+    private fun hireEveryoneAboard(level: ServerLevel, player: ServerPlayer) {
+        val ship = shipUnder(level, player)
+        if (ship == null) {
+            PathMessages.send(
+                player,
+                "Stand aboard the ship you are crewing -- this signs on everyone she carries.",
+                PathMessages.Kind.ERROR
+            )
+            return
+        }
+
+        val station = CrewStations.stationOf(level, ship)
+        if (station == null) {
+            PathMessages.send(
+                player,
+                "${ShipCrew.name(ship)} has no wheel keeping articles. Look at a helm and press the crew key.",
+                PathMessages.Kind.ERROR
+            )
+            return
+        }
+
+        val ledger = CrewLedger.get(level.server)
+        ledger.adoptLegacy(level.server, station)
+
+        val crewName = station.helmName ?: nameTheCrew(level, player, station)
+        val key = CrewLedger.Key(
+            player.uuid,
+            HelmNames.keyOf(crewName),
+            HelmNames.variantOf(station.blockState)
         )
+
+        val slots = CrewData.slots(player)
+        var signed = ledger.crew(key).size
+
+        var hired = 0
+        var alreadyOurs = 0
+        var spokenFor = 0
+        var tooYoung = 0
+        var atTheBench = 0
+        var noBerth = 0
+
+        for (villager in CrewMuster.villagersIn(level, ship.worldAABB)) {
+            val existing = ledger.crewOf(villager.uuid)
+            if (existing != null) {
+                if (existing.captain == player.uuid) alreadyOurs++ else spokenFor++
+                continue
+            }
+            if (villager.isBaby) {
+                tooYoung++
+                continue
+            }
+            if (!EurekaConfig.SERVER.shipwrightCrew &&
+                villager.villagerData.profession().`is`(ShipwrightProfession.PROFESSION_KEY)
+            ) {
+                atTheBench++
+                continue
+            }
+            // Checked per villager rather than once up front: the count climbs as this loop fills berths, and
+            // the moment it meets the ceiling everyone left is left ashore.
+            if (signed >= slots) {
+                noBerth++
+                continue
+            }
+            signOn(ledger, key, villager)
+            signed++
+            hired++
+        }
+
+        val skipped = buildList {
+            if (alreadyOurs > 0) add("$alreadyOurs already signed")
+            if (spokenFor > 0) add("$spokenFor under another captain")
+            if (tooYoung > 0) add("$tooYoung too young")
+            if (atTheBench > 0) add("$atTheBench needed at the bench")
+            if (noBerth > 0) add("$noBerth left for want of a berth")
+        }
+        val tail = if (skipped.isEmpty()) "" else " (${skipped.joinToString(", ")})"
+
+        when {
+            hired > 0 -> PathMessages.send(
+                player,
+                "Signed on $hired ${if (hired == 1) "hand" else "hands"} to ${crewName.string}. " +
+                    "Crew: $signed/$slots.$tail",
+                PathMessages.Kind.GOOD
+            )
+            skipped.isEmpty() -> PathMessages.send(
+                player,
+                "Nobody aboard ${ShipCrew.name(ship)} to sign on.",
+                PathMessages.Kind.WARN
+            )
+            else -> PathMessages.send(
+                player,
+                "Nobody new signed on$tail.",
+                PathMessages.Kind.WARN
+            )
+        }
     }
 
     /**
