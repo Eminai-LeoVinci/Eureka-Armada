@@ -549,6 +549,17 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             physShip.doFluidDrag = true
             // Falling is not settling; the readout suffix would just be noise under a ship in freefall.
             damageSinkApplied = 0.0
+            // A cruise does NOT survive the fall. Cruise state is persistent by design -- it is meant to
+            // outlive a relog and pick the course back up -- and that is exactly wrong here: mend a ship
+            // that went down under orders and she would come back to life already under way, on a heading
+            // set before whatever wrecked her. So the orders die with the fall, and a repaired ship waits
+            // for her captain. The `if` is what makes this happen once per fall rather than every tick of
+            // one: after the first, isCruising is false. See the anchor path below, which reads the same.
+            if (isCruising) {
+                isCruising = false
+                clearCruiseLatches()
+                showCruiseStatus()
+            }
             return
         }
         // Disable fluid drag when helms are present, because it makes ships hard to drive. Per-category, and
