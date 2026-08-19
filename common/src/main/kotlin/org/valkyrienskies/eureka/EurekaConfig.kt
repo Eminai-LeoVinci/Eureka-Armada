@@ -1243,6 +1243,14 @@ object EurekaConfig {
         )
         var shipwrightRepairPercentage = 60
 
+        @JsonSchema(
+            description = "How far from a Shipwright's Bench, in blocks, a shipwright can see and work on a " +
+                "ship. Every assembled hull inside it is listed at once, so a captain can moor a whole " +
+                "armada off a harbor and have all of it in the book -- and an armada's children come along " +
+                "whenever their parent is in range, however far out they trail. Default 100."
+        )
+        var shipwrightRepairBlockRange = 100.0
+
         // region Ship damage repercussions
         // Integrity = the ship's current block count as a percentage of its count at assembly, so 100 is
         // pristine and the numbers below are integrity thresholds, not damage amounts. Maintained live: every

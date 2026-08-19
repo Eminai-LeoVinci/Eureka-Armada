@@ -40,7 +40,7 @@ object ShipwrightYard {
      */
     fun visible(level: ServerLevel, bench: BlockPos): List<Pair<LoadedServerShip, Boolean>> {
         val dimension = level.dimensionId
-        val reach = ShipRepair.REACH * ShipRepair.REACH
+        val reach = ShipRepair.reach * ShipRepair.reach
         val found = LinkedHashMap<Long, Pair<LoadedServerShip, Boolean>>()
 
         // A bench aboard a ship has a SHIPYARD position, and ships report their transform in WORLD space.

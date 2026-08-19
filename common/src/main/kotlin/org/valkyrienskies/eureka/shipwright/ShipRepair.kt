@@ -77,11 +77,12 @@ object ShipRepair {
     /**
      * How far from the bench a shipwright can see a ship, and work on it.
      *
-     * Wide enough that a captain can moor a whole armada off a harbor and have all of it listed at once, which
-     * is the point -- a repair yard that could only see one hull at a time would make bringing a fleet in
-     * pointless.
+     * Wide enough by default that a captain can moor a whole armada off a harbor and have all of it listed at
+     * once, which is the point -- a repair yard that could only see one hull at a time would make bringing a
+     * fleet in pointless. Read fresh from config on every use, like [matchPercent], so it can be widened or
+     * pulled in with a `/reload` rather than a rebuild.
      */
-    const val REACH = 100.0
+    val reach: Double get() = EurekaConfig.SERVER.shipwrightRepairBlockRange.coerceAtLeast(0.0)
 
     /**
      * What a shipwright makes of a hull compared with a set of plans.
@@ -245,7 +246,7 @@ object ShipRepair {
     }
 
     /**
-     * The nearest assembled ship to [at] within [REACH], or null.
+     * The nearest assembled ship to [at] within [reach], or null.
      *
      * Nearest rather than first found, because a busy harbor has several and the one being asked about is the
      * one in front of the shipwright.
@@ -253,7 +254,7 @@ object ShipRepair {
     fun nearby(level: ServerLevel, at: BlockPos): LoadedServerShip? {
         val dimension = level.dimensionId
         var best: LoadedServerShip? = null
-        var bestDistance = REACH * REACH
+        var bestDistance = reach * reach
 
         for (ship in level.shipObjectWorld.loadedShips) {
             if (ship.chunkClaimDimension != dimension) continue
