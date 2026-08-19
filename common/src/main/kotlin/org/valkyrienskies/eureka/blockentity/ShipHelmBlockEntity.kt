@@ -412,8 +412,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      *
      * Defaults ON, because a captain who has named a ship almost always wants it to stay named, and the case
      * this protects against -- a forgotten wheel quietly renaming a hull you had called something else -- is
-     * rarer than the case it serves. Unticking stops BOTH halves: nothing is remembered and nothing is
-     * applied, so a wheel deliberately switched off cannot surprise anyone later.
+     * rarer than the case it serves. Unticking stops the wheel applying and recording; what it already
+     * remembers keeps, so ticking the box again brings the name back. See [setKeepName].
      */
     var keepName: Boolean = true
         private set
@@ -455,10 +455,22 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         return minted
     }
 
-    /** Toggle the Keep Name behaviour. Clearing it also forgets, so unticking is a complete off switch. */
+    /**
+     * Toggle the Keep Name behaviour.
+     *
+     * Unticking stops the wheel APPLYING its name; it does not make the wheel forget it. It used to do both,
+     * on the reasoning that an off switch should be complete -- but the two halves are wanted separately.
+     * A captain who unticks this to let one hull come up under a fresh name still wants the old name on
+     * file, so that ticking the box again puts it back. Forgetting made that a one-way door: the name was
+     * gone the instant the box came off, and re-ticking produced another generated name with no way to
+     * recover the original short of remembering it yourself.
+     *
+     * Nothing is lost by keeping it, either. A wheel that is switched off applies nothing and records
+     * nothing new ([rememberShipName] still refuses while it is off), so the remembered name simply sits
+     * there, harmless, until the box is ticked again or a new name is recorded over it.
+     */
     fun setKeepName(value: Boolean) {
         keepName = value
-        if (!value) rememberedShipName = null
         setChanged()
         level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
     }
