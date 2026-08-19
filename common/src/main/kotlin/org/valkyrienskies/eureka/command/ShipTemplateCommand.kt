@@ -43,26 +43,30 @@ object ShipTemplateCommand {
             literal("vs").then(
                 literal("template")
                     .requires { it.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER) }
+                    // greedyString, not word(): template names may be namespaced ("pirate/sloop",
+                    // "blueprint/<uuid>") and word() refuses the slash outright -- which silently made every
+                    // namespaced template unreachable from chat. Greedy is safe because the name is the last
+                    // argument in all four shapes; ShipTemplate.idFor still validates what it is handed.
                     .then(
                         literal("save").then(
                             argument("ship", ShipArgument.ships()).then(
-                                argument("name", StringArgumentType.word()).executes { save(it) }
+                                argument("name", StringArgumentType.greedyString()).executes { save(it) }
                             )
                         )
                     )
                     .then(
                         literal("load").then(
-                            argument("name", StringArgumentType.word()).executes { load(it) }
+                            argument("name", StringArgumentType.greedyString()).executes { load(it) }
                         )
                     )
                     .then(
                         literal("info").then(
-                            argument("name", StringArgumentType.word()).executes { info(it) }
+                            argument("name", StringArgumentType.greedyString()).executes { info(it) }
                         )
                     )
                     .then(
                         literal("check").then(
-                            argument("name", StringArgumentType.word()).executes { check(it) }
+                            argument("name", StringArgumentType.greedyString()).executes { check(it) }
                         )
                     )
                     .then(literal("list").executes { list(it) })
