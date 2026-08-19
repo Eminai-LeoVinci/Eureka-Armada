@@ -102,6 +102,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      */
     private val pierced = HashSet<Int>()
 
+    /**
+     * Break effects this round has left to spend, across all of its impacts.
+     *
+     * A per-impact ration alone is not enough for an armor-piercing round: four impacts at four effects
+     * each is sixteen, arriving in four bursts a tick or two apart, which is the stutter this exists to
+     * stop. So the round carries one budget for its whole flight and the last impacts of a heavy one land
+     * quietly -- by which point the ball is deep inside a hull and its holes are behind three walls that
+     * nobody is looking through anyway.
+     */
+    private var effectBudget = EFFECT_BUDGET
+
     /** A cannonball is not a thing you can attack. */
     override fun hurtServer(level: ServerLevel, source: DamageSource, amount: Float): Boolean = false
 
@@ -232,8 +243,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // and there is no scale on it. EXPLOSION_EMITTER is the big TNT-style bloom; the ring of plain
         // EXPLOSION puffs around it is what makes the whole thing read as wide. Heavier shot throws more of
         // them, so a netherite hit looks like the hole it is about to make.
-        val bursts = 2 + load.ball.ordinal
-        level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, where.x, where.y, where.z, 1, 0.0, 0.0, 0.0, 0.0)
+        //
+        // The full bloom belongs to the FIRST strike alone. It is the most expensive thing a round does --
+        // EXPLOSION_EMITTER spawns a cluster client-side, and an armor-piercing ball was firing four of them
+        // a tick or two apart -- and it is also the least true after the first: the shot has already spent
+        // itself getting through the first wall, and the strikes behind it are a ball grinding on through a
+        // hull, not four fresh detonations. So the follow-throughs keep the shape and lose the scale.
+        val firstStrike = impactsLeft == load.impacts
+        val bursts = if (firstStrike) 2 + load.ball.ordinal else 2
+        if (firstStrike) {
+            level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, where.x, where.y, where.z, 1, 0.0, 0.0, 0.0, 0.0)
+        }
         for (i in 0 until bursts) {
             level.sendParticles(
                 ParticleTypes.EXPLOSION,
@@ -243,7 +263,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
                 1, 0.0, 0.0, 0.0, 0.0
             )
         }
-        level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, 24, 1.0, 1.0, 1.0, 0.03)
+        val smoke = if (firstStrike) 24 else 8
+        level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, smoke, 1.0, 1.0, 1.0, 0.03)
 
         if (blockHit != null) {
             val bite = if (blockImpacts == 0) {
@@ -254,7 +275,12 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             blockImpacts++
             // Destruction first, then fire. The order is the rule: an incendiary round lights what is left
             // standing, so burning can never be an extra helping of damage. See CannonDamage.kindle.
-            CannonDamage.punch(level, blockHit, bite)
+            //
+            // The hole is always the full size the round rolled; only how loudly it is made is rationed --
+            // this impact may show a few break effects, and never more than the round has left. See
+            // CannonDamage.punch and [effectBudget].
+            val allowed = minOf(EFFECTS_PER_IMPACT, effectBudget)
+            effectBudget -= CannonDamage.punch(level, blockHit, bite, allowed)
             CannonDamage.kindle(level, blockHit, load.incendiaryBlocks)
         }
 
@@ -276,6 +302,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         impactsLeft = input.getIntOr("ImpactsLeft", load.impacts)
         baseRoll = input.getIntOr("BaseRoll", 0)
         blockImpacts = input.getIntOr("BlockImpacts", 0)
+        effectBudget = input.getIntOr("EffectBudget", EFFECT_BUDGET)
     }
 
     override fun addAdditionalSaveData(output: ValueOutput) {
@@ -286,6 +313,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         output.putInt("ImpactsLeft", impactsLeft)
         output.putInt("BaseRoll", baseRoll)
         output.putInt("BlockImpacts", blockImpacts)
+        output.putInt("EffectBudget", effectBudget)
         if (!item.isEmpty) output.store("Shown", ItemStack.CODEC, item)
     }
 
@@ -305,6 +333,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
         private const val BURST_SPREAD = 2.0
+
+        /**
+         * Break effects one impact may show, and one whole round may show across all of its impacts.
+         *
+         * Four is enough to read as "that block just came apart" -- past it the puffs pile up inside a
+         * single hole and add nothing but packets. Twelve for the round keeps the worst case (an
+         * armor-piercing netherite ball, which can break thirty blocks over four impacts) to about what a
+         * plain round already cost, instead of four times it.
+         */
+        private const val EFFECTS_PER_IMPACT = 4
+        private const val EFFECT_BUDGET = 12
 
         fun spawn(
             level: ServerLevel,

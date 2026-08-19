@@ -5,6 +5,7 @@ import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.block.BaseFireBlock
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.gameevent.GameEvent
 
 /**
  * Taking a measured bite out of whatever the shot hit.
@@ -23,19 +24,32 @@ import net.minecraft.world.level.block.Block
 object CannonDamage {
 
     /**
-     * Destroy [count] blocks outward from [origin].
+     * Destroy [count] blocks outward from [origin], showing the break effect for at most [effects] of them,
+     * and return how many effects were actually spent.
      *
      * Breadth-first, so damage is a hole centred on the point of impact rather than a line bored through the
      * hull or a scatter of unconnected gaps. Air is stepped through but never counted: a round that clips the
      * edge of a deck should still take its full bite out of the timber it reaches, and counting air would let
      * a glancing hit spend its whole allowance on nothing.
      *
+     * ## Why the effects are rationed
+     * Vanilla's `destroyBlock` fires a break effect per block -- a puff of block particles and a sound, each
+     * a packet to every client in range. Fine for a pickaxe, which breaks one; a netherite round breaks a
+     * dozen in a single tick, and an armor-piercing one does that four times over. Thirty simultaneous
+     * break effects is a visible hitch, and it buys nothing: past the first few the puffs land on top of
+     * each other inside one hole and no player can tell four from thirty.
+     *
+     * So the blocks past the ration are removed QUIETLY -- the same work `destroyBlock` does (fluid-aware,
+     * so a hole in a flooded hull fills with water rather than air, and the game event still fires for
+     * anything listening) minus the effect nobody could see anyway. The hole is identical; only the noise
+     * about it is capped.
+     *
      * Nothing drops. A cannon is a weapon, not a quarry, and a gun that returned the hull it removed would be
      * the cheapest mining tool in the game -- point it at a mountain and collect. Putting a ship back together
      * is the shipwright's job, which is exactly the loop the repair feature exists to close.
      */
-    fun punch(level: ServerLevel, origin: BlockPos, count: Int) {
-        if (count <= 0) return
+    fun punch(level: ServerLevel, origin: BlockPos, count: Int, effects: Int = Int.MAX_VALUE): Int {
+        if (count <= 0) return 0
 
         val taken = ArrayList<BlockPos>(count)
         val seen = HashSet<BlockPos>()
@@ -62,9 +76,27 @@ object CannonDamage {
             }
         }
 
-        for (pos in taken) {
-            level.destroyBlock(pos, false)
+        val shown = minOf(taken.size, maxOf(effects, 0))
+        for ((index, pos) in taken.withIndex()) {
+            if (index < shown) level.destroyBlock(pos, false) else remove(level, pos)
         }
+        return shown
+    }
+
+    /**
+     * Take a block out without the break effect.
+     *
+     * Everything [net.minecraft.world.level.Level.destroyBlock] does except the `levelEvent` that spawns the
+     * puff and the sound -- the fluid-aware write, so breaking a waterlogged block leaves water exactly as
+     * vanilla would, and the game event, so nothing listening for destruction is fooled by the quiet. Drops
+     * are the one part deliberately left out, because a cannon never drops anything anyway.
+     */
+    private fun remove(level: ServerLevel, pos: BlockPos) {
+        val state = level.getBlockState(pos)
+        if (state.isAir) return
+        val fluid = level.getFluidState(pos)
+        level.setBlock(pos, fluid.createLegacyBlock(), Block.UPDATE_ALL)
+        level.gameEvent(GameEvent.BLOCK_DESTROY, pos, GameEvent.Context.of(null, state))
     }
 
     /**
