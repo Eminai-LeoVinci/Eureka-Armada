@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewBerths
 import org.valkyrienskies.eureka.pirate.PirateHelm
+import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
@@ -148,7 +149,11 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         pos: BlockPos
     ): Float {
         if (PirateHelm.inviolable(state)) {
-            PirateHelm.denyBreak(player)
+            // How many defenders remain, when this wheel keeps records and the server is asking.
+            val remaining = (level as? ServerLevel)
+                ?.let { server -> (server.getBlockEntity(pos) as? ShipHelmBlockEntity)?.let { PirateShips.livingCrew(server, it) } }
+                ?: -1
+            PirateHelm.denyBreak(player, remaining)
             return 0.0f
         }
         return super.getDestroyProgress(state, player, level, pos)

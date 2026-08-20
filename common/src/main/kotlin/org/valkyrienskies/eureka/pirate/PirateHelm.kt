@@ -1,12 +1,15 @@
 package org.valkyrienskies.eureka.pirate
 
 import java.util.UUID
+import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.block.state.BlockState
+import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.path.PathMessages
 
 /**
@@ -28,8 +31,12 @@ object PirateHelm {
 
     const val MESSAGE = "This is a pirate ship, you cannot access the Helm. Destroy it to conquer the vessel!"
 
-    // TODO(M5): include the live pillager count once crew tracking exists ("N pillagers still stand").
-    const val DEFENDED = "The crew defends the helm -- defeat the pillagers to conquer the vessel!"
+    /** The break refusal, counting the defenders. -1 = a wheel with no crew records (a test helm). */
+    fun defended(remaining: Int): String = when {
+        remaining < 0 -> "The crew defends the helm -- defeat the pillagers to conquer the vessel!"
+        remaining == 1 -> "The crew defends the helm -- 1 pillager still stands."
+        else -> "The crew defends the helm -- $remaining pillagers still stand."
+    }
 
     /** Every interaction door asks this: is this wheel a pirate's (or a dead pirate's, pre-conquest)? */
     @JvmStatic
@@ -57,14 +64,22 @@ object PirateHelm {
      * player worrying at an unbreakable block restarts the attempt over and over, the window below is what
      * keeps the HUD from stacking forty copies of the same line.
      */
-    fun denyBreak(player: Player?) {
+    fun denyBreak(player: Player?, remaining: Int) {
         val server = player as? ServerPlayer ?: return
         val now = System.currentTimeMillis()
         val last = lastBreakDeny[server.uuid]
         if (last != null && now - last < BREAK_DENY_WINDOW_MS) return
         lastBreakDeny[server.uuid] = now
-        PathMessages.send(server, DEFENDED, PathMessages.Kind.ERROR)
+        PathMessages.send(server, defended(remaining), PathMessages.Kind.ERROR)
     }
+
+    /**
+     * Whether [ship] still answers to a pirate wheel, black or white. While it does, no other helm may be
+     * placed aboard: a fresh wheel beside the pirate's would hand over the ship's controls -- and later its
+     * conquest -- without the fight the pirate wheel exists to force. Breaking theirs is the only door.
+     */
+    fun shipHasPirateWheel(level: ServerLevel, ship: LoadedServerShip): Boolean =
+        CrewStations.helmsAboard(level, ship)?.any { gated(it.blockState) } == true
 
     /** Wall-clock is deliberate here: this paces a HUD message for a human, not game logic. */
     private const val BREAK_DENY_WINDOW_MS = 5_000L

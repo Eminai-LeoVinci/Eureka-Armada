@@ -1328,9 +1328,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "Pirate proximity sphere: radius = the hull's horizontal half-diagonal times this. " +
                 "Bigger ships see further, exactly as the follow reach does. A ship counts as inside the " +
-                "moment any part of its hull crosses the line, not just its centre. Default 5.0."
+                "moment any part of its hull crosses the line, not just its centre. Default 10.0."
         )
-        var pirateZoneScale = 5.0
+        var pirateZoneScale = 10.0
 
         @JsonSchema(
             description = "Pirate proximity sphere: the radius never shrinks below this many blocks, however " +
@@ -1364,6 +1364,20 @@ object EurekaConfig {
                 "site goes back to the full 15-second ceremony. Default 2.0."
         )
         var pirateLingerMinutes = 2.0
+
+        @JsonSchema(
+            description = "An assembled pirate ship with no player within this many blocks disassembles " +
+                "itself IMMEDIATELY, linger or no linger -- an assembled ship is live physics, and physics " +
+                "for an audience of nobody is pure cost. Default 320.0."
+        )
+        var pirateStandDownRange = 320.0
+
+        @JsonSchema(
+            description = "How long after a pirate crew's last member falls before a fresh complement " +
+                "respawns on the deck, in minutes -- while the wheel still stands. Killing the crew turns " +
+                "the wheel white and breakable; this is the window to break it. Default 2.0."
+        )
+        var pirateRespawnMinutes = 2.0
         // endregion
 
         @JsonSchema(

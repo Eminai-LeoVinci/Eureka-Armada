@@ -4,10 +4,13 @@ import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.raid.Raider
+import net.minecraft.world.level.block.Block
 import net.minecraft.world.phys.AABB
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.FollowGeometry
 import org.valkyrienskies.eureka.follow.ShipCrew
@@ -64,6 +67,8 @@ object PirateShips {
         val berthId: Long,
         var leaderId: Long?,
         var lingerUntil: Long,
+        /** When this chase was created -- the newborn grace below is measured from here. */
+        val bornAt: Long,
         var standingDown: Boolean = false,
         var nextDisassembleTry: Long = 0L
     )
@@ -170,6 +175,11 @@ object PirateShips {
         tickCount++
         val now = level.gameTime
 
+        // Boarders, EVERY tick: a body on the hull assembles the ship now, not on the next scan. The whole
+        // point is denying the hand reaching for the wheel -- a scan cadence is a window, and windows get
+        // used. Cheap regardless: bounding-box rejects fire long before any block is read.
+        tickBoarders(level, now)
+
         // Proximity scan: does anyone stand inside a dormant ship's zone? Cheap (players x berths), but
         // there is no reason to ask more than twice a second.
         if (tickCount % 10 == 0L) scanZones(level, now)
@@ -186,8 +196,12 @@ object PirateShips {
         // resumes the pursuit; if not, the hunt fails into the circle and the ship stands itself down.
         if (tickCount % 20 == 0L) adoptAwake(level, now)
 
-        // The wakened ships' whole lifecycle: pursue, re-acquire, circle, stand down, retire.
+        // The wakened ships' whole lifecycle: pursue, linger, stand down, retire.
         if (chases.isNotEmpty()) tickChases(level, now)
+
+        // The crews: who is still standing on every loaded pirate deck, the TAKEN flip when the last one
+        // falls, and the respawn that turns the wheel black again.
+        if (tickCount % 20 == 0L) tickCrew(level, now)
 
         // Feed the debug wireframe, when someone asked for it. Keyed by the plain dimension identifier --
         // the same string the client-side renderer derives from its own level, with no VS2 format between.
@@ -206,14 +220,83 @@ object PirateShips {
             if (berth.state != PirateStore.BERTHED) continue
             if (report.shipId != null) continue // already awake (or conquered-in-place); nothing to arm
             if (berthId in arming) continue
+            // A TAKEN wheel is a dead crew's wheel: the ship stays quiet until they respawn or it is
+            // conquered. A ghost ship rising to give crewless chase reads as a bug, not a haunting.
+            if (report.helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE) continue
 
             val zone = zoneOf(level, berthId, report) ?: continue
+
             if (trespasserIn(level, zone) == null) {
                 countdowns.remove(berthId)
                 continue
             }
             countdowns.putIfAbsent(berthId, now + EurekaConfig.SERVER.pirateCountdownSeconds * 20L)
         }
+    }
+
+    /**
+     * The boarder's rule, run every tick: a body touching a dormant hull assembles the ship THIS tick. The
+     * fifteen-second countdown is for a captain deciding whether to sail on; someone already climbing the
+     * rail is past every warning -- and more to the point, past none of the mischief a still-dormant hull
+     * allows, so the window between boot and wake is kept as close to zero as the tick allows. Boarding
+     * bypasses the global assembly cooldown outright (it still WINDS it, spacing later zone wakes); the
+     * hard cap alone can refuse, being a performance rail rather than a pacing one.
+     */
+    private fun tickBoarders(level: ServerLevel, now: Long) {
+        val store = PirateStore.get(level)
+        for ((berthId, report) in reports) {
+            if (now - report.lastSeen > STALE_TICKS) continue
+            if (report.shipId != null || berthId in arming) continue
+            val berth = store.berth(berthId) ?: continue
+            if (berth.state != PirateStore.BERTHED) continue
+            if (report.helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE) continue
+
+            val boarder = level.players().firstOrNull {
+                it.isAlive && !it.isSpectator && touchingHull(level, it, report, berth)
+            } ?: continue
+
+            countdowns.remove(berthId)
+            arm(
+                level, berthId, report,
+                ShipCrew.standingOn(boarder), boarder.uuid, now,
+                bypassCooldown = true
+            )
+        }
+    }
+
+    /**
+     * Whether [player]'s body overlaps a solid block of the dormant hull around [report]'s wheel -- a boot
+     * on the deck, a hand on the rail. The region is a generous box around the wheel (the wheel may sit
+     * anywhere in its template), and fluids do not count: swimming beside the hull is not touching it.
+     */
+    private fun touchingHull(
+        level: ServerLevel,
+        player: ServerPlayer,
+        report: Report,
+        berth: PirateStore.Berth
+    ): Boolean {
+        val half = max(berth.sizeX, berth.sizeZ) + 2.0
+        val hx = report.helmPos.x + 0.5
+        val hy = report.helmPos.y.toDouble()
+        val hz = report.helmPos.z + 0.5
+        if (player.x < hx - half || player.x > hx + half) return false
+        if (player.z < hz - half || player.z > hz + half) return false
+        if (player.y < hy - berth.sizeY - 2.0 || player.y > hy + berth.sizeY + 2.0) return false
+
+        val box = player.boundingBox.inflate(CONTACT_MARGIN)
+        val min = BlockPos.containing(box.minX, box.minY, box.minZ)
+        val maxPos = BlockPos.containing(box.maxX, box.maxY, box.maxZ)
+        val cursor = BlockPos.MutableBlockPos()
+        for (x in min.x..maxPos.x) {
+            for (y in min.y..maxPos.y) {
+                for (z in min.z..maxPos.z) {
+                    cursor.set(x, y, z)
+                    val state = level.getBlockState(cursor)
+                    if (!state.isAir && state.fluidState.isEmpty) return true
+                }
+            }
+        }
+        return false
     }
 
     /**
@@ -313,11 +396,14 @@ object PirateShips {
         report: Report,
         leaderId: Long?,
         playerId: UUID?,
-        now: Long
+        now: Long,
+        bypassCooldown: Boolean = false
     ): Boolean {
         val cfg = EurekaConfig.SERVER
         if (chases.size >= cfg.pirateMaxAssembled) return false
-        if (lastAssemblyAt >= 0 && now - lastAssemblyAt < cfg.pirateAssemblyCooldownSeconds * 20L) return false
+        if (!bypassCooldown && lastAssemblyAt >= 0 && now - lastAssemblyAt < cfg.pirateAssemblyCooldownSeconds * 20L) {
+            return false
+        }
 
         lastAssemblyAt = now
         arming[berthId] = Arming(leaderId, playerId, now + ARM_PATIENCE_TICKS)
@@ -346,7 +432,8 @@ object PirateShips {
             val chase = PirateChase(
                 berthId = berthId,
                 leaderId = null,
-                lingerUntil = now2 + lingerTicks()
+                lingerUntil = now2 + lingerTicks(),
+                bornAt = now2
             )
             chases[shipId] = chase
 
@@ -374,7 +461,8 @@ object PirateShips {
             chases[shipId] = PirateChase(
                 berthId = berthId,
                 leaderId = null,
-                lingerUntil = now + lingerTicks()
+                lingerUntil = now + lingerTicks(),
+                bornAt = now
             )
             logger.info("[pirates] adopted awake pirate (ship {}), lingering", shipId)
         }
@@ -404,6 +492,11 @@ object PirateShips {
             }
 
             val pirate = world.loadedShips.getById(shipId) ?: continue // unloaded; hold our breath
+            // loadedShips is GLOBAL across dimensions while this tick is PER-DIMENSION -- the same trap
+            // ShipFollows.tick guards with this same line. Without it, the Nether's tick resolves an
+            // overworld pirate, asks the NETHER for nearby players, finds none, and executes the ship;
+            // the field test watched exactly that ("nearest player: none" beside a correct wheel position).
+            if (pirate.chunkClaimDimension != level.dimensionId) continue
             val control = pirate.getAttachment(EurekaShipControl::class.java) ?: continue
 
             // No report for ten seconds while the ship itself is loaded: the wheel is gone entirely
@@ -422,6 +515,46 @@ object PirateShips {
                 // disassembly under someone's feet is the fall-through case. Wait them out.
                 if (ShipCrew.aboard(level, pirate).isNotEmpty()) continue
                 report?.helm?.disassemble()
+                continue
+            }
+
+            // Nobody within earshot of the whole affair: stand down NOW, whatever else is going on. An
+            // assembled ship is live physics, and physics for an audience of no one is the one cost this
+            // feature must never carry -- the user's rule, overriding the linger clock outright.
+            //
+            // Measured from the WHEEL's transformed position, never from ship.worldAABB. The box is a stored
+            // field some pipeline refreshes, and for a ship assembled this session it stayed shipyard-stale
+            // for many seconds -- the field test watched this check kill every wake 5-8s in, with the player
+            // alongside, twice, and the log named it. shipToWorld is live from the first frame (the zone
+            // sphere demonstrably sails with the hull), so the wheel's position is the honest one. The
+            // newborn grace stays as a belt over those first frames.
+            if (now - chase.bornAt > NEWBORN_GRACE_TICKS && tickCount % 20 == 0L && fresh) {
+                val wheel = helmWorldCentre(level, report!!)
+                val nearest = nearestPlayerDistance(level, wheel)
+                if (nearest > EurekaConfig.SERVER.pirateStandDownRange) {
+                    ShipFollows.stopShip(pirate)
+                    control.pathRelease(true)
+                    chase.standingDown = true
+                    logger.info(
+                        "[pirates] {} beyond stand-down range; disassembling (wheel {},{},{} " +
+                            "helmPos {} shipId {} nearest player {}m range {})",
+                        shipId,
+                        wheel.x.toInt(), wheel.y.toInt(), wheel.z.toInt(),
+                        report.helmPos, report.shipId,
+                        if (nearest == Double.MAX_VALUE) "none" else nearest.toInt(),
+                        EurekaConfig.SERVER.pirateStandDownRange.toInt()
+                    )
+                    continue
+                }
+            }
+
+            // A dead crew's wheel: hold everything. The ship must not resume a pursuit with nobody to sail
+            // it, and it must not disassemble either -- it is a prize now, waiting to be conquered or for
+            // its crew to respawn. The linger clock rides along frozen.
+            if (report != null && report.helm.blockState.getValue(EurekaProperties.MARK) == HelmMark.TAKEN) {
+                ShipFollows.stopShip(pirate)
+                chase.leaderId = null
+                chase.lingerUntil = now + lingerTicks()
                 continue
             }
 
@@ -461,6 +594,158 @@ object PirateShips {
 
     /** The linger window, in ticks, from the config's minutes. */
     private fun lingerTicks(): Long = (EurekaConfig.SERVER.pirateLingerMinutes * 1200.0).toLong()
+
+    /** How far the closest living, non-spectator player is from [centre]; MAX_VALUE with nobody at all. */
+    private fun nearestPlayerDistance(level: ServerLevel, centre: Vector3d): Double {
+        var best = Double.MAX_VALUE
+        for (player in level.players()) {
+            if (!player.isAlive || player.isSpectator) continue
+            val dx = player.x - centre.x
+            val dy = player.y - centre.y
+            val dz = player.z - centre.z
+            val dist = sqrt(dx * dx + dy * dy + dz * dz)
+            if (dist < best) best = dist
+        }
+        return best
+    }
+
+    /**
+     * Who still stands on every loaded pirate deck. All dead starts the respawn clock and turns the wheel
+     * white -- breakable, the conquest's door; the clock running out with the wheel still standing brings
+     * the complement back from the papers and turns it black again.
+     *
+     * Judged only while a player is within [CREW_JUDGE_RANGE] of the wheel, and that guard is load-bearing:
+     * an assembled ship's SHIPYARD chunks tick even when the world chunks under its crew do not, so without
+     * it `getEntity(uuid) == null` would read as "dead" for a crew that is merely unloaded -- and the
+     * respawn would then quietly duplicate them.
+     */
+    private fun tickCrew(level: ServerLevel, now: Long) {
+        val store = PirateStore.get(level)
+        for ((berthId, report) in reports) {
+            if (now - report.lastSeen > STALE_TICKS) continue
+            val helm = report.helm
+            if (helm.pirateCrewUuids.isEmpty() && helm.pirateCrew.isEmpty()) continue // not ours to track
+            val berth = store.berth(berthId) ?: continue
+            if (berth.state != PirateStore.BERTHED) continue
+
+            val centre = helmWorldCentre(level, report)
+            val judge = level.players().any { player ->
+                if (!player.isAlive || player.isSpectator) return@any false
+                val dx = player.x - centre.x
+                val dy = player.y - centre.y
+                val dz = player.z - centre.z
+                dx * dx + dy * dy + dz * dz <= CREW_JUDGE_RANGE * CREW_JUDGE_RANGE
+            }
+            if (!judge) continue
+
+            // Overboard is dead, as far as the wheel knows. A pillager more than OVERBOARD_RANGE from its
+            // own ship is not coming back -- knocked into the sea, left behind by a chase -- and a wheel
+            // that stayed black forever on the strength of one pillager treading water half a map away
+            // would be unconquerable in practice. The lost hand is discarded, not just discounted, so a
+            // tagged, persistent mob is never left wandering the ocean floor for nobody.
+            var living = 0
+            for (id in helm.pirateCrewUuids) {
+                val raider = level.getEntity(id) as? Raider ?: continue
+                if (!raider.isAlive) continue
+                val dx = raider.x - centre.x
+                val dy = raider.y - centre.y
+                val dz = raider.z - centre.z
+                if (dx * dx + dy * dy + dz * dz > OVERBOARD_RANGE * OVERBOARD_RANGE) {
+                    raider.discard()
+                    logger.info("[pirates] a crew hand lost overboard at berth {}", BlockPos.of(berthId))
+                } else {
+                    living++
+                }
+            }
+
+            if (living > 0) {
+                if (berth.crewRespawnAt != -1L) {
+                    berth.crewRespawnAt = -1L
+                    store.markDirty()
+                }
+                continue
+            }
+
+            if (berth.crewRespawnAt == -1L) {
+                berth.crewRespawnAt = now + respawnTicks()
+                store.markDirty()
+                setMark(level, helm, HelmMark.TAKEN)
+                tellAround(level, centre, "The pirate crew is dead -- their wheel can be taken.")
+                logger.info("[pirates] berth {} crew wiped; wheel TAKEN", BlockPos.of(berthId))
+                continue
+            }
+
+            if (now < berth.crewRespawnAt) continue
+
+            // The wheel still stands (it reported this tick), the crew stayed dead the whole wait: relieve
+            // them from the papers. No snapshots means an authored hull without a complement -- clear the
+            // stamp and leave the wheel white rather than re-arming a clock that can never fire.
+            if (helm.pirateCrew.isEmpty()) {
+                berth.crewRespawnAt = -1L
+                store.markDirty()
+                continue
+            }
+            val spawned = PirateMuster.respawn(level, helm.pirateCrew, centre)
+            if (spawned.isEmpty()) continue // chunks fought back; retry next pass
+            helm.pirateCrewUuids = spawned
+            helm.setChanged()
+            berth.crewRespawnAt = -1L
+            store.markDirty()
+            setMark(level, helm, HelmMark.PIRATE)
+            tellAround(level, centre, "A fresh pirate crew has taken the deck!")
+            logger.info("[pirates] berth {} crew respawned ({})", BlockPos.of(berthId), spawned.size)
+        }
+    }
+
+    /** The wheel's world position -- through shipToWorld when its ship is assembled. */
+    private fun helmWorldCentre(level: ServerLevel, report: Report): Vector3d =
+        helmWorldCentre(level, report.helmPos)
+
+    private fun helmWorldCentre(level: ServerLevel, pos: BlockPos): Vector3d {
+        val ship = level.getLoadedShipManagingPos(pos)
+        val centre = Vector3d(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+        return ship?.shipToWorld?.transformPosition(centre) ?: centre
+    }
+
+    /** Flip the wheel's mark in place. Same block, so the block entity and its papers ride through. */
+    private fun setMark(level: ServerLevel, helm: ShipHelmBlockEntity, mark: HelmMark) {
+        val state = helm.blockState
+        if (state.getValue(EurekaProperties.MARK) == mark) return
+        level.setBlock(helm.blockPos, state.setValue(EurekaProperties.MARK, mark), Block.UPDATE_ALL)
+    }
+
+    /** A line for everyone near a POINT -- the crew messages, where there may be no ship to speak from. */
+    private fun tellAround(level: ServerLevel, centre: Vector3d, message: String) {
+        for (player in level.players()) {
+            if (!player.isAlive || player.isSpectator) continue
+            val dx = player.x - centre.x
+            val dy = player.y - centre.y
+            val dz = player.z - centre.z
+            if (dx * dx + dy * dy + dz * dz <= EARSHOT * EARSHOT) {
+                PathMessages.send(player, message, PathMessages.Kind.WARN)
+            }
+        }
+    }
+
+    private fun respawnTicks(): Long = (EurekaConfig.SERVER.pirateRespawnMinutes * 1200.0).toLong()
+
+    /**
+     * How many of the wheel's crew still live, for the break-refusal message. -1 when the wheel keeps no
+     * crew records at all (a set-mark'd test helm), which the message words differently. Counts by the
+     * same overboard rule the crew watch judges by, but read-only -- the watch does the discarding.
+     */
+    fun livingCrew(level: ServerLevel, helm: ShipHelmBlockEntity): Int {
+        if (helm.pirateCrewUuids.isEmpty()) return -1
+        val centre = helmWorldCentre(level, helm.blockPos)
+        return helm.pirateCrewUuids.count { id ->
+            val raider = level.getEntity(id) as? Raider ?: return@count false
+            if (!raider.isAlive) return@count false
+            val dx = raider.x - centre.x
+            val dy = raider.y - centre.y
+            val dz = raider.z - centre.z
+            dx * dx + dy * dy + dz * dz <= OVERBOARD_RANGE * OVERBOARD_RANGE
+        }
+    }
 
     private fun bind(level: ServerLevel, pirate: LoadedServerShip, target: LoadedServerShip, chase: PirateChase) {
         when (val refusal = ShipFollows.bind(level, pirate, target, ownerId = null)) {
@@ -550,15 +835,42 @@ object PirateShips {
         }
         val radius = max(cfg.pirateZoneMinRadius, halfDiag * cfg.pirateZoneScale)
 
-        // Read most-urgent-first: a ship in pursuit is pursuing whatever else is true of its berth.
+        // Read most-urgent-first: a ship in pursuit is pursuing whatever else is true of its berth --
+        // and a BOARDED ship is every bit as engaged as a pursuing one, so it burns the same red.
         val chase = report.shipId?.let { chases[it] }
+        val boarded = report.shipId != null && level.players().any {
+            it.isAlive && !it.isSpectator && ShipCrew.standingOn(it) == report.shipId
+        }
         val state = when {
-            chase?.leaderId != null -> ZoneState.PURSUING
+            chase?.leaderId != null || boarded -> ZoneState.PURSUING
             berthId in countdowns -> ZoneState.COUNTING
             report.shipId != null -> ZoneState.AWAKE
             else -> ZoneState.DORMANT
         }
         return Zone(centre.x, centre.y, centre.z, radius, state)
+    }
+
+    /**
+     * Whether [pos] sits inside a loaded, dormant pirate hull's box -- the placement gate's question. A
+     * wheel seated on a sleeping pirate's deck FROM RANGE (never touching, so never waking it) would ride
+     * into the assembled ship as a working helm and hand over everything the pirate wheel gates. The box is
+     * the boarder's generous one, so the refusal may reach a little past the planks; nobody needs a ship
+     * wheel two blocks from a pirate wreck.
+     */
+    fun nearDormantPirateHull(level: ServerLevel, pos: BlockPos): Boolean {
+        val store = PirateStore.get(level)
+        val now = level.gameTime
+        for ((berthId, report) in reports) {
+            if (now - report.lastSeen > STALE_TICKS) continue
+            if (report.shipId != null) continue
+            val berth = store.berth(berthId) ?: continue
+            val half = max(berth.sizeX, berth.sizeZ) + 2
+            if (kotlin.math.abs(pos.x - report.helmPos.x) > half) continue
+            if (kotlin.math.abs(pos.z - report.helmPos.z) > half) continue
+            if (kotlin.math.abs(pos.y - report.helmPos.y) > berth.sizeY + 2) continue
+            return true
+        }
+        return false
     }
 
     /** Every live zone in [level], for the debug wireframe and nothing else. */
@@ -655,4 +967,19 @@ object PirateShips {
 
     /** How far a pirate warning carries beyond the ship it concerns, in blocks. */
     private const val EARSHOT = 64.0
+
+    /**
+     * Crew life-or-death is judged only with a player this close to the wheel, so the crew's own world
+     * chunks are honestly loaded. Matches vanilla's entity-despawn horizon.
+     */
+    private const val CREW_JUDGE_RANGE = 128.0
+
+    /** How long a fresh chase is exempt from the stand-down range check while its world box settles. */
+    private const val NEWBORN_GRACE_TICKS = 100L
+
+    /** A crew hand farther than this from their own wheel is lost overboard: dead, as the wheel counts. */
+    private const val OVERBOARD_RANGE = 80.0
+
+    /** How far past the player's own box "touching" reaches -- a hand on the rail, not a near miss. */
+    private const val CONTACT_MARGIN = 0.35
 }
