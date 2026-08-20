@@ -17,6 +17,7 @@ import org.valkyrienskies.eureka.ship.ShipIntegrity
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -239,36 +240,17 @@ object ShipFollows {
      * standing on the ship in question.
      */
     fun begin(level: ServerLevel, player: ServerPlayer) {
-        val cfg = EurekaConfig.SERVER
         val world = level.shipObjectWorld
 
         val ownId = ShipCrew.standingOn(player)
         val own = ownId?.let { world.loadedShips.getById(it) }
             ?: return fail(player, "Stand on a ship to make it follow another.")
 
-        // The user's rule, and deliberately NOT what ShipPaths.resolveShip does -- that one silently promotes a
-        // child to its parent. An armada moves as one vessel under the flagship's control, so an order given
-        // from a welded-on child is ambiguous about which ship is meant to be doing the following. Making the
-        // player walk to the flagship makes it unambiguous, and it is where the wheel is anyway.
-        if (ArmadaShipControl.get(own)?.isChild == true) {
-            return fail(player, "An armada follows as one vessel -- give the order from the flagship's deck.")
-        }
-
-        val control = own.getAttachment(EurekaShipControl::class.java)
-            ?: return fail(player, "This ship has no helm to steer it.")
-        if (!control.pathHullReady) {
-            return fail(player, "This ship's helm hasn't come up yet -- try again in a moment.")
-        }
-
         // Sized off the ship giving the order, not the one being pointed at -- reach is a fact about the vessel
         // setting off, and the target isn't known until the ray has already been cast.
         val reach = targetRange(own)
         val target = lookedAtShip(level, player, reach)
             ?: return fail(player, "Look at a ship to follow it (within ${reach.toInt()}m).")
-
-        if (ArmadaGroup.sameVessel(level, own, target)) {
-            return fail(player, "That's your own vessel.")
-        }
 
         // Already chasing this exact ship: the key is a toggle.
         val existing = followers[own.id]
@@ -283,46 +265,29 @@ object ShipFollows {
             return
         }
 
-        if (ShipPaths.isBusy(own.id)) {
-            return fail(player, "This ship is busy with a route -- hold SHIFT+P to release it first.")
+        when (bind(level, own, target, ownerId = player.uuid)) {
+            null -> Unit
+            BindRefusal.ARMADA_CHILD ->
+                return fail(player, "An armada follows as one vessel -- give the order from the flagship's deck.")
+            BindRefusal.NO_CONTROL ->
+                return fail(player, "This ship has no helm to steer it.")
+            BindRefusal.NOT_READY ->
+                return fail(player, "This ship's helm hasn't come up yet -- try again in a moment.")
+            BindRefusal.SAME_VESSEL ->
+                return fail(player, "That's your own vessel.")
+            BindRefusal.BUSY_ROUTE ->
+                return fail(player, "This ship is busy with a route -- hold SHIFT+P to release it first.")
+            BindRefusal.FOLLOW_CHAIN ->
+                return fail(player, "'${ShipCrew.name(target)}' is already in this ship's follow chain.")
+            BindRefusal.NO_TARGET_FRAME ->
+                return fail(player, "That ship has no blocks to take station on.")
+            BindRefusal.NO_OWN_CENTRE ->
+                return fail(player, "This ship has no blocks to measure from.")
+            BindRefusal.NO_HELM ->
+                return fail(player, "This ship needs a helm before it can follow anything.")
         }
-
-        // A pair marking EACH OTHER is the koi manoeuvre -- both ships enter the circling mode and orbit their
-        // shared midpoint -- so the direct A<->B case is welcomed through. Longer loops (A follows B follows C
-        // follows A) are still refused: nothing in a three-ship ring is circling anything in particular, and
-        // each keeps station on something that is keeping station on it while the whole ring drifts.
-        val mutualPair = followers[target.id]?.leaderId == own.id
-        if (!mutualPair && leadsBackTo(own.id, target.id)) {
-            return fail(player, "'${ShipCrew.name(target)}' is already in this ship's follow chain.")
-        }
-
-        // BEFORE pathBegin, not after. pathBegin sets `pathFollowing`, which suppresses every abandoned-hull
-        // brake in physTick on the promise that something is about to steer. Bailing out after it would leave
-        // that promise unkept and the flag set with no follower to clear it -- the hull would coast, unbraked
-        // and unsteered, until someone sat down at the wheel. Everything that can refuse has to refuse first.
-        val frame = FollowGeometry.frameOf(target)
-            ?: return fail(player, "That ship has no blocks to take station on.")
-        val centre = FollowGeometry.centreOf(own, Vector3d())
-            ?: return fail(player, "This ship has no blocks to measure from.")
-
-        if (!control.pathBegin()) {
-            return fail(player, "This ship needs a helm before it can follow anything.")
-        }
-
-        // Whichever beam of the leader this ship is already on. Because the side is taken from where the
-        // follower IS, the approach never has to cross the leader's centreline -- which is most of the reason
-        // this can be a simple controller and still not cut across the leader's bow.
-        // 0 (dead on the centreline, i.e. directly ahead or astern) has to become something, and either answer
-        // is equally good there; +1 keeps it deterministic.
-        val side = FollowGeometry.sideOf(frame, centre, 0.0).let { if (it == 0) 1 else it }
-
-        followers[own.id] = ShipFollower(
-            shipId = own.id,
-            leaderId = target.id,
-            ownerId = player.uuid,
-            side = side,
-            slot = claimSlot(target.id, side, own.id)
-        )
+        // Non-null after a successful bind -- bind() refused with NO_CONTROL otherwise.
+        val control = own.getAttachment(EurekaShipControl::class.java) ?: return
 
         val leaderName = ShipCrew.name(target)
         PathMessages.send(player, "In pursuit of '$leaderName' -- coming alongside.", PathMessages.Kind.GOOD)
@@ -351,6 +316,65 @@ object ShipFollows {
     /** Stop a ship's pursuit without needing a player. */
     fun stopShip(ship: LoadedServerShip): Boolean = release(ship, stopShip = true) != null
 
+    /** Why [bind] said no. [begin] maps each to its player-worded refusal; other callers act on the value. */
+    enum class BindRefusal {
+        ARMADA_CHILD, NO_CONTROL, NOT_READY, SAME_VESSEL, BUSY_ROUTE, FOLLOW_CHAIN,
+        NO_TARGET_FRAME, NO_OWN_CENTRE, NO_HELM
+    }
+
+    /**
+     * Bind [own] to keep station on [target] -- the whole mechanics of a pursuit, with no player anywhere
+     * in it. [begin] is the Sneak+F wrapper (raycast, toggle, messages); this is what pirate ships call, and
+     * every guard a pursuit needs lives HERE so the two callers cannot drift apart.
+     *
+     * @param ownerId who gave the order, if anyone. Recorded on the follower and read by nothing today; a
+     * pirate's pursuit has no owner and passes null.
+     * @return null on success, or the reason the bind was refused.
+     */
+    fun bind(level: ServerLevel, own: LoadedServerShip, target: LoadedServerShip, ownerId: UUID?): BindRefusal? {
+        // Deliberately NOT what ShipPaths.resolveShip does -- that one silently promotes a child to its
+        // parent. An armada moves as one vessel under the flagship's control, so a follow order bound to a
+        // welded-on child is ambiguous about which ship is meant to be doing the following.
+        if (ArmadaShipControl.get(own)?.isChild == true) return BindRefusal.ARMADA_CHILD
+
+        val control = own.getAttachment(EurekaShipControl::class.java) ?: return BindRefusal.NO_CONTROL
+        if (!control.pathHullReady) return BindRefusal.NOT_READY
+        if (ArmadaGroup.sameVessel(level, own, target)) return BindRefusal.SAME_VESSEL
+        if (ShipPaths.isBusy(own.id)) return BindRefusal.BUSY_ROUTE
+
+        // A pair marking EACH OTHER is the koi manoeuvre -- both ships enter the circling mode and orbit their
+        // shared midpoint -- so the direct A<->B case is welcomed through. Longer loops (A follows B follows C
+        // follows A) are still refused: nothing in a three-ship ring is circling anything in particular, and
+        // each keeps station on something that is keeping station on it while the whole ring drifts.
+        val mutualPair = followers[target.id]?.leaderId == own.id
+        if (!mutualPair && leadsBackTo(own.id, target.id)) return BindRefusal.FOLLOW_CHAIN
+
+        // BEFORE pathBegin, not after. pathBegin sets `pathFollowing`, which suppresses every abandoned-hull
+        // brake in physTick on the promise that something is about to steer. Bailing out after it would leave
+        // that promise unkept and the flag set with no follower to clear it -- the hull would coast, unbraked
+        // and unsteered, until someone sat down at the wheel. Everything that can refuse has to refuse first.
+        val frame = FollowGeometry.frameOf(target) ?: return BindRefusal.NO_TARGET_FRAME
+        val centre = FollowGeometry.centreOf(own, Vector3d()) ?: return BindRefusal.NO_OWN_CENTRE
+
+        if (!control.pathBegin()) return BindRefusal.NO_HELM
+
+        // Whichever beam of the leader this ship is already on. Because the side is taken from where the
+        // follower IS, the approach never has to cross the leader's centreline -- which is most of the reason
+        // this can be a simple controller and still not cut across the leader's bow.
+        // 0 (dead on the centreline, i.e. directly ahead or astern) has to become something, and either answer
+        // is equally good there; +1 keeps it deterministic.
+        val side = FollowGeometry.sideOf(frame, centre, 0.0).let { if (it == 0) 1 else it }
+
+        followers[own.id] = ShipFollower(
+            shipId = own.id,
+            leaderId = target.id,
+            ownerId = ownerId,
+            side = side,
+            slot = claimSlot(target.id, side, own.id)
+        )
+        return null
+    }
+
     // endregion
 
     // region queries
@@ -370,7 +394,7 @@ object ShipFollows {
      * the next ship over. Every size band adds `followTargetRangeStep`, so an 80-block reach on the smallest
      * hull becomes 200 at a footprint of 20 and tops out at `followTargetRangeMax`.
      */
-    private fun targetRange(ship: LoadedServerShip): Double {
+    fun targetRange(ship: LoadedServerShip): Double {
         val cfg = EurekaConfig.SERVER
         val reach = cfg.followTargetRange + cfg.followTargetRangeStep * ShipFootprint.bands(ShipFootprint.of(ship))
         // coerceIn rather than coerceAtMost: a max edited below the base would otherwise invert the pair.
