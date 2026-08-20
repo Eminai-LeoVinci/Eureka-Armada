@@ -65,6 +65,12 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         if (level.isClientSide) return
         level as ServerLevel
 
+        // onPlace also fires for same-block STATE changes -- the engine guards this against its own HEAT
+        // steps, and the helm needs it for its MARK flips: every crew wipe (PIRATE -> TAKEN) and respawn
+        // (TAKEN -> PIRATE) was quietly incrementing the count, so a conquered wheel broke to helms=1 and
+        // the conquest freeze released itself as "claimed" the same second it opened.
+        if (oldState.block == this) return
+
         val ship = level.getLoadedShipManagingPos(pos) ?: return
         EurekaShipControl.getOrCreate(ship).helms += 1
     }
