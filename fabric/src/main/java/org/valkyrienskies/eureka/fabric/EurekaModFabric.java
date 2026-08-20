@@ -14,17 +14,12 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
-import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
-import net.fabricmc.fabric.api.resource.ResourcePackActivationType;
-import net.fabricmc.loader.api.FabricLoader;
-import net.fabricmc.loader.api.ModContainer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
 import net.minecraft.client.renderer.entity.EntityRenderers;
 import net.minecraft.client.renderer.entity.ThrownItemRenderer;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
 import org.valkyrienskies.eureka.EurekaBlockEntities;
 import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
@@ -320,11 +315,6 @@ public class EurekaModFabric implements ModInitializer {
                 EurekaItems.INSTANCE.getTAB(),
                 CreativeTabs.INSTANCE.create()
             );
-
-            ModContainer eureka = FabricLoader.getInstance().getModContainer(EurekaMod.MOD_ID)
-                    .orElseThrow(() -> new IllegalStateException("Eureka's ModContainer couldn't be found!"));
-            Identifier packId = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "retro_helms");
-            ResourceManagerHelper.registerBuiltinResourcePack(packId, eureka, "Eureka retro helms", ResourcePackActivationType.NORMAL);
         }
     }
 
