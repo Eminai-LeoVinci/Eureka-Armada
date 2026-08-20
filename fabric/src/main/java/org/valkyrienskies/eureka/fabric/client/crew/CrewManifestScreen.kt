@@ -1480,6 +1480,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_AMMO_MENU -> if (stores?.ammo?.isNotEmpty() == true) {
                 ammoMenuOpen = true
                 ammoMenuScroll = 0
+                // The menu hangs below its row, and with the body scrolled high the row sits deep in
+                // the viewport -- the list ran past the panel's bottom edge and its last entries were
+                // cut off. Opening rides the body to its floor instead: the ammo row at its highest,
+                // and the six menu rows end exactly at the body's bottom edge.
+                opsScroll = (OPS_CONTENT_H - OPS_BODY_H).coerceAtLeast(0)
             }
             STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
                 PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, shotSide, ball, charge, ctrlLayer)
