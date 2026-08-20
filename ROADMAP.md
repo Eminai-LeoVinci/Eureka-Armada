@@ -730,7 +730,31 @@ a stricken ship is already how you stop a free fall today.
 > fall-through, hanging entities dropping. It needs a hard cap on concurrent pirate ships, a
 > chunk-loaded precondition, and a global cooldown.
 
+### Phase 5 status (2026-08-20) — core loop SHIPPED; M7 holds the rest
+
+M1–M6 are shipped and confirmed in game: generate → wake → chase → board → wipe the crew →
+break the wheel → claim her inside the minute or watch her founder → the site regenerates
+next dawn. Helm-less foundering became universal along the way (player ships included, with
+a configurable grace).
+
+**M7 — pirate gunnery and polish (deferred; the next Phase 5 work when it resumes):**
+
+- **Pirate gunnery proper** — the `PirateChase` gunnery seam; pirates fight back.
+- **Loot tables** — pending the loot list; the references ride the structure `.nbt` (above).
+- **Pillager vision, shooting range, and projectile edits** — crossbow shot range lives
+  inside vanilla's crossbow goal, so it lands with the combat pass.
+- **Weighted hull pool** — a pirate site draws its template from a weighted pool (the
+  uniform draw in `PirateShips.attemptRegen` is the seam; weights go in the worldgen pool
+  entry AND `pirateHulls`, hand-synced like the rest of that pair).
+- **User-authored hulls** — capture in game → jar `pirate/` → pool + `pirateHulls` config.
+
+The strip-list sweep (6c) stays LAST before any public build, and now also covers the
+in-game dev/test messages the pirate work prints.
+
 ### Phase 6 — Harbors & Docks *(gated on the commission)*
+
+> **DEFERRED (2026-08-20):** picked up roughly a month out. When it starts, this phase folds
+> into a fresh phase list together with the ideas accumulated since — harbors likely first.
 
 **Harbors** generate on beach shores, in three themes:
 
