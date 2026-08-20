@@ -1415,6 +1415,34 @@ object EurekaConfig {
         )
         var pirateRespawnMinutes = 2.0
 
+        @JsonSchema(
+            description = "How long a conquered pirate ship hangs FROZEN in place after its wheel breaks, " +
+                "in minutes. Placing any helm aboard inside this window claims the vessel, guns and all; " +
+                "letting it close cuts her loose to founder, settle on the seabed, and break up. Default 1.0."
+        )
+        var pirateConquestFreezeMinutes = 1.0
+
+        @JsonSchema(
+            description = "How long a conquered site waits before regenerating a fresh pirate ship, in " +
+                "MINECRAFT DAYS on the day clock -- conquer one at dawn and its replacement arrives next " +
+                "dawn. /time set walks the wait forward; setting time backwards re-anchors rather than " +
+                "freezing the site. Default 1.0."
+        )
+        var pirateRegenDays = 1.0
+
+        @JsonSchema(
+            description = "A site will not regenerate while a player is within this many blocks of it -- " +
+                "no ship materialising on somebody's head. Default 48.0."
+        )
+        var pirateRegenPlayerClearRadius = 48.0
+
+        @JsonSchema(
+            description = "The hulls a regenerating site draws from, uniformly at random -- template names " +
+                "under data/vs_eureka/structure/. Keep in step with the worldgen template_pool JSON, which " +
+                "vanilla reads separately. A weight system can replace the uniform draw later. " +
+                "Default [pirate/sloop]."
+        )
+        var pirateHulls: List<String> = listOf("pirate/sloop")
         // endregion
 
         @JsonSchema(

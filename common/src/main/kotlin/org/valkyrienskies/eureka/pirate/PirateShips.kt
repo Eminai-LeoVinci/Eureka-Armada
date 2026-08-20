@@ -5,12 +5,14 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.levelgen.Heightmap
 import net.minecraft.world.phys.AABB
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
+import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.FollowGeometry
 import org.valkyrienskies.eureka.follow.ShipCrew
@@ -84,6 +86,9 @@ object PirateShips {
     /** pirate shipId -> its chase. */
     private val chases = HashMap<Long, PirateChase>()
 
+    /** berthId -> the deadline for its vanished wheel to report back before the vanishing is a conquest. */
+    private val vanished = HashMap<Long, Long>()
+
     // -1 = never, and the guard tests for it explicitly. NOT Long.MIN_VALUE: `now - MIN_VALUE` overflows
     // negative, which made the cooldown check refuse every wake-up the manager ever attempted -- the
     // countdown expired, nothing assembled, and the zone quietly re-armed. Found in the first field test.
@@ -111,6 +116,8 @@ object PirateShips {
             if (berthId == null) return
         }
         reports[berthId] = Report(pos, shipId, level.gameTime, helm)
+        // A report is life: whatever vanished, it was a relocation, not a break.
+        vanished.remove(berthId)
 
         // A world copied without its SavedData, or a store lost to a crash: re-create the site record so
         // the wheel is not left reporting into the void forever.
@@ -202,6 +209,15 @@ object PirateShips {
         // The crews: who is still standing on every loaded pirate deck, the TAKEN flip when the last one
         // falls, and the respawn that turns the wheel black again.
         if (tickCount % 20 == 0L) tickCrew(level, now)
+
+        // Vanished wheels past their grace: the conquest begins.
+        if (vanished.isNotEmpty()) tickVanished(level, now)
+
+        // Conquest windows: claimed ships released to their new captain, expired ones cut loose to founder.
+        tickFrozen(level, now)
+
+        // Conquered sites past their dawn: a fresh ship out of the pool.
+        if (tickCount % 100 == 0L) tickRegen(level)
 
         // Feed the debug wireframe, when someone asked for it. Keyed by the plain dimension identifier --
         // the same string the client-side renderer derives from its own level, with no VS2 format between.
@@ -592,6 +608,181 @@ object PirateShips {
         }
     }
 
+    // region conquest + wreck + regeneration
+
+    /**
+     * A pirate-marked wheel just left the world. Called from ShipHelmBlock's removal hook, which cannot
+     * tell a conquest from an assembly relocating the block -- so this opens a short grace, and the
+     * relocated wheel clearing it by reporting from its new address is the disambiguation. A wheel that
+     * stays silent past the grace was BROKEN, and that is the conquest.
+     */
+    fun helmVanished(level: ServerLevel, pos: BlockPos) {
+        if (!EurekaConfig.SERVER.pirateShipsEnabled) return
+        val berthId = reports.entries.firstOrNull { it.value.helmPos == pos }?.key ?: return
+        vanished.putIfAbsent(berthId, level.gameTime + VANISH_GRACE_TICKS)
+    }
+
+    private fun tickVanished(level: ServerLevel, now: Long) {
+        val iterator = vanished.iterator()
+        while (iterator.hasNext()) {
+            val (berthId, deadline) = iterator.next()
+            if (now < deadline) continue
+            iterator.remove()
+            conquer(level, berthId, now)
+        }
+    }
+
+    /**
+     * The wheel is broken: the site enters its regeneration wait -- a full day on the DAY clock, so a ship
+     * conquered at dawn is back next dawn, and `/time set` walks the wait forward for testing -- and an
+     * assembled hull is FROZEN in place for the conquest window. Placing any helm inside the window claims
+     * her (the pirate wheel is gone, so the placement ban has already lifted); letting it close cuts her
+     * loose to founder.
+     */
+    private fun conquer(level: ServerLevel, berthId: Long, now: Long) {
+        val store = PirateStore.get(level)
+        val berth = store.berth(berthId) ?: return
+        berth.state = PirateStore.REGEN_WAIT
+        berth.regenAt = level.dayTime + regenTicks()
+        berth.crewRespawnAt = -1L
+        store.markDirty()
+
+        val report = reports.remove(berthId)
+        countdowns.remove(berthId)
+        arming.remove(berthId)
+
+        val shipId = report?.shipId
+        if (shipId == null) {
+            logger.info("[pirates] wheel broken on dormant berth {}; site regenerates next dawn", BlockPos.of(berthId))
+            return
+        }
+        chases.remove(shipId)
+        store.frozenShips[shipId] = now + freezeTicks()
+        store.markDirty()
+        level.shipObjectWorld.loadedShips.getById(shipId)?.let { loaded ->
+            ShipFollows.stopShip(loaded)
+            // The window is a HOLD, not a freeze: she keeps riding the water (or hanging in the air)
+            // exactly as she did before the wheel broke -- the break only starts the clock. The first cut
+            // set isStatic and the user watched a "conquered" ship stand rigid as if disassembled.
+            loaded.getAttachment(EurekaShipControl::class.java)?.founderHold = true
+        }
+        logger.info("[pirates] wheel broken on ship {}; conquest window open", shipId)
+    }
+
+    /**
+     * Every frozen hull: released to its claimant the moment a new helm stands on it, or cut loose to
+     * founder when the window closes. The deadline lives in the SavedData store because `isStatic`
+     * persists on the ship itself -- a forgotten deadline would leave a hull frozen forever.
+     */
+    private fun tickFrozen(level: ServerLevel, now: Long) {
+        val store = PirateStore.get(level)
+        if (store.frozenShips.isEmpty()) return
+        val world = level.shipObjectWorld
+        val iterator = store.frozenShips.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val shipId = entry.key
+            val loaded = world.loadedShips.getById(shipId)
+            val control = loaded?.getAttachment(EurekaShipControl::class.java)
+
+            // Claimed: a helm placed aboard makes helms >= 1, and the ship answers to its new captain.
+            // The main control body clears the hold itself on its first healthy tick.
+            if (control != null && control.helms >= 1) {
+                iterator.remove()
+                store.markDirty()
+                tellNear(level, loaded, "The vessel answers to a new wheel -- she is yours.")
+                logger.info("[pirates] ship {} claimed", shipId)
+                continue
+            }
+
+            if (now < entry.value) {
+                // Keep the hold asserted while the window runs -- belt over the persisted flag.
+                control?.founderHold = true
+                continue
+            }
+
+            // Unclaimed, and the window is over. Dropping the hold is the whole sentence: a helm-less,
+            // unheld hull is ShipFoundering's the moment it exists, so the sinking, the settling and the
+            // seabed breakup all follow with no pirate bookkeeping at all. Needs the ship loaded to write
+            // the flag; an unloaded hull just stays held until it next loads.
+            if (control == null) {
+                if (world.allShips.getById(shipId) == null) {
+                    iterator.remove() // the ship no longer exists; nothing left to cut loose
+                    store.markDirty()
+                }
+                continue
+            }
+            iterator.remove()
+            store.markDirty()
+            control.founderHold = false
+            logger.info("[pirates] ship {} unclaimed; cut loose to founder", shipId)
+        }
+    }
+
+    /**
+     * Conquered sites past their dawn get a fresh ship -- a RANDOM hull from the configured pool, which is
+     * also where a weight system slots in later. Measured on the DAY clock; a deadline further away than
+     * the whole window means somebody set time BACKWARDS, and it re-anchors rather than freezing the site.
+     * Refusals are silent retries: debris still in the box, a player standing too close, chunks unloaded.
+     */
+    private fun tickRegen(level: ServerLevel) {
+        val store = PirateStore.get(level)
+        val waiting = store.allBerths.filter { it.value.state == PirateStore.REGEN_WAIT }
+        if (waiting.isEmpty()) return
+        val dayNow = level.dayTime
+        val window = regenTicks()
+        for ((berthId, berth) in waiting) {
+            if (berth.regenAt - dayNow > window) {
+                berth.regenAt = dayNow + window
+                store.markDirty()
+                continue
+            }
+            if (dayNow < berth.regenAt) continue
+            attemptRegen(level, berthId, berth, ignorePlayers = false)
+        }
+    }
+
+    /** One regeneration attempt. Returns a human answer for the debug command; null means it happened. */
+    fun attemptRegen(level: ServerLevel, berthId: Long, berth: PirateStore.Berth, ignorePlayers: Boolean): String? {
+        val store = PirateStore.get(level)
+        val origin = BlockPos.of(berth.originPos)
+        if (!level.isLoaded(origin)) return "the site's chunks are not loaded"
+        if (!ignorePlayers) {
+            val clear = EurekaConfig.SERVER.pirateRegenPlayerClearRadius
+            val tooClose = level.players().any {
+                it.isAlive && !it.isSpectator && it.distanceToSqr(
+                    origin.x + 0.5, origin.y + 0.5, origin.z + 0.5
+                ) <= clear * clear
+            }
+            if (tooClose) return "a player is too close to the site"
+        }
+        val name = EurekaConfig.SERVER.pirateHulls.filter { ShipTemplate.find(level, it) != null }
+            .randomOrNull() ?: return "no pirateHulls entry resolves to a template"
+        val template = ShipTemplate.find(level, name)!!
+        val size = template.size
+        // First free Y over the water column -- the same seam the worldgen learned: the keel rides ON the
+        // surface, riding one above the top water block.
+        val floorY = level.getHeight(Heightmap.Types.WORLD_SURFACE, origin.x, origin.z)
+        val corner = BlockPos(origin.x - size.x / 2, floorY, origin.z - size.z / 2)
+        if (PlacementCheck.test(level, template, corner) !is PlacementCheck.Fits) {
+            return "the site is obstructed (wreck debris?); it will retry"
+        }
+        if (ShipTemplate.place(level, name, corner) !is ShipTemplate.Placed) return "placement failed"
+
+        // The new wheel adopts itself into a NEW berth on its first tick; this site's record retires. The
+        // new key is the new wheel's position, so a site can wander by up to half a hull per regeneration
+        // -- bounded, and the price of never needing a worldgen hook.
+        store.removeBerth(berthId)
+        logger.info("[pirates] site {} regenerated as {}", origin.toShortString(), name)
+        return null
+    }
+
+    private fun freezeTicks(): Long = (EurekaConfig.SERVER.pirateConquestFreezeMinutes * 1200.0).toLong()
+
+    private fun regenTicks(): Long = (EurekaConfig.SERVER.pirateRegenDays * 24000.0).toLong()
+
+    // endregion
+
     /** The linger window, in ticks, from the config's minutes. */
     private fun lingerTicks(): Long = (EurekaConfig.SERVER.pirateLingerMinutes * 1200.0).toLong()
 
@@ -911,7 +1102,8 @@ object PirateShips {
             val fresh = report != null && now - report.lastSeen <= STALE_TICKS
             val chase = report?.shipId?.let { chases[it] }
             val state = when {
-                berth.state == PirateStore.REGEN_WAIT -> "REGEN_WAIT"
+                berth.state == PirateStore.REGEN_WAIT ->
+                    "REGEN_WAIT (${(berth.regenAt - level.dayTime).coerceAtLeast(0) / 20}s of day-time)"
                 !fresh -> "unloaded"
                 chase?.standingDown == true -> "standing down (ship ${report!!.shipId})"
                 chase != null && chase.leaderId != null -> "PURSUING ship ${chase.leaderId} (ship ${report!!.shipId})"
@@ -922,6 +1114,16 @@ object PirateShips {
             }
             "${BlockPos.of(berth.originPos).toShortString()} [${berth.templateId}] $state"
         }
+    }
+
+    /** Force the nearest waiting site's regeneration now, clock be damned. DEV ONLY, /vs pirate regen. */
+    fun forceRegen(level: ServerLevel, player: ServerPlayer): String? {
+        val store = PirateStore.get(level)
+        val nearest = store.allBerths.entries
+            .filter { it.value.state == PirateStore.REGEN_WAIT }
+            .minByOrNull { BlockPos.of(it.value.originPos).distSqr(player.blockPosition()) }
+            ?: return "no site is waiting to regenerate in this dimension"
+        return attemptRegen(level, nearest.key, nearest.value, ignorePlayers = true)
     }
 
     /** Force the nearest fresh berth's countdown to expire now. DEV ONLY, /vs pirate arm. */
@@ -943,6 +1145,7 @@ object PirateShips {
         countdowns.clear()
         arming.clear()
         chases.clear()
+        vanished.clear()
         lastAssemblyAt = -1L
         tickCount = 0
     }
@@ -982,4 +1185,7 @@ object PirateShips {
 
     /** How far past the player's own box "touching" reaches -- a hand on the rail, not a near miss. */
     private const val CONTACT_MARGIN = 0.35
+
+    /** How long a vanished wheel has to report back before the vanishing counts as a break. */
+    private const val VANISH_GRACE_TICKS = 10L
 }

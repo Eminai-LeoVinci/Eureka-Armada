@@ -64,6 +64,7 @@ object PirateCommand {
                     )
                     .then(literal("list").executes { list(it) })
                     .then(literal("arm").executes { arm(it) })
+                    .then(literal("regen").executes { regen(it) })
             )
         )
     }
@@ -89,6 +90,21 @@ object PirateCommand {
             ctx.source.sendFailure(
                 Component.literal("No loaded dormant pirate berth to wake (or the cap/cooldown refused it).")
             )
+            0
+        }
+    }
+
+    /** Skip the day-clock on the nearest waiting site. Placement checks still apply; players are ignored. */
+    private fun regen(ctx: CommandContext<CommandSourceStack>): Int {
+        val player = ctx.source.playerOrException
+        val refusal = PirateShips.forceRegen(ctx.source.level, player)
+        return if (refusal == null) {
+            ctx.source.sendSuccess({
+                Component.literal("Site regenerated.").withStyle(ChatFormatting.GREEN)
+            }, true)
+            1
+        } else {
+            ctx.source.sendFailure(Component.literal("Regeneration refused: $refusal."))
             0
         }
     }

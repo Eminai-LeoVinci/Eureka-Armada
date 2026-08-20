@@ -78,6 +78,13 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     override fun affectNeighborsAfterRemoval(state: BlockState, level: ServerLevel, pos: BlockPos, isMoving: Boolean) {
         super.affectNeighborsAfterRemoval(state, level, pos, isMoving)
 
+        // A pirate-marked wheel vanishing MIGHT be the conquest -- or just assembly relocating the block.
+        // The manager owns telling those apart (the relocated wheel reports back within a tick or two; a
+        // broken one never does), so this only reports the disappearance.
+        if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) {
+            PirateShips.helmVanished(level, pos)
+        }
+
         level.getLoadedShipManagingPos(pos)?.getAttachment<EurekaShipControl>()?.let { control ->
 
             if (control.helms <= 1 && control.seatedPlayer?.vehicle?.type == ValkyrienSkiesMod.SHIP_MOUNTING_ENTITY_TYPE) {
