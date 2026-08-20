@@ -590,9 +590,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             // for her captain. The `if` is what makes this happen once per fall rather than every tick of
             // one: after the first, isCruising is false. See the anchor path below, which reads the same.
             if (isCruising) {
+                val sets = automatedSets()
                 isCruising = false
                 clearCruiseLatches()
-                showCruiseStatus()
+                showCruiseStatus(sets)
             }
             return
         }
@@ -800,8 +801,9 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
 
         if (armadaAnchored) {
             if (isCruising) {
+                val sets = automatedSets()
                 isCruising = false
-                showCruiseStatus()
+                showCruiseStatus(sets)
             }
             // Anchoring ends the whole cruise so un-anchoring starts clean.
             clearCruiseLatches()
@@ -1153,9 +1155,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                 showCruiseStatus()
             } else {
                 // Turn cruise OFF.
+                val sets = automatedSets()
                 isCruising = false
                 clearCruiseLatches()
-                showCruiseStatus()
+                showCruiseStatus(sets)
             }
         }
         // Per-set cancel is no longer an instant opposite-input toggle: it's a HELD gesture (hold the opposite
@@ -1453,8 +1456,31 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         return Vector3d(0.0, 0.0, 0.0)
     }
 
-    private fun showCruiseStatus() {
-        val cruiseKey = if (isCruising) "hud.vs_eureka.start_cruising" else "hud.vs_eureka.stop_cruising"
+    /**
+     * How many of the three cruise sets -- speed, turn, vertical -- are currently holding a value for the
+     * pilot. This is what separates the two names the status line goes under: one set is a ship holding
+     * one thing while you steer the rest, and that is cruise control; two or more and the ship is flying
+     * itself, which is an auto-pilot.
+     */
+    private fun automatedSets(): Int =
+        (if (cruiseHorizontalActive) 1 else 0) +
+            (if (cruiseTurning) 1 else 0) +
+            (if (cruiseVerticalActive) 1 else 0)
+
+    /**
+     * [sets] is passed explicitly by the switching-OFF paths, because half of them clear the latches
+     * before saying so and half after -- read live, the same shutdown would announce two different things
+     * depending on which route reached it. Captured before the clear, the line always names the thing that
+     * was actually switched off.
+     */
+    private fun showCruiseStatus(sets: Int = automatedSets()) {
+        val autoPilot = sets >= 2
+        val cruiseKey = when {
+            isCruising && autoPilot -> "hud.vs_eureka.start_autopilot"
+            isCruising -> "hud.vs_eureka.start_cruising"
+            autoPilot -> "hud.vs_eureka.stop_autopilot"
+            else -> "hud.vs_eureka.stop_cruising"
+        }
         seatedPlayer?.displayClientMessage(Component.translatable(cruiseKey), true)
     }
 
@@ -1660,9 +1686,10 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // values. Turning it off cancels every set, exactly like a C toggle-off.
     fun setCruiseFromMenu(enable: Boolean, seatDir: Direction) {
         if (enable == isCruising) return
+        val sets = automatedSets()
         isCruising = enable
         if (enable) ensureMenuCourse(seatDir) else clearCruiseLatches()
-        showCruiseStatus()
+        showCruiseStatus(sets)
     }
 
     // Arm/disarm one cruise set from a helm checkbox (0 = speed/horizontal, 1 = turn, 2 = vertical). Arming a
