@@ -7,6 +7,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.ProblemReporter
 import net.minecraft.world.entity.EntitySpawnReason
 import net.minecraft.world.entity.EntityType
+import net.minecraft.world.entity.ai.attributes.Attributes
 import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.ClipContext
 import net.minecraft.world.level.storage.TagValueInput
@@ -50,9 +51,18 @@ object PirateMuster {
             raider.setPersistenceRequired()
             raider.setHomeTo(BlockPos.containing(centre.x, centre.y, centre.z), HOME_RADIUS)
             raider.addTag(PirateShips.CREW_TAG)
+            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = CREW_SIGHT
             spawned.add(raider.uuid)
         }
         return spawned
+    }
+
+    /** Haul a crew hand back to a seat by the wheel -- the tether's answer to combat pathing. */
+    fun reseat(level: ServerLevel, raider: Raider, centre: Vector3d, seat: Int) {
+        val at = seatFor(level, centre, seat)
+        raider.teleportTo(at.x, at.y, at.z)
+        raider.deltaMovement = Vec3.ZERO
+        raider.fallDistance = 0.0
     }
 
     private fun restore(level: ServerLevel, tag: CompoundTag, at: Vec3): Raider? = try {
@@ -113,4 +123,7 @@ object PirateMuster {
 
     /** How far from the wheel a respawned crew member is allowed to wander. */
     private const val HOME_RADIUS = 24
+
+    /** Mirrors PirateShips.CREW_SIGHT: how far the crew can see a target. */
+    private const val CREW_SIGHT = 48.0
 }

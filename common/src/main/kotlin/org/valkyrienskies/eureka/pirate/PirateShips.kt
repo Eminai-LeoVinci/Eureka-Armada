@@ -3,6 +3,7 @@ package org.valkyrienskies.eureka.pirate
 import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import net.minecraft.world.entity.ai.attributes.Attributes
 import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.levelgen.Heightmap
@@ -162,6 +163,7 @@ object PirateShips {
             raider.setPersistenceRequired()
             raider.setHomeTo(pos, (half + 4.0).toInt())
             raider.addTag(CREW_TAG)
+            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = CREW_SIGHT
         }
         helm.pirateCrewUuids = crew.map { it.uuid }
         helm.pirateBerth = berthId
@@ -835,6 +837,7 @@ object PirateShips {
             // would be unconquerable in practice. The lost hand is discarded, not just discounted, so a
             // tagged, persistent mob is never left wandering the ocean floor for nobody.
             var living = 0
+            val tether = (kotlin.math.max(berth.sizeX, berth.sizeZ) + 2).toDouble()
             for (id in helm.pirateCrewUuids) {
                 val raider = level.getEntity(id) as? Raider ?: continue
                 if (!raider.isAlive) continue
@@ -844,8 +847,14 @@ object PirateShips {
                 if (dx * dx + dy * dy + dz * dz > OVERBOARD_RANGE * OVERBOARD_RANGE) {
                     raider.discard()
                     logger.info("[pirates] a crew hand lost overboard at berth {}", BlockPos.of(berthId))
-                } else {
-                    living++
+                    continue
+                }
+                living++
+                // The tether: combat pathing marches a pillager toward its target with no idea the deck
+                // ends -- the user watched one wade off into the sea after a passing ship. Anyone in the
+                // water, or past the hull's own box, is hauled straight back to a seat by the wheel.
+                if (raider.isInWater || dx * dx + dz * dz > tether * tether) {
+                    PirateMuster.reseat(level, raider, centre, living)
                 }
             }
 
@@ -1188,4 +1197,7 @@ object PirateShips {
 
     /** How long a vanished wheel has to report back before the vanishing counts as a break. */
     private const val VANISH_GRACE_TICKS = 10L
+
+    /** How far a crew hand can see a target -- stamped as FOLLOW_RANGE at adoption and respawn. */
+    private const val CREW_SIGHT = 48.0
 }
