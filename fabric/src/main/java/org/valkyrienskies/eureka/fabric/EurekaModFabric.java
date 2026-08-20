@@ -54,6 +54,7 @@ import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.PirateCommand;
 import org.valkyrienskies.eureka.pirate.PirateShips;
+import org.valkyrienskies.eureka.ship.ShipFoundering;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
@@ -142,6 +143,9 @@ public class EurekaModFabric implements ModInitializer {
             // Pirate ships: proximity zones around dormant hulls, the 20-second warning, wake-up and the
             // hand-off into ShipFollows. Self-silences to a map check while no pirate wheel is loaded.
             PirateShips.INSTANCE.tick(level);
+            // Helm-less ships foundering -- every ship's, not just the pirates': the water probes physTick
+            // cannot make, the settle watch, and the seabed/ground breakup.
+            ShipFoundering.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -164,6 +168,7 @@ public class EurekaModFabric implements ModInitializer {
             // Reports hold block-entity references and chases hold ship ids from the stopped server; the
             // helm reports rebuild everything within a tick of the next world loading.
             PirateShips.INSTANCE.reset();
+            ShipFoundering.INSTANCE.reset();
             PathNetworkingFabric.INSTANCE.resetServer();
         });
     }

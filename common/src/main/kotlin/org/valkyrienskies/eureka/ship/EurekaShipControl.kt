@@ -547,6 +547,40 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         if (helms < 1 || ShipIntegrity.freefall(damageIntegrity)) {
             // Enable fluid drag if all the helms have been destroyed
             physShip.doFluidDrag = true
+            // The foundering. A helm-less hull is dying, not parked: buoyancy goes to NEUTRAL immediately
+            // (killing whatever floater lift the last healthy tick left in the stored factor -- the stale
+            // value is exactly why the first conquest wrecks floated forever), and once the hull touches
+            // water (ShipFoundering's game-thread probes feed the flag) the ramp drains what remains over
+            // the configured seconds. Displacement alone can float a wooden hull at ANY buoyant factor, so
+            // the drained share of gravity is also applied as plain downforce: past the ramp, the sea wins.
+            // Fluid drag above is what keeps the descent a foundering rather than a plunge. Recovery stays
+            // free -- a helm placed anywhere in this puts the next tick back in the main body, which resets
+            // the ramp and answers the wheel, at the surface or on the seabed alike.
+            if (founderHold) {
+                // The conquest window: leaderless, not yet dying. The buoyant factor is deliberately left
+                // at whatever the last healthy tick stored, so a boat keeps her floater ride-height and
+                // bobs on the water exactly as she did before the wheel broke; out of the water, gravity
+                // is cancelled with a little damping so an airship hangs where she was. The break only
+                // starts the clock -- the sea collects when the hold lapses.
+                if (!founderInWater) {
+                    physShip.applyInvariantForce(
+                        Vector3d(0.0, (-GRAVITY - physShip.velocity.y() * HOLD_DAMP) * physShip.mass, 0.0)
+                    )
+                }
+            } else {
+                if (founderInWater) {
+                    founderRamp = min(
+                        1.0,
+                        founderRamp + PHYS_DT / max(1.0, EurekaConfig.SERVER.helmlessBuoyancyLossSeconds)
+                    )
+                }
+                physShip.buoyantFactor = 1.0 - founderRamp
+                if (founderRamp > 0.0) {
+                    physShip.applyInvariantForce(
+                        Vector3d(0.0, GRAVITY * physShip.mass * founderRamp * SINK_PUSH, 0.0)
+                    )
+                }
+            }
             // Falling is not settling; the readout suffix would just be noise under a ship in freefall.
             damageSinkApplied = 0.0
             // A cruise does NOT survive the fall. Cruise state is persistent by design -- it is meant to
@@ -562,6 +596,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             }
             return
         }
+        // A ship with a wheel is not foundering: the ramp re-arms fresh for the NEXT helm loss, which is
+        // also what makes slapping a helm on a sinking hull a full recovery rather than a stay of execution.
+        // The conquest hold clears the same way -- a claimed ship needs nothing from anyone.
+        if (founderRamp != 0.0) founderRamp = 0.0
+        if (founderHold) founderHold = false
+
         // Disable fluid drag when helms are present, because it makes ships hard to drive. Per-category, and
         // this runs BEFORE the category is re-derived below, so it is one tick stale -- which costs nothing:
         // it is a boolean that only changes when a hybrid crosses the waterline, and the categories that
@@ -1523,6 +1563,21 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore @Volatile var damageIntegrity = 100
     @JsonIgnore @Volatile var damageSinkApplied = 0.0
 
+    // Helm-less foundering -- see ShipFoundering, which owns the game-thread half. [founderInWater] is
+    // written there from real block probes and read by physTick, because the physics branch has no cheap
+    // way to ask the world about water. [founderRamp] is the buoyancy already drained, 0..1; PERSISTED
+    // (not @JsonIgnore) so a restart mid-sink comes back still sinking instead of bobbing to the surface
+    // to drown all over again. Cleared by the first healthy tick after a helm returns.
+    @JsonIgnore @Volatile var founderInWater = false
+    @Volatile var founderRamp = 0.0
+
+    // The grace between losing the last wheel and beginning to die: the pirate conquest window, and the
+    // player-ship helm-broken timer. While true the hull keeps its pre-break buoyancy (bobbing on the
+    // water, hanging in the air) and the ramp stays parked. PERSISTED; whoever owns the clock -- the
+    // pirate manager for conquests, ShipFoundering for everyone else -- re-asserts or drops it, and the
+    // first healthy tick after a helm returns clears it unasked.
+    @Volatile var founderHold = false
+
     // Engine fuel-tank aggregate for the helm's "Engine Power: X%" readout. Each engine reports its fuel level
     // (a 0..1 fraction of a full fuel slot) once per tick via [reportEngineFuel]; onServerTick averages last
     // tick's reports into [engineFuelPercent] (0..100). Double-buffered (accum vs accumNext) so the value is
@@ -2098,6 +2153,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             get() = EurekaConfig.SERVER.massPerBalloon * -GRAVITY * EurekaConfig.SERVER.balloonLiftMultiplier
 
         private const val GRAVITY = -10.0
+
+        /**
+         * How much of gravity a fully-drained founder has pressed on it, over and above losing its
+         * buoyant factor. Displacement physics can float a wooden hull whatever the factor says, so the
+         * ramp has to win by force; drag is what keeps the resulting descent slow.
+         */
+        private const val SINK_PUSH = 1.5
+
+        /** Vertical-velocity damping (per second) on a held airborne hull, so the hang is a hang. */
+        private const val HOLD_DAMP = 1.0
 
         /**
          * One physics tick, in seconds. VS-core steps its physics at 60 Hz (the same figure the path

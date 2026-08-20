@@ -1309,6 +1309,42 @@ object EurekaConfig {
         var damageFreefallBelow = 40
         // endregion
 
+        // region Helm-less foundering
+        // A ship that loses its last wheel dies: it ragdolls (an airship falls), water drains its buoyancy
+        // to nothing however many floaters it carries, it sinks slow under drag, and once it comes to rest
+        // -- seabed or hillside -- it is taken apart where it lies. Placing a helm aboard at ANY point,
+        // underwater included, makes it a working ship again on the very next tick. Applies to every ship,
+        // the pirates' and the players' alike.
+
+        @JsonSchema(
+            description = "Whether a ship whose last helm breaks is given a grace period before the dying " +
+                "starts. During the grace she rides on exactly as she was -- bobbing on the water, hanging " +
+                "in the air. Off, the old behaviour: instant ragdoll and free fall. Default true."
+        )
+        var helmlessGraceEnabled = true
+
+        @JsonSchema(
+            description = "How long that grace lasts, in seconds. 0 means INDEFINITE: the ship never " +
+                "founders and never breaks up, floating derelict until a helm returns. (Pirate conquests " +
+                "use their own window, pirateConquestFreezeMinutes.) Default 60.0."
+        )
+        var helmlessGraceSeconds = 60.0
+
+        @JsonSchema(
+            description = "How long a helm-less hull touching water takes to lose ALL its buoyancy, in " +
+                "seconds. Floaters, balloons and honest wood buy nothing here -- without a wheel the sea " +
+                "always wins, only this slowly. Default 20.0."
+        )
+        var helmlessBuoyancyLossSeconds = 20.0
+
+        @JsonSchema(
+            description = "How long a helm-less hull must rest -- on the seabed, on the ground an airship " +
+                "dropped onto -- before it breaks up into blocks where it lies, in seconds. The last " +
+                "window to slap a helm on and save her. Default 10.0."
+        )
+        var helmlessSettleSeconds = 10.0
+        // endregion
+
         // region Pirate ships
         //
         // Generated pillager ships: proximity zones, the 20-second warning, wake-up and pursuit. Structure
@@ -1378,6 +1414,7 @@ object EurekaConfig {
                 "the wheel white and breakable; this is the window to break it. Default 2.0."
         )
         var pirateRespawnMinutes = 2.0
+
         // endregion
 
         @JsonSchema(
