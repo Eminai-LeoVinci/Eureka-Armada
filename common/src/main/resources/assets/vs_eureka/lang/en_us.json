@@ -177,7 +177,7 @@
   "gui.vs_eureka.cannon_shot": "Shot",
   "gui.vs_eureka.cannon_charge": "%sx Power",
   "gui.vs_eureka.cannon_charge.tip": "Powder packed behind the ball. More powder throws the shot faster and flatter, and each setting has its own arc and reload. 1x, 2x or 3x gunpowder per shot.",
-  "gui.vs_eureka.cannon_angle.tip": "The barrel's elevation, in steps of 22.5 degrees from -45 to +45. The same setting the crouch-click gesture cycles at the gun.",
+  "gui.vs_eureka.cannon_angle.tip": "The barrel's elevation, in steps of 5 degrees from -45 to +45. The same setting the crouch-click gesture cycles at the gun.",
   "gui.vs_eureka.assemble": "Assemble",
   "gui.vs_eureka.disassemble": "Disassemble",
   "gui.vs_eureka.disassemble_out_of_world": "This ship is too high to disassemble - fly it down first",

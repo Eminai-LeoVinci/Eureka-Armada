@@ -836,12 +836,12 @@ object PathNetworkingFabric {
     @Environment(EnvType.CLIENT)
     fun sendCrewRefuel(helm: Long) = sendOps(helm, OPS_REFUEL) {}
 
-    /** Client: lay [side]'s battery on deck [layer] ([CrewOperations.Side.BOTH] = all sides, 0 = all decks) to elevation [index], 0..4. */
+    /** Client: lay [side]'s battery on deck [layer] ([CrewOperations.Side.BOTH] = all sides, 0 = all decks) to elevation [index], 0..18. */
     @Environment(EnvType.CLIENT)
     fun sendCrewSetElevation(helm: Long, side: CrewOperations.Side, index: Int, layer: Int) =
         sendOps(helm, OPS_ELEVATION) {
             it.writeByte(side.ordinal)
-            it.writeByte(index.coerceIn(0, 4))
+            it.writeByte(index.coerceIn(0, 18))
             it.writeByte(layer.coerceIn(0, MAX_LAYERS))
         }
 
@@ -862,12 +862,12 @@ object PathNetworkingFabric {
             it.writeByte(ordinal.coerceIn(0, 2))
         }
 
-    /** Client: lay one gunner's cannon to elevation [index], 0..4. */
+    /** Client: lay one gunner's cannon to elevation [index], 0..18. */
     @Environment(EnvType.CLIENT)
     fun sendCrewGunElevation(helm: Long, villager: UUID, index: Int) =
         sendOps(helm, OPS_GUN_ELEVATION) {
             it.writeUUID(villager)
-            it.writeByte(index.coerceIn(0, 4))
+            it.writeByte(index.coerceIn(0, 18))
         }
 
     /** Client: arm one gunner's cannon with the chosen round from the holds. */

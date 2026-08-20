@@ -176,8 +176,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     private var fuelPopupOpen = false
 
-    /** The elevation and power steps the Set Angle / Set Power orders will send. Level and 1x to start. */
-    private var elevIndex = 2
+    /**
+     * The elevation and power the Set Angle / Set Power orders will send. Level (0 degrees) and 1x to
+     * start, and instance state on purpose: the angle stepper reads 0 every time the book is opened.
+     */
+    private var elevIndex = 9
     private var powerLevel = 0
 
     /** The two deck dropdowns -- at most one open, sharing a scroll for the rare many-decked hull. */
@@ -1350,7 +1353,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
     }
 
-    /** The five elevation steps, drawn exactly as the side segments are, one per 22.5 degrees. */
+    /**
+     * The angle stepper: [<] [value] [>]. Nineteen 5-degree steps outgrew a row of segments, so a pair
+     * of arrows walks the angle 5 degrees at a time and the box between them reads the value Set Angle
+     * will send. The arrows pin at the ends -- +45 never wraps to -45 under repeated clicks -- and an
+     * arrow that cannot step further is drawn dim. The value box is a reading, not a button.
+     */
     private fun drawAngles(guiGraphics: GuiGraphics, y: Int, mouseX: Int, mouseY: Int) {
         val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return
         val (gx, gy, gw, gh) = rect
@@ -1360,25 +1368,39 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             guiGraphics.fill(gx - 1, gy, gx, gy + gh, ACCENT)
             guiGraphics.fill(gx + gw, gy, gx + gw + 1, gy + gh, ACCENT)
         }
-        for (index in 0..4) {
-            val sx = gx + index * (ELEV_SEG_W + SEG_GAP)
-            val active = index == elevIndex
-            val hovered = mouseX >= sx && mouseX < sx + ELEV_SEG_W && mouseY >= y && mouseY < y + OPS_CTRL_H
-            guiGraphics.fill(
-                sx, y, sx + ELEV_SEG_W, y + OPS_CTRL_H,
-                when {
-                    active -> ACCENT
-                    hovered -> ROW_HOVER
-                    else -> ROW_LOCKED
-                }
-            )
-            val text = ANGLE_LABELS[index]
-            small(
-                guiGraphics, text,
-                sx + (ELEV_SEG_W - (font.width(text) * SMALL).toInt()) / 2, y + 4,
-                if (active) 0xFFFFFFFF.toInt() else TEXT
-            )
-        }
+
+        val rightX = gx + gw - ANGLE_ARROW_W
+        val leftLive = elevIndex > 0
+        val rightLive = elevIndex < 18
+        val leftHover = mouseX >= gx && mouseX < gx + ANGLE_ARROW_W && mouseY >= y && mouseY < y + OPS_CTRL_H
+        val rightHover = mouseX >= rightX && mouseX < rightX + ANGLE_ARROW_W && mouseY >= y && mouseY < y + OPS_CTRL_H
+        guiGraphics.fill(
+            gx, y, gx + ANGLE_ARROW_W, y + OPS_CTRL_H,
+            if (leftHover && leftLive) ROW_HOVER else ROW_LOCKED
+        )
+        small(
+            guiGraphics, ANGLE_DOWN_TEXT,
+            gx + (ANGLE_ARROW_W - (font.width(ANGLE_DOWN_TEXT) * SMALL).toInt()) / 2, y + 4,
+            if (leftLive) TEXT else DIM
+        )
+        guiGraphics.fill(
+            rightX, y, rightX + ANGLE_ARROW_W, y + OPS_CTRL_H,
+            if (rightHover && rightLive) ROW_HOVER else ROW_LOCKED
+        )
+        small(
+            guiGraphics, ANGLE_UP_TEXT,
+            rightX + (ANGLE_ARROW_W - (font.width(ANGLE_UP_TEXT) * SMALL).toInt()) / 2, y + 4,
+            if (rightLive) TEXT else DIM
+        )
+
+        val valueX = gx + ANGLE_ARROW_W + SEG_GAP
+        val value = Component.literal(degreesLabel(elevIndex))
+        guiGraphics.fill(valueX, y, valueX + ANGLE_VALUE_W, y + OPS_CTRL_H, ROW_LOCKED)
+        small(
+            guiGraphics, value,
+            valueX + (ANGLE_VALUE_W - (font.width(value) * SMALL).toInt()) / 2, y + 4,
+            0xFFFFFFFF.toInt()
+        )
     }
 
     private fun opsLit(stop: Int, x: Int, y: Int, w: Int, h: Int, mouseX: Int, mouseY: Int): Boolean =
@@ -1405,7 +1427,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_C_SIDE -> intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_CSCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_C_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_CSCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
         STOP_LAY -> intArrayOf(left + 8, OPS_V_ROW_ELEV, OPS_ELEV_BTN_W, OPS_CTRL_H)
-        STOP_ELEV_ANGLE -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_ELEV, ELEV_SEG_W * 5 + SEG_GAP * 4, OPS_CTRL_H)
+        STOP_ELEV_ANGLE -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_ELEV, ANGLE_ROW_W, OPS_CTRL_H)
         STOP_PWR -> intArrayOf(left + 8, OPS_V_ROW_PWR, OPS_ELEV_BTN_W, OPS_CTRL_H)
         STOP_PWR_LEVEL -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_PWR, ELEV_SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_AMMO, OPS_AMMO_W, OPS_CTRL_H)
@@ -1486,10 +1508,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         return SIDE_ORDER[index]
     }
 
+    /**
+     * The stepper's answer to a press: the mouse steps one 5-degree index off whichever arrow it hit and
+     * pins at the ends; a click on the value box between them changes nothing. The pad has no second
+     * arrow to reach, so it walks upward and wraps -- the one path that may cross +45 back to -45,
+     * because without it the pad could never come back down.
+     */
     private fun pickAngle(mouseX: Int?): Int {
-        if (mouseX == null) return (elevIndex + 1) % 5
+        if (mouseX == null) return (elevIndex + 1) % 19
         val rect = opsStopRect(STOP_ELEV_ANGLE) ?: return elevIndex
-        return ((mouseX - rect[0]) / (ELEV_SEG_W + SEG_GAP)).coerceIn(0, 4)
+        val local = mouseX - rect[0]
+        return when {
+            local < ANGLE_ARROW_W -> (elevIndex - 1).coerceAtLeast(0)
+            local >= rect[2] - ANGLE_ARROW_W -> (elevIndex + 1).coerceAtMost(18)
+            else -> elevIndex
+        }
     }
 
     private fun pickPower(mouseX: Int?): Int {
@@ -1860,8 +1893,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun degreesLabel(index: Int): String {
-        val degrees = (index.coerceIn(0, 4) - 2) * 22.5
-        return if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees)
+        val degrees = (index.coerceIn(0, 18) - 9) * 5
+        return if (degrees > 0) "+$degrees°" else "$degrees°"
     }
 
     /** Lock or Unlock, centred between Dismiss and Back -- the one control a locked card still answers. */
@@ -1922,7 +1955,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     private fun cycleElevation(card: CrewManifest.Detail) {
         if (card.locked) return
-        val next = (card.elevationIndex.coerceIn(0, 4) + 1) % 5
+        val next = (card.elevationIndex.coerceIn(0, 18) + 1) % 19
         detail = card.copy(elevationIndex = next)
         PathNetworkingFabric.sendCrewGunElevation(snapshot.helm, card.villager, next)
     }
@@ -2361,11 +2394,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val CARD_LOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_lock")
         private val CARD_UNLOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_card_unlock")
 
-        /** The five elevation steps' labels, index-aligned with the ELEVATION property. */
-        private val ANGLE_LABELS = listOf(
-            Component.literal("-45"), Component.literal("-22"), Component.literal("0"),
-            Component.literal("+22"), Component.literal("+45")
-        )
+        /** The angle stepper's arrows: left lays down toward -45, right up toward +45. */
+        private val ANGLE_DOWN_TEXT: Component = Component.literal("<")
+        private val ANGLE_UP_TEXT: Component = Component.literal(">")
 
         /** The three powder measures' labels, ordinal-aligned with PowderCharge. */
         private val POWER_LABELS = listOf(
@@ -2469,8 +2500,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val SEG_W = 32
         private const val SEG_GAP = 2
 
-        /** The five elevation steps' segments: narrower, since "-45" is as wide as a label gets. */
+        /** The power segments' width (and the unit the angle stepper's row width is derived from). */
         private const val ELEV_SEG_W = 22
+
+        /**
+         * The angle stepper: [<] [value] [>], filling exactly the row the five 22.5-degree segments
+         * used to, so nothing else in the panel moves. Nineteen 5-degree steps live behind the arrows.
+         */
+        private const val ANGLE_ROW_W = ELEV_SEG_W * 5 + SEG_GAP * 4
+        private const val ANGLE_ARROW_W = 16
+        private const val ANGLE_VALUE_W = ANGLE_ROW_W - 2 * (ANGLE_ARROW_W + SEG_GAP)
 
         /** Where the angle/power segments start: right of their label-buttons, no selector between now. */
         private const val OPS_SEGS_X = 72

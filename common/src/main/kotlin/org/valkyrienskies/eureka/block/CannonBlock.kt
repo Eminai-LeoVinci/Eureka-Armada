@@ -344,11 +344,11 @@ class CannonBlock : BaseEntityBlock(
             level.setBlock(pos, there.setValue(ELEVATION, next), Block.UPDATE_CLIENTS)
         }
 
-        val degrees = EurekaProperties.elevationDegrees(next)
+        val degrees = EurekaProperties.elevationDegrees(next).toInt()
         player.displayClientMessage(
             Component.translatable(
                 "info.vs_eureka.cannon_elevation",
-                if (degrees > 0) "+%.1f".format(degrees) else "%.1f".format(degrees)
+                if (degrees > 0) "+$degrees" else "$degrees"
             ),
             true
         )

@@ -91,6 +91,16 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     var elevationIndex by data
 
+    /**
+     * CLIENT RENDER BOOKKEEPING for the pitching barrel, owned by CannonBlockEntityRenderer and
+     * meaningless everywhere else: the barrel angle currently drawn (degrees above horizontal) and the
+     * nanoTime it was last advanced. Never persisted, never synced -- the renderer slews the drawn angle
+     * toward the ELEVATION blockstate's angle at a fixed rate, so an order visibly lays the gun. NaN
+     * marks a barrel not drawn yet; the renderer snaps that straight to its target, no wiggle on load.
+     */
+    var barrelPitchShown: Float = Float.NaN
+    var barrelPitchNanos: Long = 0L
+
     /** The three powder slots, top to bottom, and the shot slot. */
     var powderA: ItemStack = ItemStack.EMPTY
     var powderB: ItemStack = ItemStack.EMPTY

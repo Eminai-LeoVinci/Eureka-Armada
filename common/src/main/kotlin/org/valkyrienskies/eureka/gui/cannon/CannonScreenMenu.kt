@@ -108,7 +108,7 @@ class CannonScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Canno
                 val state = gun.blockState
                 if (state.block !is CannonBlock) return false
                 val facing = state.getValue(BlockStateProperties.HORIZONTAL_FACING)
-                val next = (state.getValue(EurekaProperties.ELEVATION) + 1) % 5
+                val next = (state.getValue(EurekaProperties.ELEVATION) + 1) % EurekaProperties.ELEVATION.possibleValues.size
                 for (part in CannonPart.entries) {
                     val pos = gun.blockPos.relative(facing, part.ordinal)
                     val there = level.getBlockState(pos)

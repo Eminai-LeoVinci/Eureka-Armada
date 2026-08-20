@@ -22,8 +22,14 @@ object EurekaBlocks {
     val ANCHOR = BLOCKS.register("anchor", ::AnchorBlock)
     val ENGINE = BLOCKS.register("engine", ::EngineBlock)
 
-    // Three blocks long, laid rear-to-front like a bed -- see CannonBlock for why three.
+    // Two blocks long, laid rear-to-front like a bed -- see CannonBlock for why two.
     val CANNON = BLOCKS.register("cannon", ::CannonBlock)
+
+    // Virtual block backing the pitching-barrel overlay model, the cannon's answer to
+    // SHIP_HELM_WHEEL below. Never placed and has no item (skipped in registerItems).
+    val CANNON_BARREL = BLOCKS.register("cannon_barrel") {
+        CannonBarrelBlock(blockProps())
+    }
 
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
@@ -237,8 +243,8 @@ object EurekaBlocks {
     // aka all blocks
     fun registerItems(items: DeferredRegister<Item>) {
         BLOCKS.forEach {
-            // The wheel block is a render-only virtual block; it must not have an item.
-            if (it.name == "ship_helm_wheel") return@forEach
+            // The wheel and barrel blocks are render-only virtual blocks; they must not have items.
+            if (it.name == "ship_helm_wheel" || it.name == "cannon_barrel") return@forEach
             // useBlockDescriptionPrefix: 1.21.11 stopped giving BlockItems the block's translation key for
             // free -- Item.Properties now carries the choice, and it defaults to the item prefix. Every name
             // in this mod is written as block.vs_eureka.*, so without this every item asks for a key no lang

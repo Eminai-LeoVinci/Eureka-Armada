@@ -33,6 +33,7 @@ import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
 import org.valkyrienskies.eureka.armada.ArmadaCommand;
+import org.valkyrienskies.eureka.blockentity.renderer.CannonBlockEntityRenderer;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
 import org.valkyrienskies.eureka.crew.CrewDuties;
@@ -225,6 +226,13 @@ public class EurekaModFabric implements ModInitializer {
             BlockEntityRenderers.register(
                 EurekaBlockEntities.INSTANCE.getSHIP_HELM().get(),
                 ShipHelmBlockEntityRenderer::new
+            );
+
+            // The cannon's pitching barrel, drawn the same way the helm's wheel is -- the blockstate
+            // models only carry the static carriage.
+            BlockEntityRenderers.register(
+                EurekaBlockEntities.INSTANCE.getCANNON().get(),
+                CannonBlockEntityRenderer::new
             );
 
             // A thrown Ship Bottle draws as the item it is carrying, which ThrownShipBottle decides tick by

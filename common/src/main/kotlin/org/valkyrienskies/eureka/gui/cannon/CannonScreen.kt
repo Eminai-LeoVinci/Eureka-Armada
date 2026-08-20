@@ -78,8 +78,9 @@ class CannonScreen(handler: CannonScreenMenu, playerInventory: Inventory, title:
         Component.translatable("gui.vs_eureka.cannon_charge", menu.powderCharge.powder)
 
     private fun angleLabel(): Component {
-        val degrees = org.valkyrienskies.eureka.EurekaProperties.elevationDegrees(menu.elevationIndex.coerceIn(0, 4))
-        return Component.literal(if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees))
+        val degrees = org.valkyrienskies.eureka.EurekaProperties
+            .elevationDegrees(menu.elevationIndex.coerceIn(0, 18)).toInt()
+        return Component.literal(if (degrees > 0) "+$degrees°" else "$degrees°")
     }
 
     override fun renderBg(guiGraphics: GuiGraphics, partialTicks: Float, mouseX: Int, mouseY: Int) {

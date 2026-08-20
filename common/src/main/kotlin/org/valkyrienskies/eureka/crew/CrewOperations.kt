@@ -506,10 +506,10 @@ object CrewOperations {
 
     /**
      * Lay [side]'s battery on deck [layer] to one elevation. [Side.BOTH] reads as ALL here, chasers
-     * included -- "everything to twenty-two and a half" is an order about the ship, not about a broadside.
+     * included -- "everything to twenty degrees" is an order about the ship, not about a broadside.
      *
      * Per-scope layings are independent by construction: this writes only the guns it addresses, so laying
-     * Deck 1's port to +22.5 and then Deck 2's to +45 leaves Deck 1 exactly where it was put. LOCKED
+     * Deck 1's port to +20 and then Deck 2's to +45 leaves Deck 1 exactly where it was put. LOCKED
      * gunners' guns are stepped over -- their elevation is a setting, and settings are theirs.
      */
     fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int, layer: Int) {
@@ -899,7 +899,7 @@ object CrewOperations {
     }
 
     private fun formatDegrees(degrees: Double): String =
-        if (degrees > 0) "+%.1f°".format(degrees) else "%.1f°".format(degrees)
+        if (degrees > 0) "+${degrees.toInt()}°" else "${degrees.toInt()}°"
 
     /** What the holds would not take back lands at the gun -- visible, retrievable, never voided. */
     private fun dropAtGun(level: ServerLevel, ship: LoadedServerShip, gun: CannonBlockEntity, stack: ItemStack) {
@@ -917,8 +917,8 @@ object CrewOperations {
     /** The layer argument meaning "every deck" -- the deck dropdown's All, as [Side.BOTH] is the sides'. */
     const val ALL_LAYERS = 0
 
-    /** The top of the ELEVATION property's range: index 4, +45 degrees. */
-    private const val MAX_ELEVATION = 4
+    /** The top of the ELEVATION property's range: index 18, +45 degrees. */
+    private const val MAX_ELEVATION = 18
 
     // endregion
 }
