@@ -1053,7 +1053,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      * be passing over the spot instead. A player gliding in on an elytra to drop a ship ahead of themselves
      * flies straight into their own two-second hold and falls out of the sky.
      */
-    fun assemble(player: Player, knownBlocks: Set<BlockPos>? = null, holdEntities: Boolean = true) {
+    // player is nullable because pirate ships assemble themselves: nobody pressed the button, so nobody
+    // gets the too-big message, nobody's auto-shipwright preferences apply, and nobody's crew musters.
+    fun assemble(player: Player?, knownBlocks: Set<BlockPos>? = null, holdEntities: Boolean = true) {
         val level = level as ServerLevel
 
         // Check the block state before assembling to avoid creating an empty ship
@@ -1154,16 +1156,16 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         }
 
         if (blockPositions == null) {
-            player.displayClientMessage(Component.translatable("gui.vs_eureka.too_big", EurekaConfig.SERVER.maxShipBlocks), true)
-            logger.warn("Failed to assemble to large of a ship for ${player.name.string}")
+            player?.displayClientMessage(Component.translatable("gui.vs_eureka.too_big", EurekaConfig.SERVER.maxShipBlocks), true)
+            logger.warn("Failed to assemble to large of a ship for ${player?.name?.string ?: "a scripted assembly"}")
             return
         }
 
         // Eureka Auto-Shipwright: if this player has floater/balloon auto-fill on, replace hull blocks with the
         // floaters/balloons the ship needs (gated on inventory) BEFORE the ship is built. A shortfall aborts
         // the whole assembly -- no ship, no world changes -- with a chat message the player can re-read.
-        val prefs = AssemblerPreferences.get(player.uuid)
-        if (prefs.enabled && (prefs.floater || prefs.balloon)) {
+        val prefs = player?.let { AssemblerPreferences.get(it.uuid) }
+        if (player != null && prefs != null && prefs.enabled && (prefs.floater || prefs.balloon)) {
             when (
                 val outcome = EurekaAssembler.apply(
                     level, player, blockPositions, prefs.floater, prefs.balloon,
