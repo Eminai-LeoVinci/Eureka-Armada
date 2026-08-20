@@ -148,6 +148,22 @@ object EurekaConfig {
         var displayHud = true
 
         @JsonSchema(
+            description = "How far away a cannonball in flight stays visible, in blocks. Vanilla culled a " +
+                "shot-sized entity at about 77 blocks, which made long shots vanish mid-arc. The server " +
+                "stops tracking shots past 512 blocks, so values beyond that show nothing further. " +
+                "Default 230 (about 3x vanilla)."
+        )
+        var cannonShotRenderDistance = 230
+
+        @JsonSchema(
+            description = "How fast a cannon's barrel visibly swings to a new elevation order, in degrees " +
+                "per second. Purely cosmetic -- shots always fly at the ordered angle, even mid-swing. At " +
+                "the default 35 a lay from level to full elevation takes about 1.3 seconds, and a full " +
+                "-45 to +45 traverse about 2.6. Zero or below snaps the barrel instantly."
+        )
+        var cannonBarrelSlewDegreesPerSecond = 35.0
+
+        @JsonSchema(
             description = "Show every saved ship path in this dimension as a glowing line. Toggled in-game " +
                 "with SHIFT+H; a route being recorded or flown is always drawn regardless of this."
         )
@@ -1140,6 +1156,82 @@ object EurekaConfig {
                 "actually sits. Default 64."
         )
         var cannonballStackSize = 64
+
+        // Cannonball damage. Damage is a LADDER, not a range: the guaranteed blocks always go, then every
+        // entry in the chances list is rolled independently for one more block -- so a round lands near its
+        // floor most shots and touches its ceiling rarely. The list is written as whole percents,
+        // "80,70,50": each entry is one extra block's chance, and HOW MANY entries there are is the most
+        // the ladder can add. All of these read live, so a /reload retunes every round in the air and
+        // every tooltip. The shipped numbers are tuned so each tier's average is guaranteed + (sum of
+        // chances) -- keep that sum in mind when adjusting a rung, or a tier quietly changes power while
+        // its printed range stays put.
+
+        @JsonSchema(description = "Copper ball: blocks always destroyed. Default 1.")
+        var cannonballCopperGuaranteed = 1
+
+        @JsonSchema(description = "Copper ball: extra-block chances, in percent. Default \"75,50,25\" (range 1-4, average 2.5).")
+        var cannonballCopperExtraChances = "75,50,25"
+
+        @JsonSchema(description = "Copper incendiary round: surviving blocks set alight after the hole is made. Default 2.")
+        var cannonballCopperIncendiary = 2
+
+        @JsonSchema(description = "Iron ball: blocks always destroyed. Default 2.")
+        var cannonballIronGuaranteed = 2
+
+        @JsonSchema(description = "Iron ball: extra-block chances, in percent. Default \"80,70,50\" (range 2-5, average 4.0).")
+        var cannonballIronExtraChances = "80,70,50"
+
+        @JsonSchema(description = "Iron incendiary round: surviving blocks set alight. Default 3.")
+        var cannonballIronIncendiary = 3
+
+        @JsonSchema(description = "Steel ball: blocks always destroyed. Default 3.")
+        var cannonballSteelGuaranteed = 3
+
+        @JsonSchema(description = "Steel ball: extra-block chances, in percent. Default \"80,60,40,20\" (range 3-7, average 5.0).")
+        var cannonballSteelExtraChances = "80,60,40,20"
+
+        @JsonSchema(description = "Steel incendiary round: surviving blocks set alight. Default 4.")
+        var cannonballSteelIncendiary = 4
+
+        @JsonSchema(description = "Gold ball: blocks always destroyed. Default 2.")
+        var cannonballGoldGuaranteed = 2
+
+        @JsonSchema(description = "Gold ball: extra-block chances, in percent. The long descending tail is gold's whole character -- a low floor and a high, rare ceiling. Default \"90,85,75,65,50,25,10\" (range 2-9, average 6.0).")
+        var cannonballGoldExtraChances = "90,85,75,65,50,25,10"
+
+        @JsonSchema(description = "Gold incendiary round: surviving blocks set alight. Default 5.")
+        var cannonballGoldIncendiary = 5
+
+        @JsonSchema(description = "Netherite ball: blocks always destroyed. Default 6.")
+        var cannonballNetheriteGuaranteed = 6
+
+        @JsonSchema(description = "Netherite ball: extra-block chances, in percent. Default \"80,70,60,40,20,10\" (range 6-12, average 8.8).")
+        var cannonballNetheriteExtraChances = "80,70,60,40,20,10"
+
+        @JsonSchema(description = "Netherite incendiary round: surviving blocks set alight. Default 6.")
+        var cannonballNetheriteIncendiary = 6
+
+        @JsonSchema(
+            description = "Explosive rounds: blocks added to every metal's guaranteed floor. The charge is " +
+                "the same gunpowder whatever ball carries it, so the bonus is identical across metals. " +
+                "Default 2."
+        )
+        var cannonExplosiveBonusGuaranteed = 2
+
+        @JsonSchema(
+            description = "Explosive rounds: extra-block chances added as their own short ladder, in " +
+                "percent. Default \"60,30\" (so an explosive round is +2 guaranteed and up to +4 total)."
+        )
+        var cannonExplosiveBonusChances = "60,30"
+
+        @JsonSchema(
+            description = "Armor-piercing rounds: each strike's share of the OPENING hit's roll, in " +
+                "percent, first entry first. How many entries there are is how many times the round " +
+                "strikes before it is spent; every share is of the first roll, never of the last strike, " +
+                "and no strike ever takes less than one block. Default \"100,75,50,25\" (four strikes, " +
+                "losing steam)."
+        )
+        var cannonArmorPiercingStrikePercents = "100,75,50,25"
         // endregion
 
         @JsonSchema(

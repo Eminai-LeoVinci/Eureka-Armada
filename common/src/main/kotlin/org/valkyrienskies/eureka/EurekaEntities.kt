@@ -57,15 +57,17 @@ object EurekaEntities {
     /**
      * A cannonball in flight.
      *
-     * Tracked to 16 chunks and updated every tick for the same reason the bottle is: its path is stepped
-     * server-side against ship transforms the client cannot reproduce, so there is nothing to dead-reckon
-     * between updates. A shot is also over in a second or two, which makes any stutter the whole of what you
-     * see of it.
+     * Tracked to 32 chunks (512 blocks) and updated every tick for the same reason the bottle is: its path
+     * is stepped server-side against ship transforms the client cannot reproduce, so there is nothing to
+     * dead-reckon between updates. The tracking range is the hard ceiling on how far away a shot can be
+     * SEEN; how far it actually draws inside that is the client's `cannonShotRenderDistance` config, which
+     * is why the ceiling ships with headroom over the default. Few shots exist at once, so the wide range
+     * costs nearly nothing.
      */
     val CANNON_SHOT: RegistrySupplier<EntityType<CannonShot>> =
         (::CannonShot category MobCategory.MISC)
             .sized(0.3f, 0.3f)
-            .clientTrackingRange(16)
+            .clientTrackingRange(32)
             .updateInterval(1)
             // Iron does not mind lava, and neither should a shot that flies over a lake of it.
             .fireImmune()

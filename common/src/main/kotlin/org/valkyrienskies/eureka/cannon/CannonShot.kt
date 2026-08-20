@@ -20,6 +20,7 @@ import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaEntities
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.item.Cannonball
@@ -115,6 +116,17 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
 
     /** A cannonball is not a thing you can attack. */
     override fun hurtServer(level: ServerLevel, source: DamageSource, amount: Float): Boolean = false
+
+    /**
+     * How far away a shot in flight still draws. Vanilla sizes this off the bounding box -- about 77
+     * blocks for a shot -- which made long shots vanish mid-arc while the guns that threw them were still
+     * plainly visible. Config-driven (client side, cosmetic); the tracking range at registration is what
+     * actually caps it, see [EurekaEntities.CANNON_SHOT].
+     */
+    override fun shouldRenderAtSqrDistance(distance: Double): Boolean {
+        val range = EurekaConfig.CLIENT.cannonShotRenderDistance.toDouble().coerceAtLeast(0.0)
+        return distance < range * range
+    }
 
     override fun defineSynchedData(builder: SynchedEntityData.Builder) {
         builder.define(SHOWN, ItemStack.EMPTY)
@@ -250,7 +262,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // itself getting through the first wall, and the strikes behind it are a ball grinding on through a
         // hull, not four fresh detonations. So the follow-throughs keep the shape and lose the scale.
         val firstStrike = impactsLeft == load.impacts
-        val bursts = if (firstStrike) 2 + load.ball.ordinal else 2
+        // A follow-through is a ball grinding on through a hull, not a fresh detonation: one puff and a
+        // wisp of smoke marks where it passed, and the bloom stays the first strike's alone.
+        val bursts = if (firstStrike) 2 + load.ball.ordinal else 1
         if (firstStrike) {
             level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, where.x, where.y, where.z, 1, 0.0, 0.0, 0.0, 0.0)
         }
@@ -263,7 +277,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
                 1, 0.0, 0.0, 0.0, 0.0
             )
         }
-        val smoke = if (firstStrike) 24 else 8
+        val smoke = if (firstStrike) 24 else 5
         level.sendParticles(ParticleTypes.LARGE_SMOKE, where.x, where.y, where.z, smoke, 1.0, 1.0, 1.0, 0.03)
 
         if (blockHit != null) {
@@ -338,12 +352,12 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
          * Break effects one impact may show, and one whole round may show across all of its impacts.
          *
          * Four is enough to read as "that block just came apart" -- past it the puffs pile up inside a
-         * single hole and add nothing but packets. Twelve for the round keeps the worst case (an
-         * armor-piercing netherite ball, which can break thirty blocks over four impacts) to about what a
-         * plain round already cost, instead of four times it.
+         * single hole and add nothing but packets. Eight for the round means an armor-piercing ball's
+         * last two impacts land silently -- by which point it is deep inside a hull, its holes behind
+         * walls nobody is looking through. Was twelve; the trailing bursts still read as clutter.
          */
         private const val EFFECTS_PER_IMPACT = 4
-        private const val EFFECT_BUDGET = 12
+        private const val EFFECT_BUDGET = 8
 
         fun spawn(
             level: ServerLevel,

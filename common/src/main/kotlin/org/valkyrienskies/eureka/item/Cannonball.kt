@@ -1,6 +1,8 @@
 package org.valkyrienskies.eureka.item
 
 import net.minecraft.util.RandomSource
+import org.valkyrienskies.eureka.EurekaConfig
+import kotlin.math.floor
 
 /**
  * What a round is made of.
@@ -14,33 +16,55 @@ import net.minecraft.util.RandomSource
  * That shape is the whole balance. A heavier ball raises the *floor* far more reliably than it raises the
  * ceiling, so netherite is not "gold but luckier" -- it is a gun that always hurts.
  *
- * ## The tiers
- * Copper is the weak opener. **Iron is the sweet spot**: cheap, and a floor of 2 is enough to matter. Steel
- * is the consistent one. Gold is heavy but swingy. Netherite is the hammer.
+ * ## The numbers live on the config
+ * Every rung of every ladder reads [EurekaConfig.SERVER] live -- the "Cannonball damage" region -- so a
+ * `/reload` retunes the rounds and their tooltips together. The shipped defaults keep each tier's identity:
+ * copper the weak opener, **iron the sweet spot**, steel the consistent one, gold heavy but swingy (its
+ * extra rungs descend through the MIDDLE of its ladder, carrying the average past steel while keeping the
+ * lower floor and the longer tail), netherite the hammer. Each default ladder is tuned to a target average
+ * of `guaranteed + sum(chances)`; the config descriptions carry the ranges.
  */
 enum class Cannonball(
     /** The metal's name, which is also the first half of every item id built from it. */
-    val metal: String,
-    /** Blocks destroyed before a single die is thrown. */
-    val guaranteed: Int,
-    /** Chance of one further block each, rolled independently and in order. */
-    val extraChances: DoubleArray,
-    /** How many *surviving* blocks an incendiary round of this weight sets alight. */
-    val incendiary: Int
+    val metal: String
 ) {
-    // Each ladder is tuned to a target average, which is `guaranteed + extraChances.sum()`. Keep that sum
-    // intact when adjusting a rung, or the tier quietly changes power while its printed range stays put.
-    //
-    //                                                                    range   avg
-    COPPER("copper", 1, doubleArrayOf(0.75, 0.50, 0.25), 2), //           1-4     2.5
-    IRON("iron", 2, doubleArrayOf(0.80, 0.70, 0.50), 3), //               2-5     4.0
-    STEEL("steel", 3, doubleArrayOf(0.80, 0.60, 0.40, 0.20), 4), //       3-7     5.0
-    // Gold's extra rungs sit in the MIDDLE of its ladder, not at the end. Anchored at 90% for the first
-    // block and 10% for the ninth, the descent between them is what carries the average to 6 -- so gold
-    // out-averages steel while keeping the lower floor and the longer tail. Steel is what you fire when you
-    // need a hole; gold is what you fire when you want one.
-    GOLD("gold", 2, doubleArrayOf(0.90, 0.85, 0.75, 0.65, 0.50, 0.25, 0.10), 5), // 2-9  6.0
-    NETHERITE("netherite", 6, doubleArrayOf(0.80, 0.70, 0.60, 0.40, 0.20, 0.10), 6); // 6-12 8.8
+    COPPER("copper"),
+    IRON("iron"),
+    STEEL("steel"),
+    GOLD("gold"),
+    NETHERITE("netherite");
+
+    /** Blocks destroyed before a single die is thrown. Read live off the config. */
+    val guaranteed: Int
+        get() = when (this) {
+            COPPER -> EurekaConfig.SERVER.cannonballCopperGuaranteed
+            IRON -> EurekaConfig.SERVER.cannonballIronGuaranteed
+            STEEL -> EurekaConfig.SERVER.cannonballSteelGuaranteed
+            GOLD -> EurekaConfig.SERVER.cannonballGoldGuaranteed
+            NETHERITE -> EurekaConfig.SERVER.cannonballNetheriteGuaranteed
+        }.coerceAtLeast(0)
+
+    /** Chance of one further block each, rolled independently and in order. Read live off the config. */
+    val extraChances: DoubleArray
+        get() = ChanceSpec.parse(
+            when (this) {
+                COPPER -> EurekaConfig.SERVER.cannonballCopperExtraChances
+                IRON -> EurekaConfig.SERVER.cannonballIronExtraChances
+                STEEL -> EurekaConfig.SERVER.cannonballSteelExtraChances
+                GOLD -> EurekaConfig.SERVER.cannonballGoldExtraChances
+                NETHERITE -> EurekaConfig.SERVER.cannonballNetheriteExtraChances
+            }
+        )
+
+    /** How many *surviving* blocks an incendiary round of this weight sets alight. Read live off the config. */
+    val incendiary: Int
+        get() = when (this) {
+            COPPER -> EurekaConfig.SERVER.cannonballCopperIncendiary
+            IRON -> EurekaConfig.SERVER.cannonballIronIncendiary
+            STEEL -> EurekaConfig.SERVER.cannonballSteelIncendiary
+            GOLD -> EurekaConfig.SERVER.cannonballGoldIncendiary
+            NETHERITE -> EurekaConfig.SERVER.cannonballNetheriteIncendiary
+        }.coerceAtLeast(0)
 
     /** The raw form of this metal, which every charged variant is bound with. */
     val rawMaterial: String
@@ -59,26 +83,23 @@ enum class Cannonball(
  * A charge does **not** simply extend the metal's ladder. Adding rungs to the end of an existing ladder
  * would raise the ceiling and leave the floor alone, which is the opposite of what a bursting charge does --
  * so the bonus is split: part of it is guaranteed, and the rest is its own short ladder rolled alongside.
+ * The bonus numbers read the config live, like the metals' own.
  */
 enum class CannonCharge(
     /** Prefixes the item id: "" for a plain round, "explosive_" for a charged one. */
-    val prefix: String,
-    /** Blocks added to the floor. */
-    val bonusGuaranteed: Int,
-    /** Extra independent rolls, on top of the metal's own. */
-    val bonusChances: DoubleArray
+    val prefix: String
 ) {
-    PLAIN("", 0, doubleArrayOf()),
+    PLAIN(""),
 
     /**
-     * Gunpowder: four more blocks in total, two of them certain.
+     * Gunpowder: more blocks, some of them certain.
      *
-     * The remaining two roll at 60% and 30% as a ladder of their own rather than being appended to the
-     * metal's -- appended, they would inherit whatever tail that metal happened to have and make an
-     * explosive netherite round wildly better than an explosive copper one, when the charge is the same
-     * amount of gunpowder either way.
+     * The chance rungs roll as a ladder of their own rather than being appended to the metal's -- appended,
+     * they would inherit whatever tail that metal happened to have and make an explosive netherite round
+     * wildly better than an explosive copper one, when the charge is the same amount of gunpowder either
+     * way. Both halves of the bonus are config levers.
      */
-    EXPLOSIVE("explosive_", 2, doubleArrayOf(0.60, 0.30)),
+    EXPLOSIVE("explosive_"),
 
     /**
      * Blaze powder: no extra damage at all, and that is the point.
@@ -89,21 +110,33 @@ enum class CannonCharge(
      * given none, it is a different weapon. How many blocks it lights is a property of the *metal*, since a
      * heavier ball carries more of the stuff -- see [Cannonball.incendiary].
      */
-    INCENDIARY("incendiary_", 0, doubleArrayOf()),
+    INCENDIARY("incendiary_"),
 
     /**
      * Diamond: no extra damage per hit, and the round does not stop.
      *
-     * An armor-piercing round takes [Load.IMPACTS] bites instead of one. The first is the metal's own roll,
-     * unchanged; the follow-throughs are 75%, 50% and 25% **of that first roll** -- of the first, not each of
-     * the last, so one lucky opening hit carries the whole chain and one poor one dooms it. Rounded half-up
-     * and never below one block: a spent ball still stings. Netherite at its best runs 12-9-6-3; copper at
-     * its best runs 4-3-2-1.
+     * An armor-piercing round takes [Load.impacts] bites instead of one. The first is the metal's own roll,
+     * unchanged; the follow-throughs are shares **of that first roll** -- of the first, not each of the
+     * last, so one lucky opening hit carries the whole chain and one poor one dooms it. Rounded half-up and
+     * never below one block: a spent ball still stings. At the default 100/75/50/25 shares, netherite at
+     * its best runs 12-9-6-3; copper at its best runs 4-3-2-1.
      *
-     * Like blaze powder, the coating adds nothing to any single ladder -- the extra IMPACTS are the whole
+     * Like blaze powder, the coating adds nothing to any single ladder -- the extra impacts are the whole
      * purchase. Appended per the ladder philosophy: a diamond is the same diamond whatever ball wears it.
      */
-    ARMOR_PIERCING("armor_piercing_", 0, doubleArrayOf());
+    ARMOR_PIERCING("armor_piercing_");
+
+    /** Blocks added to the floor. Read live off the config; zero for everything but explosive. */
+    val bonusGuaranteed: Int
+        get() = if (this == EXPLOSIVE) {
+            EurekaConfig.SERVER.cannonExplosiveBonusGuaranteed.coerceAtLeast(0)
+        } else 0
+
+    /** Extra independent rolls, on top of the metal's own. Empty for everything but explosive. */
+    val bonusChances: DoubleArray
+        get() = if (this == EXPLOSIVE) {
+            ChanceSpec.parse(EurekaConfig.SERVER.cannonExplosiveBonusChances)
+        } else ChanceSpec.NONE
 }
 
 /** A round as it actually exists: a metal, and whatever is packed behind it. */
@@ -121,30 +154,32 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
     /** How many surviving blocks this round sets alight, or 0 if it starts no fires. */
     val incendiaryBlocks: Int get() = if (charge == CannonCharge.INCENDIARY) ball.incendiary else 0
 
-    /** How many times this round strikes before it is spent. One, unless it is armor-piercing. */
-    val impacts: Int get() = if (charge == CannonCharge.ARMOR_PIERCING) IMPACTS else 1
+    /**
+     * How many times this round strikes before it is spent. One, unless it is armor-piercing -- and for an
+     * armor-piercing round the count is the config's share list itself: one strike per entry.
+     */
+    val impacts: Int
+        get() = if (charge == CannonCharge.ARMOR_PIERCING) apShares().size.coerceAtLeast(1) else 1
 
     /**
      * What the [ordinal]-th block strike takes (0 = the opening hit's own roll), given what that opening
      * hit rolled.
      *
      * Half rounds UP -- .50 to .99 climbs, .01 to .49 falls -- and the floor is one block always: the
-     * fourth impact of the weariest copper ball still breaks something. Deterministic past the first hit on
+     * last impact of the weariest copper ball still breaks something. Deterministic past the first hit on
      * purpose, so the chain reads as one shot losing steam rather than four separate lotteries.
      */
     fun followThrough(base: Int, ordinal: Int): Int {
-        val share = FOLLOW_THROUGH.getOrElse(ordinal) { return 0 }
-        // Round-half-up of base * share/4, in integers: floor((base*share + 2) / 4).
-        return Math.floorDiv(base * share + 2, 4).coerceAtLeast(1)
+        val share = apShares().getOrElse(ordinal) { return 0 }
+        return floor(base * share + 0.5).toInt().coerceAtLeast(1)
     }
 
-    companion object {
-        /** How many strikes an armor-piercing round gets. */
-        const val IMPACTS = 4
-
-        /** Each strike's share of the opening roll, in quarters: 4/4, then 3/4, 2/4, 1/4. */
-        private val FOLLOW_THROUGH = intArrayOf(4, 3, 2, 1)
-    }
+    /**
+     * The armor-piercing strike shares, as fractions of the opening roll. Index 0 is the opening strike
+     * itself -- present so the list's LENGTH is the strike count -- but never consumed as a multiplier:
+     * CannonShot rolls the opening hit fresh and only asks [followThrough] from the second strike on.
+     */
+    private fun apShares(): DoubleArray = ChanceSpec.parse(EurekaConfig.SERVER.cannonArmorPiercingStrikePercents)
 
     /**
      * Roll this round's damage.
@@ -162,4 +197,28 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
 
     /** The item id this load is sold as. */
     val itemName: String get() = "${charge.prefix}${ball.metal}_cannonball"
+}
+
+/**
+ * The config's percent lists ("80,70,50"), parsed to fractions and memoized by the exact string -- these
+ * are read on every roll and every tooltip frame, and a config only ever holds a handful of distinct
+ * values. Malformed entries are dropped rather than failing the list; a blank string is a ladder with no
+ * rungs. No upper clamp on purpose: "150" as a chance is simply a certain block, which is a legitimate
+ * way to raise a floor without touching the guaranteed key.
+ */
+private object ChanceSpec {
+    val NONE = DoubleArray(0)
+
+    private val cache = HashMap<String, DoubleArray>()
+
+    fun parse(spec: String): DoubleArray = synchronized(cache) {
+        // A config typo should not slowly fill a map that lives forever; the real key set is tiny.
+        if (cache.size > 64) cache.clear()
+        cache.getOrPut(spec) {
+            spec.split(',', ';')
+                .mapNotNull { it.trim().toDoubleOrNull() }
+                .map { (it / 100.0).coerceAtLeast(0.0) }
+                .toDoubleArray()
+        }
+    }
 }
