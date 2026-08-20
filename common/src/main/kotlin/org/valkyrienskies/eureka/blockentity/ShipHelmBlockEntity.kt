@@ -57,7 +57,10 @@ import org.valkyrienskies.eureka.block.BalloonBlock
 import org.valkyrienskies.eureka.block.EngineBlock
 import org.valkyrienskies.eureka.block.FloaterBlock
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.bottle.BottleBindings
+import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.crew.CrewData
 import org.valkyrienskies.eureka.crew.CrewMuster
@@ -885,6 +888,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // the report is a no-op map read when nothing changed.
         bottleBinding?.let { binding ->
             (level as? ServerLevel)?.let { BottleBindings.report(it, binding, blockPos) }
+        }
+
+        // A pirate wheel introduces itself to its keeper, for exactly the reason the bottle binding reports:
+        // worldgen placed it with no code running, and every later relocation is silent too. First report
+        // adopts the ship (berth + crew); the rest are how the zone follows a hull under sail.
+        if (blockState.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) {
+            (level as? ServerLevel)?.let { PirateShips.report(it, blockPos, this) }
         }
 
         // One shipyard lookup per tick: the [ship]/[control] getters walk the loaded-ship index

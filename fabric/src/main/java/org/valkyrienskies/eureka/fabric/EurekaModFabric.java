@@ -45,6 +45,7 @@ import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
+import org.valkyrienskies.eureka.fabric.client.PirateZoneRenderer;
 import org.valkyrienskies.eureka.follow.ShipFollows;
 import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
@@ -52,6 +53,7 @@ import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.PirateCommand;
+import org.valkyrienskies.eureka.pirate.PirateShips;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
@@ -137,6 +139,9 @@ public class EurekaModFabric implements ModInitializer {
             // Gun stations: glue each stationed gunner to his seat (their seats sit in non-ticking shipyard
             // chunks, so nothing else will), and once a second reconcile the seats against the crew ledger.
             GunStations.INSTANCE.tick(level);
+            // Pirate ships: proximity zones around dormant hulls, the 20-second warning, wake-up and the
+            // hand-off into ShipFollows. Self-silences to a map check while no pirate wheel is loaded.
+            PirateShips.INSTANCE.tick(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -156,6 +161,9 @@ public class EurekaModFabric implements ModInitializer {
             FireBrigade.INSTANCE.reset();
             // The seat map holds entity references from the stopped server; the ledger rebuilds it next world.
             GunStations.INSTANCE.reset();
+            // Reports hold block-entity references and chases hold ship ids from the stopped server; the
+            // helm reports rebuild everything within a tick of the next world loading.
+            PirateShips.INSTANCE.reset();
             PathNetworkingFabric.INSTANCE.resetServer();
         });
     }
@@ -192,6 +200,8 @@ public class EurekaModFabric implements ModInitializer {
             PathNetworkingFabric.INSTANCE.registerClient();
             PathKeybinds.INSTANCE.register();
             PathRenderer.INSTANCE.register();
+            // Pirate proximity zones as wireframe spheres, off until "/vs pirate-zones true". DEV ONLY.
+            PirateZoneRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
@@ -278,7 +288,19 @@ public class EurekaModFabric implements ModInitializer {
                                 ctx.getSource().sendFeedback(
                                     Component.literal("Pocket occluder: " + ArmadaPocketOccluder.describe()));
                                 return 1;
-                            }))));
+                            }))
+                        // "/vs pirate-zones <bool>": draw the pirate proximity spheres. The flag lives on the
+                        // COMMON PirateShips object so the integrated-server tick publishes snapshots the render
+                        // thread can read. Single-player only, like every toggle above. DEV ONLY, strip-listed.
+                        .then(ClientCommandManager.literal("pirate-zones")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
+                                    PirateShips.setPublishZones(enabled);
+                                    ctx.getSource().sendFeedback(
+                                        Component.literal("Pirate zones " + (enabled ? "shown" : "hidden")));
+                                    return 1;
+                                })))));
 
             Registry.register(
                 BuiltInRegistries.CREATIVE_MODE_TAB,

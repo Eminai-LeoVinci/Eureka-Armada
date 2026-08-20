@@ -1309,6 +1309,63 @@ object EurekaConfig {
         var damageFreefallBelow = 40
         // endregion
 
+        // region Pirate ships
+        //
+        // Generated pillager ships: proximity zones, the 20-second warning, wake-up and pursuit. Structure
+        // RARITY is deliberately NOT here -- spacing and separation live in the datapack
+        // (data/vs_eureka/worldgen/structure_set/pirate_ships.json), because vanilla reads placement from
+        // static data before any config exists. Note that turning pirateShipsEnabled off stops the manager
+        // (no zones, no wake-ups) but does not un-gate already-placed pirate helms: the black wheel is a
+        // blockstate fact. /vs pirate set-mark reclaims one by hand if it comes to that.
+
+        @JsonSchema(
+            description = "Master switch for the pirate-ship machinery: berth adoption, proximity zones, " +
+                "wake-up and pursuit. Generated hulls still appear in new chunks either way (that is " +
+                "worldgen data, not code); with this off they simply never wake. Default true."
+        )
+        var pirateShipsEnabled = true
+
+        @JsonSchema(
+            description = "Pirate proximity sphere: radius = the hull's horizontal half-diagonal times this. " +
+                "Bigger ships see further, exactly as the follow reach does. A ship counts as inside the " +
+                "moment any part of its hull crosses the line, not just its centre. Default 5.0."
+        )
+        var pirateZoneScale = 5.0
+
+        @JsonSchema(
+            description = "Pirate proximity sphere: the radius never shrinks below this many blocks, however " +
+                "small the hull. Default 40.0."
+        )
+        var pirateZoneMinRadius = 40.0
+
+        @JsonSchema(
+            description = "How many seconds a player standing inside a pirate ship's zone is given to get " +
+                "clear before the ship assembles and gives chase. Default 15."
+        )
+        var pirateCountdownSeconds = 15
+
+        @JsonSchema(
+            description = "Hard cap on pirate ships ASSEMBLED at once, server-wide. Assembly is " +
+                "the heaviest thing this feature does unattended, so the cap is a safety rail, not a " +
+                "difficulty dial. Default 3."
+        )
+        var pirateMaxAssembled = 3
+
+        @JsonSchema(
+            description = "Global cooldown between any two pirate wake-ups, in seconds, so a fleet of " +
+                "dormant ships cannot all assemble in the same breath. Default 60.0."
+        )
+        var pirateAssemblyCooldownSeconds = 60.0
+
+        @JsonSchema(
+            description = "How long a pirate whose pursuit broke stays assembled, in minutes, waiting for " +
+                "its quarry to wander back. A trespasser in the zone inside this window resumes the " +
+                "pursuit at once, with no countdown; when it closes the ship disassembles itself and the " +
+                "site goes back to the full 15-second ceremony. Default 2.0."
+        )
+        var pirateLingerMinutes = 2.0
+        // endregion
+
         @JsonSchema(
             description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
                 "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +

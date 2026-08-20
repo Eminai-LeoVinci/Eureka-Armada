@@ -22,6 +22,7 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.crew.CrewStations
+import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
@@ -61,8 +62,35 @@ object PirateCommand {
                             )
                         )
                     )
+                    .then(literal("list").executes { list(it) })
+                    .then(literal("arm").executes { arm(it) })
             )
         )
+    }
+
+    /** Every berth in the caller's dimension: position, template, and what it is doing right now. */
+    private fun list(ctx: CommandContext<CommandSourceStack>): Int {
+        val lines = PirateShips.describe(ctx.source.level)
+        for (line in lines) {
+            ctx.source.sendSuccess({ Component.literal(line) }, false)
+        }
+        return lines.size
+    }
+
+    /** Skip the countdown on the nearest loaded dormant berth: the caller is the intruder. */
+    private fun arm(ctx: CommandContext<CommandSourceStack>): Int {
+        val player = ctx.source.playerOrException
+        return if (PirateShips.forceArm(ctx.source.level, player)) {
+            ctx.source.sendSuccess({
+                Component.literal("Pirate ship waking.").withStyle(ChatFormatting.GREEN)
+            }, true)
+            1
+        } else {
+            ctx.source.sendFailure(
+                Component.literal("No loaded dormant pirate berth to wake (or the cap/cooldown refused it).")
+            )
+            0
+        }
     }
 
     /**
