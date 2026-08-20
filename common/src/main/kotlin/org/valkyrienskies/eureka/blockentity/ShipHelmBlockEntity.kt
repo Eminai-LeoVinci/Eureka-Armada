@@ -1114,10 +1114,14 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // it can be wrong. Verdicts are cached in the classifier for the duration of this one assembly.
         // What a ship is made of, counted the same way however the block set was arrived at. This used to be a
         // side effect of the flood-fill predicate, which welded "which blocks are the ship" to "what are they".
+        var pirateWheelAboard = false
         fun tally(state: BlockState) {
             blockCount++
             when (state.block) {
-                is ShipHelmBlock -> helmCount++
+                is ShipHelmBlock -> {
+                    helmCount++
+                    if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) pirateWheelAboard = true
+                }
                 is BalloonBlock -> balloonCount++
                 // Floater buoyancy scales with 15 - redstone power, matching FloaterBlock.onPlace.
                 is FloaterBlock -> floaterCount += 15 - state.getValue(BlockStateProperties.POWER)
@@ -1168,6 +1172,21 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         if (blockPositions == null) {
             player?.displayClientMessage(Component.translatable("gui.vs_eureka.too_big", EurekaConfig.SERVER.maxShipBlocks), true)
             logger.warn("Failed to assemble to large of a ship for ${player?.name?.string ?: "a scripted assembly"}")
+            return
+        }
+
+        // No player raises a hull that answers to a pirate wheel -- placing your own helm on a beached
+        // pirate ship and assembling it would be the whole conquest without the fight. Break their wheel
+        // (it breaks once its crew are dead), THEN the hull is yours to raise. The pirate manager's own
+        // scripted assemblies pass through, being the one caller with any business raising one.
+        if (player != null && pirateWheelAboard) {
+            (player as? ServerPlayer)?.let {
+                PathMessages.send(
+                    it,
+                    "This hull answers to its pirate wheel -- break it before the ship can be yours.",
+                    PathMessages.Kind.ERROR
+                )
+            }
             return
         }
 

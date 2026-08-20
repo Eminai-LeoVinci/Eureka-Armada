@@ -30,10 +30,13 @@ import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
 import java.util.function.BiConsumer
+import net.minecraft.server.level.ServerPlayer
 import org.valkyrienskies.core.api.attachment.getAttachment
+import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewBerths
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.ship.EurekaShipControl
@@ -160,12 +163,14 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     }
 
     /**
-     * A PIRATE wheel is never an item -- not by silk touch, not by any loot path. One override here beats
-     * conditions in nine per-wood loot JSONs, and it also covers destroyBlock(drop=true) and explosion
-     * drops in a single place. TAKEN drops the ordinary wood helm: that is loot, and it is sanctioned.
+     * A pirate's wheel is never an item, black OR white -- not by silk touch, not by any loot path. One
+     * override here beats conditions in nine per-wood loot JSONs, and it also covers destroyBlock(drop=true)
+     * and explosion drops in a single place. The white wheel BREAKS (that is the conquest) but pays nothing:
+     * the prize is the ship under your feet, not a free helm off its corpse -- first cut dropped one and the
+     * user sent it back.
      */
     override fun getDrops(state: BlockState, params: LootParams.Builder): MutableList<ItemStack> {
-        if (PirateHelm.inviolable(state)) return mutableListOf()
+        if (PirateHelm.gated(state)) return mutableListOf()
         return super.getDrops(state, params)
     }
 
@@ -190,6 +195,37 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     }
 
     override fun getStateForPlacement(ctx: BlockPlaceContext): BlockState? {
+        // Pirate gate, placement door: a ship that answers to a pirate wheel -- black OR white -- takes no
+        // other wheel. A helm planted beside the pirate's would hand over the controls (and, later, the
+        // conquest) without the fight; breaking theirs is the only way in. Server-side only: the client's
+        // guess gets corrected by the refused placement.
+        val level = ctx.level
+        if (level is ServerLevel) {
+            val ship = level.getLoadedShipManagingPos(ctx.clickedPos) as? LoadedServerShip
+            if (ship != null && PirateHelm.shipHasPirateWheel(level, ship)) {
+                (ctx.player as? ServerPlayer)?.let {
+                    PathMessages.send(
+                        it,
+                        "This ship answers to its pirate wheel -- break it before placing your own.",
+                        PathMessages.Kind.ERROR
+                    )
+                }
+                return null
+            }
+            // The dormant twin of the check above: a wheel seated on a sleeping pirate's deck from range
+            // would ride into the assembled ship as a working helm. Boarding wakes the ship the tick a
+            // boot touches it, but a block can be placed without ever touching.
+            if (ship == null && PirateShips.nearDormantPirateHull(level, ctx.clickedPos)) {
+                (ctx.player as? ServerPlayer)?.let {
+                    PathMessages.send(
+                        it,
+                        "Too close to a pirate hull to seat a wheel -- conquer the ship first.",
+                        PathMessages.Kind.ERROR
+                    )
+                }
+                return null
+            }
+        }
         return defaultBlockState()
             .setValue(HORIZONTAL_FACING, ctx.horizontalDirection.opposite)
     }
