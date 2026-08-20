@@ -18,10 +18,13 @@ import net.minecraft.world.level.Level
 import net.minecraft.world.level.storage.ValueInput
 import net.minecraft.world.level.storage.ValueOutput
 import net.minecraft.world.phys.AABB
+import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaEntities
+import org.valkyrienskies.mod.common.getShipManagingPos
+import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.item.Cannonball
 import org.valkyrienskies.eureka.item.Load
@@ -77,6 +80,28 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * having, so the exemption has to be about the shot's own origin rather than about the block type.
      */
     private var gun: Array<BlockPos> = emptyArray()
+
+    /**
+     * Where the bore's mouth was, in world space, and every ship of the vessel the gun stood on -- the
+     * firing hull plus its welded armada. Together they decide what a round refuses to strike: any block
+     * belonging to its own vessel, and anyone ABOARD its own vessel, at any range.
+     *
+     * The gun-block exemption above was not enough once the elevation went to five-degree steps, and a
+     * distance grace was not enough either -- an instrumented build showed why. A gun laid fifteen degrees
+     * down on a ranked broadside sends its bore line through the seated gunners of the rank AHEAD, about
+     * four blocks out; at twenty-five it rakes two tiers. No radius fits every deck plan, so the rule is
+     * identity instead: a ship's own guns cannot hole her and cannot kill her crew, wherever aboard her
+     * they stand. An enemy alongside stays fair game at any range -- her hull and her crew are another
+     * ship's -- which is what a radius could never get right in both directions at once.
+     *
+     * [ARMING_DISTANCE] remains as the muzzle-adjacent grace for what identity cannot cover: the ground
+     * a shore battery stands on, and anything hugging the muzzle itself.
+     *
+     * None of this persists, like [firedBy]: a shot that outlives a chunk reload comes back fully armed,
+     * which errs on the side of the ball behaving like a ball.
+     */
+    private var muzzle: Vec3? = null
+    private var ownVessel: Set<Long> = emptySet()
 
     private var age = 0
 
@@ -192,8 +217,12 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // Entities first: a round that punches through a crew to hit the hull behind them is not a
         // cannonball, it is a rumour. Except an armor-piercing one, whose whole purchase is that it does not
         // stop -- flesh costs it a strike like a wall does, and the ball flies on to whatever stands behind.
-        val struck = level().getEntities(this, AABB(from, to).inflate(0.5))
-            .firstOrNull { it.isPickable && it !== firedBy && it.id !in pierced }
+        // Anyone aboard the firing vessel is spared, at any range: a depressed gun on a ranked broadside
+        // sends its bore line straight through the seated gunners of the rank ahead. See [muzzle].
+        val struck = level().getEntities(this, AABB(from, to).inflate(0.5)).firstOrNull {
+            it.isPickable && it !== firedBy && it.id !in pierced &&
+                armedAt(it.position()) && !aboardOwnVessel(it.position())
+        }
         if (struck != null) {
             struck.hurt(damageSources().explosion(this, firedBy), load.maxBlocks.toFloat())
             pierced.add(struck.id)
@@ -208,7 +237,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         )
         // The gun's own blocks are compared in the same space the hit reports -- shipyard for a hull, world
         // for the ground -- because CannonFire records them from the same block positions the clip walks.
-        if (hit.type != HitResult.Type.MISS && !gun.contains(hit.blockPos)) {
+        // A hit on the firing ship inside the arming distance is not a hit at all -- the ball flies on
+        // through its own gunport sill exactly as it flies through its own barrel.
+        if (hit.type != HitResult.Type.MISS && !gun.contains(hit.blockPos) && !friendlyBlockHit(hit)) {
             // location: world space, for the flash. blockPos: shipyard space, for the damage.
             strike(hit.location, hit.blockPos)
             if (!isRemoved) {
@@ -227,6 +258,47 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         deltaMovement = deltaMovement.scale(charge.drag)
             .subtract(0.0, charge.gravity, 0.0)
         smoke()
+    }
+
+    /** Whether the round has travelled far enough from the muzzle to strike things at [where]. */
+    private fun armedAt(where: Vec3): Boolean {
+        val from = muzzle ?: return true
+        return from.distanceToSqr(where) >= ARMING_DISTANCE_SQ
+    }
+
+    /**
+     * Whether [hit] is a block the round refuses on principle: its own vessel's hull at any range, or --
+     * for a gun with no vessel at all -- the plain ground inside the arming distance, which is a shore
+     * battery's emplacement. Ship identity, not proximity: an ENEMY hull two blocks from the muzzle is the
+     * most deliberate shot in the game and must land.
+     */
+    private fun friendlyBlockHit(hit: BlockHitResult): Boolean {
+        val hitShipId = level().getShipManagingPos(hit.blockPos)?.id
+        if (hitShipId != null) return hitShipId in ownVessel
+        return ownVessel.isEmpty() && !armedAt(hit.location)
+    }
+
+    /**
+     * Whether whatever stands at [pos] is aboard the firing vessel: its world position, carried back into
+     * each member ship's own space, lands inside that hull's box (with a block of margin for a crewman
+     * leaning over a rail). This is what stops a ranked broadside raking its own forward gunners -- see
+     * [muzzle] for the trace that found them dying four blocks downrange of the tier behind.
+     */
+    private fun aboardOwnVessel(pos: Vec3): Boolean {
+        if (ownVessel.isEmpty()) return false
+        val level = level() as? ServerLevel ?: return false
+        val world = level.shipObjectWorld
+        val local = org.joml.Vector3d()
+        for (shipId in ownVessel) {
+            val ship = world.loadedShips.getById(shipId) ?: continue
+            val box = ship.shipAABB ?: continue
+            ship.worldToShip.transformPosition(local.set(pos.x, pos.y, pos.z))
+            if (local.x >= box.minX() - 1.0 && local.x <= box.maxX() + 1.0 &&
+                local.y >= box.minY() - 1.0 && local.y <= box.maxY() + 1.0 &&
+                local.z >= box.minZ() - 1.0 && local.z <= box.maxZ() + 1.0
+            ) return true
+        }
+        return false
     }
 
     /** A thin powder trail, so a shot can be followed back to the gun that fired it. */
@@ -349,6 +421,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         private const val BURST_SPREAD = 2.0
 
         /**
+         * How far from the muzzle a round arms, in blocks. Sized to the worst self-strike the elevation
+         * range can produce: at fifteen degrees down the bore line reaches its own deck about two and a
+         * half blocks out, and everything steeper strikes closer. See [muzzle].
+         */
+        private const val ARMING_DISTANCE = 3.0
+        private const val ARMING_DISTANCE_SQ = ARMING_DISTANCE * ARMING_DISTANCE
+
+        /**
          * Break effects one impact may show, and one whole round may show across all of its impacts.
          *
          * Four is enough to read as "that block just came apart" -- past it the puffs pile up inside a
@@ -367,11 +447,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             shownAs: ItemStack,
             charge: PowderCharge,
             firedBy: Entity? = null,
-            gun: Array<BlockPos> = emptyArray()
+            gun: Array<BlockPos> = emptyArray(),
+            ownVessel: Set<Long> = emptySet()
         ): CannonShot {
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
             shot.gun = gun
+            shot.muzzle = from
+            shot.ownVessel = ownVessel
             shot.launch(from, direction, load, shownAs, charge)
             level.addFreshEntity(shot)
             return shot

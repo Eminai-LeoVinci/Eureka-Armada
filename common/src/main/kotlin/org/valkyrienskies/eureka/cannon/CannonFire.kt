@@ -16,11 +16,13 @@ import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
 import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
+import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.block.CannonBlock
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
+import org.valkyrienskies.mod.common.shipObjectWorld
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 
 /**
@@ -127,9 +129,20 @@ object CannonFire {
         magazine.readyAt = level.gameTime + cooldown
         magazine.setChanged()
 
-        // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left.
+        // Hand the shot its own gun's blocks so it cannot detonate against the barrel it just left, and
+        // the whole VESSEL's identity -- the firing hull plus its welded armada -- so the round knows
+        // what it must never strike: its own ship's blocks, or anyone aboard her. See CannonShot.muzzle
+        // for the ranked-broadside story this exists for.
         val gun = CannonPart.entries.map { rear.relative(facing, it.ordinal) }.toTypedArray()
-        CannonShot.spawn(level, from, direction, load, shown, charge, player, gun)
+        val vessel: Set<Long> = if (ship == null) emptySet() else buildSet {
+            add(ship.id)
+            // A child gun names its parent; whoever the vessel's head is, every welded member counts.
+            val head = ArmadaShipControl.get(ship)?.parentShipId
+                ?.let { level.shipObjectWorld.loadedShips.getById(it) } ?: ship
+            add(head.id)
+            ArmadaShipControl.get(head)?.childShips?.keys?.let { addAll(it) }
+        }
+        CannonShot.spawn(level, from, direction, load, shown, charge, player, gun, vessel)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)
