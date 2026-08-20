@@ -1319,28 +1319,14 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // Keep Name: give the hull back the name this wheel last steered under, using the value read off
             // the block BEFORE the assembly reset it (see keepNameAtAssembly above).
             //
-            // A ship's slug lives in TWO places and they are not the same object: the persisted record in
-            // `allShips`, which is what reaches disk and what `/vs` selectors match, and the loaded ship in
-            // `loadedShips`, which is what the helm menu and every client actually read. Writing only the
-            // persisted one gets a ship that is correctly named on disk but shows its generated name until
-            // something reloads the world -- which is exactly how this looked while it seemed broken.
-            //
-            // So both, a few ticks after the ship loads rather than immediately: a slug written into a ship
-            // vs-core is still assembling does not survive. `renameShip` is a plain setter, so writing twice
-            // costs nothing and is idempotent.
+            // Through HelmNames.applyShipName rather than a plain deferred write, and the difference is the
+            // whole bug it fixed: a slug written into a ship vs-core is still assembling does not survive,
+            // and how long the build takes scales with the hull. The old single write at a fixed five ticks
+            // was tuned to an ordinary assembly; a bottle-released ship sometimes came up under its
+            // generated name with this wheel remembering the right one and nothing left to apply it. The
+            // helper writes both stores and checks its own work until the name sticks.
             if (keepNameAtAssembly && rememberedAtAssembly != null) {
-                val named = loadedShip.id
-                val server = level.server
-                val applyAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
-                server.executeIf({ server.overworld().gameTime >= applyAt }) {
-                    val world = level.shipObjectWorld
-                    world.allShips.getById(named)?.let {
-                        ValkyrienSkiesMod.vsCore.renameShip(it, rememberedAtAssembly)
-                    }
-                    world.loadedShips.getById(named)?.let {
-                        ValkyrienSkiesMod.vsCore.renameShip(it, rememberedAtAssembly)
-                    }
-                }
+                HelmNames.applyShipName(level, loadedShip.id, rememberedAtAssembly)
             }
 
             // Bring the crew filed under this wheel aboard. Deferred with everything else here because the

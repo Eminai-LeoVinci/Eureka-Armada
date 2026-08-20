@@ -11,6 +11,8 @@ import org.joml.Vector3d
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
+import org.valkyrienskies.mod.common.executeIf
+import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.common.vsCore
 
 /**
@@ -187,12 +189,59 @@ object HelmNames {
         val ship = CrewStations.shipOf(level, helm) ?: return false
         val slug = slugOf(Component.literal(StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)))
             ?: return false
+        // The loaded object this tick, so every menu and readout answers immediately -- and then BOTH
+        // stores through applyShipName, because a slug written onto the loaded ship alone never reaches
+        // disk: it read back correctly all session and reverted to the generated name on the next login,
+        // which is how this hid. See applyShipName for the two-store story.
         vsCore.renameShip(ship, slug)
+        applyShipName(level, ship.id, slug)
         // The wheel this was typed at remembers immediately, so Keep Name is right even if the ship is taken
         // apart in the same breath. Every OTHER wheel on the hull picks the new name up from its own tick --
         // see ShipHelmBlockEntity.tick -- which is why this does not have to go looking for them.
         helm.rememberShipName(slug)
         return true
+    }
+
+    /**
+     * Write [slug] onto ship [shipId] until it sticks.
+     *
+     * A ship's slug lives in TWO places and they are not the same object: the persisted record in
+     * `allShips`, which is what reaches disk and what `/vs` selectors match, and the loaded ship in
+     * `loadedShips`, which is what the helm menu, the shipwright and every client actually read. A rename
+     * must land in both or it is a rumour -- loaded-only evaporates at the next login, persisted-only
+     * shows the generated name until something reloads the world.
+     *
+     * And once is not enough either. A slug written into a ship vs-core is still assembling does not
+     * survive, and how long the build takes scales with the hull -- a bottle-released first-rate is not a
+     * dinghy. The old single delayed write was tuned to the dinghy, which is why a released ship
+     * SOMETIMES came up under its generated name with the wheel remembering the right one and nothing
+     * left to apply it. So this checks its own work: write both stores, come back a few ticks later, and
+     * go again until both read [slug] back or patience runs out.
+     *
+     * One yield: if some OTHER real name turns up meanwhile -- a captain typing at the wheel mid-retry --
+     * theirs wins and the loop stands down. A generated slug is never deferred to; overwriting one is the
+     * whole job.
+     */
+    fun applyShipName(level: ServerLevel, shipId: Long, slug: String, attemptsLeft: Int = NAME_APPLY_ATTEMPTS) {
+        if (attemptsLeft <= 0) return
+        val server = level.server
+        val applyAt = server.overworld().gameTime + NAME_APPLY_INTERVAL_TICKS
+        server.executeIf({ server.overworld().gameTime >= applyAt }) {
+            val world = level.shipObjectWorld
+            val persisted = world.allShips.getById(shipId)
+            val loaded = world.loadedShips.getById(shipId)
+            // Ship gone entirely: deleted, or never came up. Nothing to name.
+            if (persisted == null && loaded == null) return@executeIf
+            val current = loaded?.slug ?: persisted?.slug
+            // Somebody chose a different real name while this was retrying; theirs is newer.
+            if (current != null && current != slug && !CrewNameGenerator.looksGenerated(current)) return@executeIf
+            val settled = (persisted == null || persisted.slug == slug) &&
+                (loaded == null || loaded.slug == slug)
+            if (settled) return@executeIf
+            persisted?.let { vsCore.renameShip(it, slug) }
+            loaded?.let { vsCore.renameShip(it, slug) }
+            applyShipName(level, shipId, slug, attemptsLeft - 1)
+        }
     }
 
     /**
@@ -229,4 +278,12 @@ object HelmNames {
     private const val SLUG_SAFE = "_.+-"
 
     private val WHITESPACE_RUN = Regex("\\s+")
+
+    /**
+     * How [applyShipName] paces itself: a beat between write and check, and enough beats that even the
+     * heaviest bottle-release assembly has long finished before patience runs out (~10 seconds). The
+     * loop stands down the moment both stores read the name back, so the ceiling is almost never met.
+     */
+    private const val NAME_APPLY_INTERVAL_TICKS = 5L
+    private const val NAME_APPLY_ATTEMPTS = 40
 }
