@@ -1030,12 +1030,22 @@ object EurekaConfig {
         var followCircleSpeed = 7.0
 
         @JsonSchema(
-            description = "Ship following: blocks of clear water held while circling, on top of both hulls' " +
-                "own sizes. The circle's radius comes from the two hulls' diagonals plus this, and it " +
-                "deliberately ignores followGapMax -- an orbit needs the room whatever the alongside gap is " +
-                "capped at. Default 8.0."
+            description = "Ship following: blocks of clear water held while circling, on top of the hulls' " +
+                "own sizes. The radius is the LEADER's half-diagonal (the follower passes every bearing, " +
+                "so the leader's longest reach must clear) plus the FOLLOWER's half-beam (it flies " +
+                "tangentially, presenting its side), plus this. May be NEGATIVE to pull an orbit tight -- " +
+                "it is floored so ships can never circle through each other. Ignores followGapMax, which " +
+                "governs the alongside station rather than the orbit. Default 8.0."
         )
         var followCircleGap = 8.0
+
+        @JsonSchema(
+            description = "Ship following: the widest a circle may get, in blocks ACROSS (0 = no cap). This " +
+                "is the lever for keeping two big ships orbiting inside gun range instead of drifting out " +
+                "to a radius neither can shoot across -- the hull sizes still set the floor, so a cap " +
+                "tighter than the ships themselves is refused rather than obeyed. Default 140.0."
+        )
+        var followCircleMaxDiameter = 140.0
 
         @JsonSchema(
             description = "Ship following: how far onto the leader's OTHER side a follower must end up, as a " +

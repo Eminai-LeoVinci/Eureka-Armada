@@ -176,8 +176,7 @@ class ShipFollower(
         )
 
         // The orbit's size, and where this ship sits about the leader, both needed to decide the mode.
-        val radius = FollowGeometry.horizHalfDiagonal(leader) +
-            FollowGeometry.horizHalfDiagonal(ship) + cfg.followCircleGap
+        val radius = FollowGeometry.orbitRadius(leader, ship, ownBeam, cfg)
         val offX = centre.x - leaderFrame.centre.x
         val offZ = centre.z - leaderFrame.centre.z
         val range = sqrt(offX * offX + offZ * offZ)

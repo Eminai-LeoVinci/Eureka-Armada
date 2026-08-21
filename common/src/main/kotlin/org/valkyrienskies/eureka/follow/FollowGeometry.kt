@@ -11,6 +11,7 @@ import org.valkyrienskies.mod.common.util.toJOMLD
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Where a ship is, which way it is pointing, and how big it is along a given direction.
@@ -243,6 +244,49 @@ object FollowGeometry {
         val hz = (aabb.maxZ() + 1 - aabb.minZ()) * 0.5
         return kotlin.math.sqrt(hx * hx + hz * hz)
     }
+
+    /**
+     * How wide a circle this follower should hold about this leader.
+     *
+     * ## Why not both hulls' diagonals
+     * The first cut added the two half-DIAGONALS, which reads as fair and is wrong on both ends. A
+     * circling ship flies TANGENTIALLY -- its length lies along the orbit, and what it points at the
+     * leader is its beam -- so charging the orbit for the follower's whole length inflated every radius
+     * by a hull. Two large ships ended up orbiting 100 blocks apart, far outside cannon range; the only
+     * way to close that was a deeply negative gap, which then swung the other way and drove a sloop's
+     * orbit INSIDE a big leader's bow, because the same offset is a much larger share of a small radius.
+     *
+     * So: the LEADER pays its half-diagonal (it sits at the centre and the follower passes every bearing,
+     * including over its bow, so its longest reach is the one that must clear) and the FOLLOWER pays only
+     * its half-beam. That alone brings a big pair from ~100 blocks to ~70 with the default gap, and it
+     * makes the small-follower case shrink gently rather than collapse.
+     *
+     * ## The two rails
+     * [EurekaConfig.Server.followCircleGap] may be negative to pull the orbit in tight, so the result is
+     * floored at hulls-plus-[CIRCLE_MIN_CLEARANCE]: no tuning can make ships circle through each other.
+     * [EurekaConfig.Server.followCircleMaxDiameter] caps the other end, which is the lever for keeping two
+     * big ships inside gun range; 0 lifts the cap. The floor outranks the cap -- a cap tighter than the
+     * hulls is a request to collide, and is refused.
+     */
+    fun orbitRadius(
+        leader: LoadedServerShip,
+        follower: LoadedServerShip,
+        followerBeam: Vector3dc,
+        cfg: EurekaConfig.Server
+    ): Double {
+        val hulls = horizHalfDiagonal(leader) + halfExtentAlong(follower, followerBeam)
+        val floor = hulls + CIRCLE_MIN_CLEARANCE
+        val wanted = hulls + cfg.followCircleGap
+        val capped = if (cfg.followCircleMaxDiameter > 0.0) {
+            min(wanted, cfg.followCircleMaxDiameter * 0.5)
+        } else {
+            wanted
+        }
+        return max(floor, capped)
+    }
+
+    /** Blocks of water an orbit keeps between the hulls however hard the gap is tuned down. */
+    private const val CIRCLE_MIN_CLEARANCE = 3.0
 
     /** Which side of the leader a point is on: +1, -1, or 0 when it is dead on the centreline. */
     fun sideOf(leader: Frame, point: Vector3dc, deadband: Double): Int {
