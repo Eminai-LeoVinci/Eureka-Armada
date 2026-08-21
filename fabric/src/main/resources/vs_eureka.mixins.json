@@ -6,6 +6,7 @@
     "MixinAnvilFreeHelmRename",
     "MixinCrewNoWheelVisit",
     "MixinCrewNoWorkAtWheel",
+    "MixinCrewProjectileBoost",
     "MixinCrewStrollAnywhere",
     "MixinEntitySubAir",
     "MixinGunnerSeatPersists",
@@ -21,6 +22,8 @@
     "client.MixinCameraSubAir",
     "client.MixinEntityRenderStateCrewPlate",
     "client.MixinEntityRendererCrewNameTag",
+    "client.MixinHumanoidGunnerPose",
+    "client.MixinIllagerGunnerPose",
     "client.MixinVillagerGunnerPose",
     "client.MixinNameTagBackdrop"
   ],

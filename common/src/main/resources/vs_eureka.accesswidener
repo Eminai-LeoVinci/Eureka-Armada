@@ -9,3 +9,6 @@ accessible field net/minecraft/world/level/levelgen/structure/templatesystem/Str
 accessible field net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate palettes Ljava/util/List;
 accessible field net/minecraft/world/entity/decoration/BlockAttachedEntity pos Lnet/minecraft/core/BlockPos;
 accessible method net/minecraft/world/entity/decoration/HangingEntity setDirection (Lnet/minecraft/core/Direction;)V
+accessible field net/minecraft/world/entity/Mob goalSelector Lnet/minecraft/world/entity/ai/goal/GoalSelector;
+accessible field net/minecraft/world/entity/Mob targetSelector Lnet/minecraft/world/entity/ai/goal/GoalSelector;
+accessible field net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal targetType Ljava/lang/Class;

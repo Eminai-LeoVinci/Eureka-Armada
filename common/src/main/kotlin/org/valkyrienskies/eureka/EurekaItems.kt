@@ -28,7 +28,10 @@ object EurekaItems {
      * The mark is a block interaction and lives in a UseBlockCallback on the Fabric side; the throw is an
      * ordinary use and lives on the item.
      */
-    val SHIP_BOTTLE: RegistrySupplier<Item> = ITEMS.register("ship_bottle") { ShipBottleItem(itemProps()) }
+    val SHIP_BOTTLE: RegistrySupplier<Item> = ITEMS.register("ship_bottle") {
+        // Registration-baked like cannonballStackSize: changing the config needs a restart.
+        ShipBottleItem(itemProps().stacksTo(EurekaConfig.SERVER.shipBottleStackSize.coerceIn(1, 64)))
+    }
 
     /** The same bottle with a ship in it. Right-click a block to let it out. */
     val BOTTLED_SHIP: RegistrySupplier<Item> = ITEMS.register("bottled_ship") { BottledShipItem(itemProps()) }

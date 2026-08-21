@@ -16,6 +16,9 @@ object EurekaMod {
         // sees user-tuned values. VS 2.5 vs-core removed registerConfig; this is our
         // stand-in until ModConfigSpec is wired up.
         EurekaConfigLoader.loadOrCreate()
+        // The loot tables ride their own file (they are lists a hundred entries long); loaded here,
+        // before item registration, because stack sizes bake at registration and read config.
+        EurekaLootLoader.loadOrCreate()
 
         EurekaBlocks.register()
         EurekaBlockEntities.register()

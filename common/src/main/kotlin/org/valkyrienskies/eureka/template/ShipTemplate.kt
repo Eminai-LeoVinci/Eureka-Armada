@@ -3,6 +3,8 @@ package org.valkyrienskies.eureka.template
 import net.minecraft.core.BlockPos
 import net.minecraft.core.registries.Registries
 import net.minecraft.nbt.CompoundTag
+import net.minecraft.nbt.ListTag
+import net.minecraft.nbt.StringTag
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.ProblemReporter
@@ -26,9 +28,12 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import org.valkyrienskies.eureka.cannon.CannonShot
+import org.valkyrienskies.eureka.crew.GunnerMounts
+import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
@@ -72,6 +77,9 @@ object ShipTemplate {
      * as [org.valkyrienskies.eureka.armada.SubAir]'s fill cap for consistency.
      */
     const val MAX_CAPTURE_CELLS = 8_000_000L
+
+    /** How far past a hull's world box a mounted gun crew can sit and still count as aboard. */
+    private const val DECK_REACH = 3.0
 
     /** Template names are a path segment of an [Identifier], so they live under the same character rules. */
     private val VALID_NAME = Regex("[a-z0-9_.\\-/]+")
@@ -178,7 +186,10 @@ object ShipTemplate {
         // would be silently dropped.
         val entities = captureEntities(level, ship, template, min, max, admitRaiders)
         if (!keepShipName) stripShipName(template)
-        if (admitRaiders) stripPirateInstanceState(template)
+        if (admitRaiders) {
+            stripPirateInstanceState(template)
+            stripContainers(template)
+        }
 
         if (!manager.save(id)) {
             // Don't leave a half-made template in the repository shadowing a real one.
@@ -245,10 +256,16 @@ object ShipTemplate {
 
         var captured = 0
         val candidates = level.getEntitiesOfClass(Entity::class.java, box) {
-            it !is Player && !it.isPassenger &&
+            it !is Player &&
+                // Passengers are excluded because whatever carries them writes them into its own NBT --
+                // EXCEPT a mounted gun crew, whose seat is itself excluded below: skipping the mob too
+                // would silently drop every gunner from the design it exists to crew.
+                (!it.isPassenger || (admitRaiders && GunnerMounts.isGunner(it))) &&
                 // Living things are cargo, not ship -- except furniture (armour stands) and, for pirate-hull
-                // authoring only, the raider crew that IS the design. See the capture() doc on admitRaiders.
-                (it !is LivingEntity || it is ArmorStand || (admitRaiders && it is Raider)) &&
+                // authoring only, the raider crew that IS the design plus any egg-mounted gun crew (which
+                // may be ANY mob -- undead hulls are the plan). See the capture() doc on admitRaiders.
+                (it !is LivingEntity || it is ArmorStand ||
+                    (admitRaiders && (it is Raider || GunnerMounts.isGunner(it)))) &&
                 // Loose items and orbs are not part of a ship, and capturing them is how a bottle turns into
                 // a duplicator. A dropped stack is written into the template as an entity, laid back out on
                 // release, and -- because it is on the deck of the ship that just came out -- captured again
@@ -285,7 +302,29 @@ object ShipTemplate {
                 it !is ShipMountingEntity
         }
 
-        for (entity in candidates) {
+        // The gun crews are somewhere else entirely, and that is why the first authored hull came back
+        // with its guns unmanned.
+        //
+        // The scan above sweeps the SHIPYARD box, where everything standing on a ship lives. A MOUNTED
+        // gunner does not: its seat is one of VS2's world-space passenger seats, so vanilla parks the
+        // rider out in world coordinates beside the hull's real position, thousands of blocks from the
+        // shipyard. The box query never saw them -- 24 gunners went in, the deck hands came out. So the
+        // ship's WORLD box is swept too, for gunner-tagged mobs only; the shipyard fallback below
+        // transforms each one back into ship space, which is exactly what it was written for.
+        val mounted = if (!admitRaiders) emptyList() else {
+            val world = ship.worldAABB
+            if (world == null) emptyList() else {
+                level.getEntitiesOfClass(
+                    Entity::class.java,
+                    AABB(
+                        world.minX() - DECK_REACH, world.minY() - DECK_REACH, world.minZ() - DECK_REACH,
+                        world.maxX() + DECK_REACH, world.maxY() + DECK_REACH, world.maxZ() + DECK_REACH
+                    )
+                ) { GunnerMounts.isGunner(it) && it !in candidates }
+            }
+        }
+
+        for (entity in candidates + mounted) {
             // Shipyard reading first; fall back to transforming a world position into the ship's frame.
             var relative = Vec3(entity.x - min.x, entity.y - min.y, entity.z - min.z)
             if (!inside(relative)) {
@@ -304,7 +343,7 @@ object ShipTemplate {
                 continue // one bad fixture must not cost us the whole ship
             }
 
-            if (admitRaiders && entity is Raider) {
+            if (admitRaiders && (entity is Raider || GunnerMounts.isGunner(entity))) {
                 // A crew member generated an ocean from anywhere must still be aboard when someone finally
                 // sails near, so no despawning; and no patrolling, because patrol AI is a marching order to
                 // the nearest village and the deck is where these two belong. Done on the TAG rather than the
@@ -313,6 +352,21 @@ object ShipTemplate {
                 tag.remove("Patrolling")
                 tag.remove("patrol_target")
                 tag.remove("PatrolLeader")
+            }
+
+            if (admitRaiders && GunnerMounts.isGunner(entity)) {
+                // Stamp the pirate crew mark into the SAVED tags, whatever the mob's class. A template-born
+                // gunner stands on plain world blocks until its hull assembles, and GunnerMounts reads
+                // crew-tagged-but-shipless as "dormant, sleep" where anyone else is a disassembled build to
+                // release. Raiders get this tag at berth adoption anyway -- but adoption runs on the helm's
+                // clock and the reconcile on its own, and a gunner must never lose that race; nor will a
+                // future zombie or piglin gunner be a Raider at all.
+                val tags = tag.getList("Tags").orElse(ListTag())
+                val already = tags.any { (it as? StringTag)?.value == PirateShips.CREW_TAG }
+                if (!already) {
+                    tags.add(StringTag.valueOf(PirateShips.CREW_TAG))
+                    tag.put("Tags", tags)
+                }
             }
 
             // Hanging things are positioned by the block they cling to, not by their own centre. Anchoring on the
@@ -378,11 +432,33 @@ object ShipTemplate {
         }
     }
 
+    /**
+     * Empty every chest and barrel in a pirate capture. Container contents ride templates verbatim
+     * (the engines' coal is proof, and a feature) -- but a pirate hull's holds are rolled FRESH per
+     * generated ship by PirateLoot, and whatever the author left in a chest would otherwise ship as
+     * a fixed, duplicated pile under the roll. Engines keep their coal: fuel is design, cargo is loot.
+     */
+    private fun stripContainers(template: StructureTemplate) {
+        for (palette in template.palettes) {
+            for (info in palette.blocks()) {
+                val block = info.state.block
+                if (block !is net.minecraft.world.level.block.ChestBlock &&
+                    block !is net.minecraft.world.level.block.BarrelBlock
+                ) {
+                    continue
+                }
+                info.nbt?.remove("Items")
+            }
+        }
+    }
+
     /** Mirrors the private constants in ShipHelmBlockEntity; the tags are written by that class, not this one. */
     private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
     private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
     private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
     private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
+    private const val PIRATE_TEMPLATE_KEY = "vs_eureka:pirate_template"
+    private const val PIRATE_CREW_KEY = "vs_eureka:pirate_crew"
     private const val PIRATE_CREW_UUIDS_KEY = "vs_eureka:pirate_crew_uuids"
     private const val PIRATE_BERTH_KEY = "vs_eureka:pirate_berth"
 
@@ -451,6 +527,40 @@ object ShipTemplate {
     }
 
     /**
+     * Delete a captured template for good: the manager's copy AND the file under
+     * `<world>/generated/vs_eureka/structures/`. Returns the plain-words outcome.
+     *
+     * [forget] alone is not deletion -- it drops the in-memory copy, and the very next lookup reads the
+     * file straight back off disk. That is right for a bottle releasing its ship (the file is the
+     * fallback), and useless for an author replacing a hull design: re-capturing under the same name
+     * overwrites, but a name you have finished with lingers in the pool forever.
+     *
+     * A template shipped INSIDE the jar cannot be deleted from the world -- there is no file here to
+     * remove -- and says so rather than reporting a success that will not survive the next reload.
+     */
+    fun delete(level: ServerLevel, name: String): String {
+        val id = idFor(name) ?: return "'$name' is not a usable template name."
+        val existed = find(level, name) != null
+        level.server.structureManager.remove(id)
+
+        val file = level.server.getWorldPath(net.minecraft.world.level.storage.LevelResource.GENERATED_DIR)
+            .resolve(id.namespace)
+            .resolve("structures")
+            .resolve("${id.path}.nbt")
+        return try {
+            if (java.nio.file.Files.deleteIfExists(file)) {
+                "Deleted template '$name'."
+            } else if (existed) {
+                "'$name' is built into the mod and cannot be deleted from this world."
+            } else {
+                "No template named '$name'."
+            }
+        } catch (e: Exception) {
+            "Could not delete '$name': ${e.message}"
+        }
+    }
+
+    /**
      * The same state with any stored heat taken out of it.
      *
      * An engine's HEAT is a blockstate property -- it drives the glow and the running look -- while its fuel
@@ -489,6 +599,68 @@ object ShipTemplate {
         val written = manager.getOrCreate(target)
         written.load(level.holderLookup(Registries.BLOCK), source.save(CompoundTag()))
         return manager.save(target)
+    }
+
+    /**
+     * A civilian copy of a pirate hull, for the special loot blueprint: the design without the menace.
+     * Returns the new template's name under `looted/`, or null when the source is missing.
+     *
+     * A COPY, never a place-time flag, because [place] hands out the manager's CACHED template and
+     * mutates it in place -- a strip pass riding a flag there would quietly disarm the shared pirate
+     * template for every later worldgen placement. The copy is this loot page's own file; nothing else
+     * ever resolves it.
+     *
+     * Three strips make it civilian:
+     *  1. The crew: every MONSTER-category entity, plus anything wearing the crew or gunner tag --
+     *     which also catches a future undead complement whose class no admit rule has met yet.
+     *     Furniture, boats and the rest of the entity list ride through untouched.
+     *  2. The wheel: MARK back to NORMAL on every block that carries it, so the built ship neither
+     *     gates its own captain out nor adopts itself a berth on first tick.
+     *  3. The papers and the holds: the pirate design keys off the helm, and any baked container
+     *     contents out -- a shipwright build must not be a loot printer.
+     */
+    fun civilianize(level: ServerLevel, from: String): String? {
+        val name = "looted/${java.util.UUID.randomUUID().toString().replace("-", "")}"
+        if (!copy(level, from, name)) return null
+        val target = idFor(name) ?: return null
+        val template = find(level, name) ?: return null
+
+        template.entityInfoList.removeIf { info ->
+            val id = info.nbt.getStringOr("id", "")
+            val monster = net.minecraft.world.entity.EntityType.byString(id)
+                .map { it.category == net.minecraft.world.entity.MobCategory.MONSTER }
+                .orElse(false)
+            val tagged = info.nbt.getList("Tags").orElse(null)?.any {
+                val tag = (it as? StringTag)?.value
+                tag == PirateShips.CREW_TAG || tag == GunnerMounts.GUNNER_TAG
+            } ?: false
+            monster || tagged
+        }
+
+        for (palette in template.palettes) {
+            val blocks = palette.blocks()
+            for (i in blocks.indices) {
+                val info = blocks[i]
+                if (info.state.hasProperty(EurekaProperties.MARK) &&
+                    info.state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL
+                ) {
+                    blocks[i] = StructureTemplate.StructureBlockInfo(
+                        info.pos, info.state.setValue(EurekaProperties.MARK, HelmMark.NORMAL), info.nbt
+                    )
+                }
+                if (info.state.block is ShipHelmBlock) {
+                    info.nbt?.let {
+                        it.remove(PIRATE_TEMPLATE_KEY)
+                        it.remove(PIRATE_CREW_KEY)
+                        it.remove(PIRATE_CREW_UUIDS_KEY)
+                        it.remove(PIRATE_BERTH_KEY)
+                    }
+                }
+            }
+        }
+        stripContainers(template)
+
+        return if (level.server.structureManager.save(target)) name else null
     }
 
     /** Every template this mod can see, ours only -- the manager also lists vanilla's and other mods'. */

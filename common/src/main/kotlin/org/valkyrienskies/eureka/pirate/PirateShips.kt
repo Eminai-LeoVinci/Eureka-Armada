@@ -13,6 +13,7 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
+import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.FollowGeometry
@@ -21,6 +22,7 @@ import org.valkyrienskies.eureka.follow.ShipFollows
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.template.ShipTemplate
+import org.valkyrienskies.eureka.util.WeightedNames
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -73,7 +75,9 @@ object PirateShips {
         /** When this chase was created -- the newborn grace below is measured from here. */
         val bornAt: Long,
         var standingDown: Boolean = false,
-        var nextDisassembleTry: Long = 0L
+        var nextDisassembleTry: Long = 0L,
+        /** The guns' bookkeeping, riding the chase so both go quiet by the same door. See PirateGunnery. */
+        val gunnery: PirateGunnery.State = PirateGunnery.State()
     )
 
     /** A hull crossing a zone's line with somebody in its influence -- the only thing that wakes a pirate. */
@@ -129,7 +133,7 @@ object PirateShips {
                 berthId,
                 PirateStore.Berth(
                     originPos = berthId,
-                    templateId = helm.pirateTemplate ?: "pirate/sloop",
+                    templateId = helm.pirateTemplate ?: "pirate/large1",
                     sizeX = size?.x ?: 16, sizeY = size?.y ?: 16, sizeZ = size?.z ?: 16
                 )
             )
@@ -163,11 +167,35 @@ object PirateShips {
             raider.setPersistenceRequired()
             raider.setHomeTo(pos, (half + 4.0).toInt())
             raider.addTag(CREW_TAG)
-            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = CREW_SIGHT
+            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = EurekaConfig.SERVER.pirateCrewSightRange
+            // Combat outfit on the spot -- the crew watch re-applies it every pass, but a hull generated
+            // right beside a player should shoot like a pirate from its first second, not its twentieth.
+            PirateCombat.outfit(level, raider)
         }
         helm.pirateCrewUuids = crew.map { it.uuid }
         helm.pirateBerth = berthId
         helm.setChanged()
+
+        // The holds: rolled fresh, per ship, at the one hook BOTH placement paths funnel through --
+        // jigsaw worldgen runs no code at all, and regeneration places without jigsaw, but every new
+        // hull's wheel adopts on its first loaded tick.
+        //
+        // A box sized for the WHOLE HULL, not the crew bubble above: the wheel can sit anywhere in a
+        // design, and on a large ship with the wheel aft every chest forward of it fell outside the
+        // crew box and shipped empty. PirateLoot sweeps by chunk, so the wider box is free.
+        // Generous in EVERY direction, including DOWN. The wheel sits on the top deck, so a box that
+        // reached only eight blocks below it filled the chests around the helm and missed every barrel
+        // stowed in the hold -- 26 containers stocked, 23 barrels untouched, in the first field test.
+        // The sweep is per-chunk, so a box twice the size of the ship costs the same as a tight one.
+        val reach = max(size?.x ?: 64, size?.z ?: 64).toDouble() + 8.0
+        val rise = (size?.y ?: 64).toDouble() + 8.0
+        PirateLoot.stock(
+            level,
+            AABB(
+                pos.x - reach, pos.y - rise, pos.z - reach,
+                pos.x + reach, pos.y + rise, pos.z + reach
+            )
+        )
 
         logger.info("[pirates] adopted berth at {} ({}, {} crew)", pos, templateId, crew.size)
         return berthId
@@ -228,6 +256,66 @@ object PirateShips {
         } else if (publishedZones.isNotEmpty()) {
             publishedZones.clear()
         }
+
+        // Same again for the cannon engage-range wireframe: every chasing pirate's sphere, plus -- dev
+        // convenience -- one around whatever armed ship each player is standing on, so the gunnery bench
+        // ("/vs pirate aim") can be read against the same picture the AI uses.
+        if (PirateGunnery.publishRanges) {
+            PirateGunnery.publish(level.dimension().identifier().toString(), rangeSpheres(level))
+        } else {
+            PirateGunnery.clearPublished()
+        }
+    }
+
+    /** Is this loaded ship one of ours mid-chase? PirateGunnery asks so pirates never shell each other. */
+    fun isPirate(shipId: Long): Boolean = shipId in chases
+
+    /**
+     * Would tearing this hull down right now try to put blocks above the world's ceiling?
+     *
+     * The unfill relocates every voxel to its world position and declines outright if any of them lands
+     * outside the build range -- which reads, from the deck, as a stand-down that never happens. Measured
+     * from the ship's own box through its live transform rather than from `worldAABB`, which this manager
+     * has already caught being seconds stale on a hull that assembled this session.
+     */
+    private fun tooHighToDisassemble(level: ServerLevel, ship: LoadedServerShip): Boolean {
+        val box = ship.shipAABB ?: return false
+        val corner = Vector3d()
+        var top = Double.NEGATIVE_INFINITY
+        // The eight corners: a heeled hull's highest point is whichever corner the roll happens to raise.
+        for (dx in 0..1) for (dy in 0..1) for (dz in 0..1) {
+            corner.set(
+                if (dx == 0) box.minX().toDouble() else box.maxX() + 1.0,
+                if (dy == 0) box.minY().toDouble() else box.maxY() + 1.0,
+                if (dz == 0) box.minZ().toDouble() else box.maxZ() + 1.0
+            )
+            ship.shipToWorld.transformPosition(corner)
+            if (corner.y > top) top = corner.y
+        }
+        return top >= level.maxY - DISASSEMBLE_CEILING_MARGIN
+    }
+
+    private fun rangeSpheres(level: ServerLevel): List<PirateGunnery.Sphere> {
+        val radius = EurekaConfig.SERVER.pirateCannonEngageRange
+        val world = level.shipObjectWorld
+        val spheres = ArrayList<PirateGunnery.Sphere>()
+        val covered = HashSet<Long>()
+        for (shipId in chases.keys) {
+            val ship = world.loadedShips.getById(shipId) ?: continue
+            if (ship.chunkClaimDimension != level.dimensionId) continue
+            val centre = PirateGunnery.shipCentre(ship) ?: continue
+            if (covered.add(shipId)) spheres.add(PirateGunnery.Sphere(centre.x, centre.y, centre.z, radius))
+        }
+        for (player in level.players()) {
+            val shipId = ShipCrew.standingOn(player) ?: continue
+            if (shipId in covered) continue
+            val ship = world.loadedShips.getById(shipId) ?: continue
+            if (ship.chunkClaimDimension != level.dimensionId) continue
+            if (ShipGuns.count(level, ship) == 0) continue
+            val centre = PirateGunnery.shipCentre(ship) ?: continue
+            if (covered.add(shipId)) spheres.add(PirateGunnery.Sphere(centre.x, centre.y, centre.z, radius))
+        }
+        return spheres
     }
 
     private fun scanZones(level: ServerLevel, now: Long) {
@@ -527,11 +615,25 @@ object PirateShips {
             }
 
             if (chase.standingDown) {
-                if (now < chase.nextDisassembleTry) continue
-                chase.nextDisassembleTry = now + 20L
                 // Never take the deck out from under a player -- the boarding fight IS the feature, and
                 // disassembly under someone's feet is the fall-through case. Wait them out.
                 if (ShipCrew.aboard(level, pirate).isNotEmpty()) continue
+
+                // A hull whose top pokes past the world ceiling cannot be unfilled -- the blocks would have
+                // to land in a chunk section that does not exist -- so an airship ordered to stand down up
+                // there simply retried forever, red zone and all. Fly her DOWN to a height she fits under,
+                // then tear down. Every tick while descending, not on the retry clock: the descent is
+                // steering, and steering on a one-second clock lurches.
+                if (tooHighToDisassemble(level, pirate)) {
+                    if (control.pathFollowing || control.pathBegin()) {
+                        control.pathCommand(0.0, -DISASSEMBLE_DESCENT_MPS, 0.0, 0.0)
+                    }
+                    continue
+                }
+                if (control.pathFollowing) control.pathRelease(true)
+
+                if (now < chase.nextDisassembleTry) continue
+                chase.nextDisassembleTry = now + 20L
                 report?.helm?.disassemble()
                 continue
             }
@@ -575,6 +677,11 @@ object PirateShips {
                 chase.lingerUntil = now + lingerTicks()
                 continue
             }
+
+            // The guns, before the follow bookkeeping's several exits: every path below this line is an
+            // ACTIVE chase -- pursuing or lingering, assembled, someone in earshot -- and those are
+            // exactly the moments she should be shooting.
+            PirateGunnery.tick(level, pirate, chase, now)
 
             // Pursuing and the follow is holding: the linger clock rides along fully wound, so the two
             // minutes are measured from the moment the pursuit BREAKS, never from the wake-up.
@@ -758,8 +865,12 @@ object PirateShips {
             }
             if (tooClose) return "a player is too close to the site"
         }
-        val name = EurekaConfig.SERVER.pirateHulls.filter { ShipTemplate.find(level, it) != null }
-            .randomOrNull() ?: return "no pirateHulls entry resolves to a template"
+        // Weighted, not uniform: "pirate/sloop*3" outdraws "pirate/brig" three to one, a bare name is
+        // weight 1, and only names that actually resolve to a template are in the draw at all. Keep the
+        // weights in step with the worldgen template_pool JSON, which vanilla reads separately.
+        val name = WeightedNames.pick(EurekaConfig.SERVER.pirateHulls, level.random) {
+            ShipTemplate.find(level, it) != null
+        } ?: return "no pirateHulls entry resolves to a template"
         val template = ShipTemplate.find(level, name)!!
         val size = template.size
         // First free Y over the water column -- the same seam the worldgen learned: the keel rides ON the
@@ -838,6 +949,11 @@ object PirateShips {
             // tagged, persistent mob is never left wandering the ocean floor for nobody.
             var living = 0
             val tether = (kotlin.math.max(berth.sizeX, berth.sizeZ) + 2).toDouble()
+            // The boarding rule, resolved once per pass: a player standing on HER deck (the assembled
+            // ship's carry state -- a dormant hull arms the tick a boot lands, so it reaches here
+            // assembled) is every hand's first problem.
+            val ship = level.getLoadedShipManagingPos(report.helmPos)
+            val boarders = if (ship != null) ShipCrew.aboard(level, ship) else emptyList()
             for (id in helm.pirateCrewUuids) {
                 val raider = level.getEntity(id) as? Raider ?: continue
                 if (!raider.isAlive) continue
@@ -850,6 +966,12 @@ object PirateShips {
                     continue
                 }
                 living++
+                // The combat outfit, re-asserted on the watch's clock: goals do not survive a save and
+                // a /reload should retune ranges within the second -- the crew tag is what persists.
+                PirateCombat.outfit(level, raider)
+                if (boarders.isNotEmpty() && !raider.isNoAi) {
+                    boarders.minByOrNull { it.distanceToSqr(raider) }?.let { PirateCombat.swarm(raider, it) }
+                }
                 // The tether: combat pathing marches a pillager toward its target with no idea the deck
                 // ends -- the user watched one wade off into the sea after a passing ship. Anyone in the
                 // water, or past the hull's own box, is hauled straight back to a seat by the wheel.
@@ -1198,6 +1320,9 @@ object PirateShips {
     /** How long a vanished wheel has to report back before the vanishing counts as a break. */
     private const val VANISH_GRACE_TICKS = 10L
 
-    /** How far a crew hand can see a target -- stamped as FOLLOW_RANGE at adoption and respawn. */
-    private const val CREW_SIGHT = 48.0
+    /** How fast a stood-down pirate sinks toward a height she can be taken apart at, in m/s. */
+    private const val DISASSEMBLE_DESCENT_MPS = 6.0
+
+    /** Blocks of daylight left under the world ceiling before a teardown is considered safe. */
+    private const val DISASSEMBLE_CEILING_MARGIN = 8.0
 }

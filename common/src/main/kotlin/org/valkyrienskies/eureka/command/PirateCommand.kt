@@ -7,6 +7,7 @@ import net.minecraft.ChatFormatting
 import net.minecraft.commands.CommandSourceStack
 import net.minecraft.commands.Commands.argument
 import net.minecraft.commands.Commands.literal
+import net.minecraft.commands.arguments.coordinates.Vec3Argument
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.server.permissions.Permissions
@@ -21,10 +22,14 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.crew.CrewStations
+import org.valkyrienskies.eureka.follow.ShipCrew
+import org.valkyrienskies.eureka.pirate.PirateGunnery
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
+import org.valkyrienskies.mod.common.shipObjectWorld
 
 /**
  * "/vs pirate ..." -- the harness for the pirate-ship machinery.
@@ -65,8 +70,69 @@ object PirateCommand {
                     .then(literal("list").executes { list(it) })
                     .then(literal("arm").executes { arm(it) })
                     .then(literal("regen").executes { regen(it) })
+                    .then(
+                        // The gunnery test bench: stand on any armed ship, name a point, and every gun
+                        // that can bear solves its own arc and fires it -- no pirates required.
+                        literal("aim").then(
+                            argument("at", Vec3Argument.vec3()).executes { aim(it) }
+                        )
+                    )
             )
         )
+    }
+
+    /**
+     * "/vs pirate aim <x> <y> <z>" -- DEV ONLY: lay and fire every gun of the ship the caller stands on
+     * at the given point, printing each gun's solved arc or its reason for silence. This is the proving
+     * ground for [PirateGunnery]'s solver: markers at known ranges, read the pitches off the chat.
+     * No jitter, on purpose -- the bench measures the solver, not the scatter.
+     */
+    private fun aim(ctx: CommandContext<CommandSourceStack>): Int {
+        val level = ctx.source.level
+        val player = ctx.source.player ?: run {
+            ctx.source.sendFailure(Component.literal("A player has to be standing on the ship."))
+            return 0
+        }
+        val target = Vec3Argument.getVec3(ctx, "at")
+        val shipId = ShipCrew.standingOn(player)
+        val ship = shipId?.let { level.shipObjectWorld.loadedShips.getById(it) }
+        if (ship == null) {
+            ctx.source.sendFailure(Component.literal("Stand on the ship whose guns you want to lay."))
+            return 0
+        }
+
+        var fired = 0
+        val now = level.gameTime
+        for (gun in ShipGuns.aboard(level, ship)) {
+            val label = "(${gun.blockPos.toShortString()})"
+            if (gun.readyAt > now) {
+                ctx.source.sendSuccess({ Component.literal("$label cooling") }, false)
+                continue
+            }
+            val lay = PirateGunnery.lay(level, gun, target)
+            if (lay == null) {
+                ctx.source.sendSuccess({ Component.literal("$label cannot bear") }, false)
+                continue
+            }
+            val refusal = PirateGunnery.fireAt(level, gun, target, jitterBlocks = 0.0)
+            if (refusal == null) {
+                fired++
+                ctx.source.sendSuccess({
+                    Component.literal(
+                        "$label FIRED pitch %.2f deg, speed %.2f b/t, %d ticks, %s charge".format(
+                            lay.solution.pitchDegrees, lay.solution.speed,
+                            lay.solution.flightTicks, lay.charge.name
+                        )
+                    ).withStyle(ChatFormatting.GREEN)
+                }, false)
+            } else {
+                ctx.source.sendSuccess({ Component.literal(label).append(": ").append(refusal) }, false)
+            }
+        }
+        if (fired == 0) {
+            ctx.source.sendFailure(Component.literal("No gun could take that shot."))
+        }
+        return fired
     }
 
     /** Every berth in the caller's dimension: position, template, and what it is doing right now. */

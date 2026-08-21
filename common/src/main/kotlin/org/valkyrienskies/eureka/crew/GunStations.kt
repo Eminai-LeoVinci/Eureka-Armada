@@ -86,6 +86,10 @@ object GunStations {
         return ensureMounted(level, villager, gunPos)
     }
 
+    /** Is a villager gunner currently holding this gun? Lets the mob gun crews keep off stationed guns. */
+    fun manned(gunPos: BlockPos): Boolean =
+        seats.values.any { it.gunPos == gunPos && !it.seat.isRemoved }
+
     /** Take [villagerId] out of any gunner seat now -- unassignment and duty changes call this. */
     fun unseat(level: ServerLevel, villagerId: UUID) {
         seats.remove(villagerId)?.seat?.takeIf { !it.isRemoved }?.kill(level)

@@ -730,23 +730,35 @@ a stricken ship is already how you stop a free fall today.
 > fall-through, hanging entities dropping. It needs a hard cap on concurrent pirate ships, a
 > chunk-loaded precondition, and a global cooldown.
 
-### Phase 5 status (2026-08-20) — core loop SHIPPED; M7 holds the rest
+### Phase 5 status (2026-08-20) — core loop SHIPPED; M7 IN PROGRESS
 
 M1–M6 are shipped and confirmed in game: generate → wake → chase → board → wipe the crew →
 break the wheel → claim her inside the minute or watch her founder → the site regenerates
 next dawn. Helm-less foundering became universal along the way (player ships included, with
 a configurable grace).
 
-**M7 — pirate gunnery and polish (deferred; the next Phase 5 work when it resumes):**
+**M7 — pirate gunnery and polish (IN PROGRESS 2026-08-20; plan
+`~/.claude/plans/compiled-watching-curry.md`):**
 
-- **Pirate gunnery proper** — the `PirateChase` gunnery seam; pirates fight back.
-- **Loot tables** — pending the loot list; the references ride the structure `.nbt` (above).
-- **Pillager vision, shooting range, and projectile edits** — crossbow shot range lives
-  inside vanilla's crossbow goal, so it lands with the combat pass.
-- **Weighted hull pool** — a pirate site draws its template from a weighted pool (the
-  uniform draw in `PirateShips.attemptRegen` is the seam; weights go in the worldgen pool
-  entry AND `pirateHulls`, hand-synced like the rest of that pair).
+- **Egg-mounted gunners** *(built)* — a creative spawn egg on an unmanned gun aboard an
+  assembled ship hatches that mob mounted as its crew; the binding is a pair of entity tags,
+  so it rides template capture and any hull generates gunned (`GunnerMounts`).
+- **Pirate gunnery proper** *(built)* — closed-form ballistic solver (`CannonSolver`), exact
+  continuous pitch + muzzle speed within the player guns' restraints, charge economy off the
+  template-stocked magazines (finite by design; `pirateCannonInfiniteAmmo` to opt out), the
+  gunner gate (kill the gunners and the battery falls silent), staggered broadsides riding
+  `PirateChase.gunnery`.
+- **Pillager vision, shooting range, and projectile edits** *(built)* — `PirateCombat`:
+  vanilla ranged goals rebuilt at `pirateCrewShootRange`, crew projectiles faster and
+  straighter, melee hands gated to their own deck until a boarder lands, boarders swarmed.
+- **Loot tables** *(built)* — config-driven (`config/vs_eureka_armada_loottable.json`,
+  `EurekaLootConfig`/`PirateLoot`): weighted draws, per-container table toggles, barrels food
+  -only, the 2% civilianized special blueprint; containers stripped at capture and rolled
+  fresh at berth adoption (covers worldgen AND regen). Crewman balloon lottery moved here.
+- **Weighted hull pool** *(built)* — `pirateHulls` takes `name*weight`; hand-sync with the
+  worldgen `template_pool` JSON as ever.
 - **User-authored hulls** — capture in game → jar `pirate/` → pool + `pirateHulls` config.
+  The authoring flow now includes egg-mounting the gunners before `/vs pirate capture`.
 
 The strip-list sweep (6c) stays LAST before any public build, and now also covers the
 in-game dev/test messages the pirate work prints.
@@ -880,6 +892,10 @@ it ships. Kept as one register so nothing has to be remembered — grep `DEV ONL
 | `/armada debug` | Armada bond recompute readout | Diagnostic output only. |
 | `/vs cruise-cancel-debug <bool>` | Cruise-cancel tracing | Single-player only by construction; no gameplay use. |
 | `/vs pocket-occluder`, `-debug`, `-status` | Sub-air occluder toggles | Existed to A/B the occluder without relaunching; the setting should be config, not a command. |
+| `/vs pirate set-mark\|capture\|list\|arm\|regen` | The pirate machinery's harness | Mints unobtainable helm states; `capture` is the authoring pen. Authoring is a dev activity. |
+| `/vs pirate aim <x> <y> <z>` | The gunnery test bench | Fires every gun of the ship you stand on at a point; a free broadside on demand. |
+| `/vs pirate-zones <bool>` | Pirate proximity wireframe | Client toggle + `PirateZoneRenderer`; the finished feature has no visible zone. |
+| `/vs cannon-range <bool>` | Cannon engage-range wireframe | Client toggle + `CannonRangeRenderer`; the bench's picture, not a player HUD. |
 
 **VS2 commands** (separate tree — `/vs ship-shadows`, `/vs ship-emissive`): client render toggles
 from the renderer work. Same call, made in the VS2 repo rather than here.
@@ -887,6 +903,9 @@ from the renderer work. Same call, made in the VS2 repo rather than here.
 **Also**
 
 - Any `PathMessages` line that names an internal value rather than telling the player something.
+- The bracket-prefixed dev log lines — `[pirates]`, `[gunnery]`, `[loot]`, `[shot-trace]`-style
+  one-offs — are greppable by design; audit them in this sweep (most `logger.info` lines should
+  drop to debug or go).
 - `/vs template`'s permission gate is `COMMANDS_GAMEMASTER`, which is *not* a substitute for
   removal — an op on a server is still a player.
 

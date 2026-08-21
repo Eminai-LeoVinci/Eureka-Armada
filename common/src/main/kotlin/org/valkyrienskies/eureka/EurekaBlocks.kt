@@ -249,7 +249,19 @@ object EurekaBlocks {
             // free -- Item.Properties now carries the choice, and it defaults to the item prefix. Every name
             // in this mod is written as block.vs_eureka.*, so without this every item asks for a key no lang
             // file defines and renders as the raw id, in hand and in tooltips alike.
-            items.register(it.name) { BlockItem(it.get(), itemProps().useBlockDescriptionPrefix()) }
+            //
+            // The cannon is the one block that does not stack: a two-block iron gun is not a pocketful of
+            // torches, and a chest with five guns in it should read as the arsenal it is. Existing stacks
+            // in old worlds keep their count; they just stop re-merging.
+            //
+            // The properties MUST be built inside the register lambda: itemProps() reads the id of the item
+            // currently being registered, and evaluated out here it has none -- "Item id not set" on launch.
+            items.register(it.name) {
+                val props =
+                    if (it.name == "cannon") itemProps().stacksTo(1).useBlockDescriptionPrefix()
+                    else itemProps().useBlockDescriptionPrefix()
+                BlockItem(it.get(), props)
+            }
         }
     }
 }

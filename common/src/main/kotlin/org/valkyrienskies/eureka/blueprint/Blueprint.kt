@@ -96,10 +96,23 @@ object Blueprint {
             else -> return null
         }
 
-        val template = ShipTemplate.find(level, templateName) ?: run {
+        val page = draftFromTemplate(level, templateName, shipName) ?: run {
             PathMessages.send(player, "The blueprint could not be written.", PathMessages.Kind.ERROR)
             return null
         }
+
+        PathMessages.send(player, "Drafted a blueprint of '$shipName'.", PathMessages.Kind.GOOD)
+        return page
+    }
+
+    /**
+     * A drafted page for a template that already exists -- the tail of [draft], split out because the
+     * special LOOT blueprint arrives by exactly this door: no live ship, no captain at a wheel, just a
+     * civilianized template (ShipTemplate.civilianize) that needs its page written. The manifest is
+     * computed against the template server-side, same as ever; only the capture is absent.
+     */
+    fun draftFromTemplate(level: ServerLevel, templateName: String, shipName: String): ItemStack? {
+        val template = ShipTemplate.find(level, templateName) ?: return null
         val manifest = ShipManifest.of(template)
 
         val page = ItemStack(EurekaItems.BLUEPRINT.get())
@@ -124,8 +137,6 @@ object Blueprint {
         }
         tag.put(CENSUS_KEY, census)
         page.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
-
-        PathMessages.send(player, "Drafted a blueprint of '$shipName'.", PathMessages.Kind.GOOD)
         return page
     }
 

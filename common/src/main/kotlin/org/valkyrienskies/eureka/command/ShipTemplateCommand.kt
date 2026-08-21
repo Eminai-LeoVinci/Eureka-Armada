@@ -65,6 +65,13 @@ object ShipTemplateCommand {
                         )
                     )
                     .then(
+                        // The authoring undo: a design you have finished with, gone from the pool and
+                        // off the disk. See ShipTemplate.delete for why `forget` was not enough.
+                        literal("delete").then(
+                            argument("name", StringArgumentType.greedyString()).executes { delete(it) }
+                        )
+                    )
+                    .then(
                         literal("check").then(
                             argument("name", StringArgumentType.greedyString()).executes { check(it) }
                         )
@@ -201,6 +208,18 @@ object ShipTemplateCommand {
                 0
             }
         }
+    }
+
+    private fun delete(ctx: CommandContext<CommandSourceStack>): Int {
+        val name = StringArgumentType.getString(ctx, "name")
+        val outcome = ShipTemplate.delete(ctx.source.level, name)
+        val deleted = outcome.startsWith("Deleted")
+        if (deleted) {
+            ctx.source.sendSuccess({ Component.literal(outcome).withStyle(ChatFormatting.GREEN) }, true)
+        } else {
+            ctx.source.sendFailure(Component.literal(outcome))
+        }
+        return if (deleted) 1 else 0
     }
 
     private fun list(ctx: CommandContext<CommandSourceStack>): Int {

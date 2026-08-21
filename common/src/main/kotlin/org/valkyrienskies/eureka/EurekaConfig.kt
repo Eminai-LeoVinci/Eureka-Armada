@@ -913,18 +913,18 @@ object EurekaConfig {
         @JsonSchema(
             description = "Ship following: the widest the gap may ever open, in blocks. Reached at a footprint " +
                 "of 60 with the default base and step; past that the biggest hulls hold station no further out " +
-                "than each other. Default 16.0."
+                "than each other. Default 12.0."
         )
-        var followGapMax = 16.0
+        var followGapMax = 12.0
 
         @JsonSchema(
             description = "Ship following: how far from its STATION a follower may be dragged, in blocks, before " +
                 "it gives up and coasts to a stop. Measured from the station rather than from the leader, so a " +
                 "big hull holding a wide berth is not already half way to its limit while perfectly in formation. " +
                 "This is what happens when a leader is simply faster -- the follower is never given speed it " +
-                "doesn't have, so it falls behind until this trips. Default 90.0."
+                "doesn't have, so it falls behind until this trips. Default 160.0."
         )
-        var followBreakRange = 90.0
+        var followBreakRange = 160.0
 
         @JsonSchema(
             description = "Ship following: seconds the follower must be adrift CONTINUOUSLY before the pursuit " +
@@ -953,8 +953,8 @@ object EurekaConfig {
         )
         var followLookahead = 30.0
 
-        @JsonSchema(description = "Ship following: commanded yaw rate per radian of heading error. Default 1.2.")
-        var followTurnGain = 1.2
+        @JsonSchema(description = "Ship following: commanded yaw rate per radian of heading error. Default 0.8.")
+        var followTurnGain = 0.8
 
         @JsonSchema(
             description = "Ship following: how much of the yaw the ship ALREADY has is taken back out of the " +
@@ -967,9 +967,9 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Ship following: m/s of closing speed asked for per block of along-track error. This " +
-                "is the 'gradually come alongside' knob -- lower is a more patient approach. Default 0.25."
+                "is the 'gradually come alongside' knob -- lower is a more patient approach. Default 0.2."
         )
-        var followClosingGain = 0.25
+        var followClosingGain = 0.2
 
         @JsonSchema(
             description = "Ship following: cap in m/s on how much FASTER than the leader a follower will try to " +
@@ -1003,7 +1003,7 @@ object EurekaConfig {
             description = "Ship following: altitude error in blocks below which no vertical is commanded at all. " +
                 "Not just a nicety -- the water altitude hold latches its depth only while the commanded " +
                 "vertical is exactly zero, so without a deadband a ship at station would flick the hold on and " +
-                "off every tick. Default 1.5."
+                "off every tick. Default 2.0."
         )
         var followVerticalDeadband = 1.5
 
@@ -1012,22 +1012,22 @@ object EurekaConfig {
                 "the launch feel -- a follower ordered after a moving leader spools up at this rate instead of " +
                 "zooming straight to the leader's speed. Slowing down is never rate-limited (braking beside " +
                 "another hull must not wait on a ramp), and a huge value restores the old instant zoom. " +
-                "Default 10.0."
+                "Default 5.0."
         )
-        var followAcceleration = 10.0
+        var followAcceleration = 5.0
 
         @JsonSchema(
             description = "Ship following: leader speed in m/s below which a follower that has caught up stops " +
                 "keeping station and CIRCLES the leader instead. Two ships following each other circle " +
                 "regardless of this. Default 1.5."
         )
-        var followCircleBelow = 1.5
+        var followCircleBelow = 2.0
 
         @JsonSchema(
             description = "Ship following: orbit speed in m/s while circling a stopped leader or a mutual " +
-                "follow partner. Slowish reads best -- these are laps of honour, not attack runs. Default 7.0."
+                "follow partner. Slowish reads best -- these are laps of honour, not attack runs. Default 4.0."
         )
-        var followCircleSpeed = 7.0
+        var followCircleSpeed = 4.0
 
         @JsonSchema(
             description = "Ship following: blocks of clear water held while circling, on top of the hulls' " +
@@ -1035,9 +1035,9 @@ object EurekaConfig {
                 "so the leader's longest reach must clear) plus the FOLLOWER's half-beam (it flies " +
                 "tangentially, presenting its side), plus this. May be NEGATIVE to pull an orbit tight -- " +
                 "it is floored so ships can never circle through each other. Ignores followGapMax, which " +
-                "governs the alongside station rather than the orbit. Default 8.0."
+                "governs the alongside station rather than the orbit. Default -6.0."
         )
-        var followCircleGap = 8.0
+        var followCircleGap = -6.0
 
         @JsonSchema(
             description = "Ship following: the widest a circle may get, in blocks ACROSS (0 = no cap). This " +
@@ -1069,9 +1069,9 @@ object EurekaConfig {
                 "record the first time that block is seen, so lowering it does NOT evict villagers from helms " +
                 "that already exist. Beware the interaction with villages: an unemployed villager will notice a " +
                 "job site 48 blocks away, so a helm docked near one can pull this many villagers off their own " +
-                "workstations. Default 32."
+                "workstations. Default 80."
         )
-        var crewmanHelmPoiTickets = 32
+        var crewmanHelmPoiTickets = 80
 
         @JsonSchema(
             description = "How close, in blocks, a villager must get to a helm for it to count as having reached " +
@@ -1090,9 +1090,9 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "The most berths any player can ever hold. Each Heart of the Sea offered to a helm buys " +
-                "exactly one, so the default pair means a full crew costs 28 hearts. Default 32."
+                "exactly one, so the default pair means a full crew costs 28 hearts. Default 80."
         )
-        var crewSlotsMax = 32
+        var crewSlotsMax = 80
 
         // region Cannons
         // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
@@ -1111,53 +1111,53 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "1x charge (1 gunpowder): blocks a cannonball travels each tick. Sets the range and " +
-                "how flat the shot looks. Default 2.5."
+                "how flat the shot looks. Default 3.5."
         )
-        var cannonShotSpeed1x = 2.5
+        var cannonShotSpeed1x = 3.5
 
         @JsonSchema(
             description = "1x charge: blocks per tick squared the shot falls. The main control over the ARC -- " +
-                "raise it to lob, lower it toward a straight line. Default 0.05."
+                "raise it to lob, lower it toward a straight line. Default 0.025."
         )
-        var cannonShotGravity1x = 0.05
+        var cannonShotGravity1x = 0.025
 
         @JsonSchema(
             description = "1x charge: fraction of its speed a shot keeps each tick. Below 1.0 it slows in " +
                 "flight, which shortens the range and steepens the tail of the arc rather than changing its " +
-                "start. 1.0 is no drag at all. Default 0.93."
+                "start. 1.0 is no drag at all. Default 0.97."
         )
-        var cannonShotDrag1x = 0.93
+        var cannonShotDrag1x = 0.97
 
         @JsonSchema(
             description = "1x charge: seconds a cannon takes to reload. PER GUN -- a six-gun broadside fires " +
                 "six times in this window -- so gun count, not this number, sets a ship's weight of fire. " +
-                "Default 4.0."
+                "Default 2.0."
         )
-        var cannonReloadSeconds1x = 4.0
+        var cannonReloadSeconds1x = 2.0
 
         @JsonSchema(description = "2x charge (2 gunpowder): blocks a cannonball travels each tick. Default 5.0.")
         var cannonShotSpeed2x = 5.0
 
-        @JsonSchema(description = "2x charge: blocks per tick squared the shot falls. Default 0.05.")
+        @JsonSchema(description = "2x charge: blocks per tick squared the shot falls. Default 0.075.")
         var cannonShotGravity2x = 0.05
 
-        @JsonSchema(description = "2x charge: fraction of its speed a shot keeps each tick. Default 0.93.")
-        var cannonShotDrag2x = 0.93
+        @JsonSchema(description = "2x charge: fraction of its speed a shot keeps each tick. Default 0.98.")
+        var cannonShotDrag2x = 0.98
 
-        @JsonSchema(description = "2x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
+        @JsonSchema(description = "2x charge: seconds a cannon takes to reload, per gun. Default 6.0.")
         var cannonReloadSeconds2x = 4.0
 
-        @JsonSchema(description = "3x charge (3 gunpowder): blocks a cannonball travels each tick. Default 7.5.")
-        var cannonShotSpeed3x = 7.5
+        @JsonSchema(description = "3x charge (3 gunpowder): blocks a cannonball travels each tick. Default 6.5.")
+        var cannonShotSpeed3x = 6.5
 
         @JsonSchema(description = "3x charge: blocks per tick squared the shot falls. Default 0.05.")
-        var cannonShotGravity3x = 0.05
+        var cannonShotGravity3x = 0.075
 
-        @JsonSchema(description = "3x charge: fraction of its speed a shot keeps each tick. Default 0.93.")
-        var cannonShotDrag3x = 0.93
+        @JsonSchema(description = "3x charge: fraction of its speed a shot keeps each tick. Default 0.99.")
+        var cannonShotDrag3x = 0.99
 
         @JsonSchema(description = "3x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
-        var cannonReloadSeconds3x = 4.0
+        var cannonReloadSeconds3x = 6.0
 
         @JsonSchema(
             description = "How many cannonballs stack in an inventory slot, 1 to 99. Applied when items " +
@@ -1166,6 +1166,14 @@ object EurekaConfig {
                 "actually sits. Default 64."
         )
         var cannonballStackSize = 64
+
+        @JsonSchema(
+            description = "How many empty Ship Bottles stack in a slot, 1 to 64. Applied when items " +
+                "register, so changing it needs a game restart. 16, like snowballs: a bottle is a whole " +
+                "ship's worth of glasswork, not a trinket. (A FILLED bottle never merges with a bottle " +
+                "holding a different ship regardless -- the ship rides the item's data.) Default 16."
+        )
+        var shipBottleStackSize = 16
 
         // Cannonball damage. Damage is a LADDER, not a range: the guaranteed blocks always go, then every
         // entry in the chances list is rolled independently for one more block -- so a round lands near its
@@ -1285,9 +1293,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "How far above or below them, in blocks, a firefighter notices a fire. Deliberately " +
                 "much shorter than the horizontal reach so a flame at the masthead does not send the whole " +
-                "party up the rigging -- burning sails are nobody's job. Default 12.0."
+                "party up the rigging -- burning sails are nobody's job. Default 14.0."
         )
-        var fireWatchVerticalBlocks = 12.0
+        var fireWatchVerticalBlocks = 14.0
 
         @JsonSchema(
             description = "Within this many blocks of the flame, in any direction, a firefighter is close " +
@@ -1341,9 +1349,9 @@ object EurekaConfig {
                 "blocks, not per block-type. Lower it to let a shipwright take on a wreck; raise it to stop " +
                 "one set of plans being used to rebuild a different ship. Clamped: anything at or below 0 " +
                 "reads as 1, anything at or above 100 reads as 99 -- 0 would let any hull pass as any ship, " +
-                "and 100 would accept only a hull with nothing wrong with it. Default 60."
+                "and 100 would accept only a hull with nothing wrong with it. Default 20."
         )
-        var shipwrightRepairPercentage = 60
+        var shipwrightRepairPercentage = 20
 
         @JsonSchema(
             description = "How far from a Shipwright's Bench, in blocks, a shipwright can see and work on a " +
@@ -1406,9 +1414,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "Below this integrity the ship goes ungoverned -- it ragdolls exactly as if every " +
                 "helm aboard were broken, and cannot be driven until repaired back to this line, at which " +
-                "point the gyro rights it and the wheel answers again. Default 40."
+                "point the gyro rights it and the wheel answers again. Default 45."
         )
-        var damageFreefallBelow = 40
+        var damageFreefallBelow = 45
         // endregion
 
         // region Helm-less foundering
@@ -1466,9 +1474,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "Pirate proximity sphere: radius = the hull's horizontal half-diagonal times this. " +
                 "Bigger ships see further, exactly as the follow reach does. A ship counts as inside the " +
-                "moment any part of its hull crosses the line, not just its centre. Default 10.0."
+                "moment any part of its hull crosses the line, not just its centre. Default 4.0."
         )
-        var pirateZoneScale = 10.0
+        var pirateZoneScale = 4.0
 
         @JsonSchema(
             description = "Pirate proximity sphere: the radius never shrinks below this many blocks, however " +
@@ -1539,39 +1547,85 @@ object EurekaConfig {
         var pirateRegenPlayerClearRadius = 48.0
 
         @JsonSchema(
-            description = "The hulls a regenerating site draws from, uniformly at random -- template names " +
-                "under data/vs_eureka/structure/. Keep in step with the worldgen template_pool JSON, which " +
-                "vanilla reads separately. A weight system can replace the uniform draw later. " +
-                "Default [pirate/sloop]."
+            description = "The hulls a regenerating site draws from -- template names under " +
+                "data/vs_eureka/structure/, WEIGHTED: 'pirate/sloop*3' draws three times as often as " +
+                "'pirate/brig', and a bare name is weight 1. Keep names AND weights in step with the " +
+                "worldgen template_pool JSON (data/vs_eureka/worldgen/template_pool/pirate/ships.json), " +
+                "which vanilla reads separately for first generation. Default [pirate/large1]."
         )
-        var pirateHulls: List<String> = listOf("pirate/sloop")
+        var pirateHulls: List<String> = listOf("pirate/large1")
+
+        @JsonSchema(
+            description = "Pirate ships fight back: guns with living mounted gunners solve real arcs and " +
+                "fire on any ship carrying a player inside engage range. Off restores the toothless chase. " +
+                "Default true."
+        )
+        var pirateGunneryEnabled = true
+
+        @JsonSchema(
+            description = "Ticks between one pirate gun speaking and the next -- the rolling-broadside " +
+                "rhythm, same feel as a crew volley's stagger. Also the AI's whole rate limit: one gun " +
+                "per this many ticks, per ship. Default 2."
+        )
+        var pirateCannonStaggerTicks = 2
+
+        @JsonSchema(
+            description = "How far out a pirate ship's guns will engage an enemy hull, in blocks. This is " +
+                "the trigger range, not the ballistic limit. Set close to what a triple charge can actually " +
+                "carry (the arithmetic asymptote is speed/(1-drag), about 107 blocks) and let the SOLVER " +
+                "be the limit: a gun only fires when a real arc exists, so a generous gate costs nothing " +
+                "in wasted powder but a tight one leaves pirates silent at ranges they could reach. " +
+                "Default 160.0."
+        )
+        var pirateCannonEngageRange = 160.0
+
+        @JsonSchema(
+            description = "How many degrees off a gun's bore line the target may sit and still be fired on. " +
+                "A gun never turns -- the ship aims it -- so this is when the broadside counts as bearing. " +
+                "Wider means guns speak sooner and spread wider (the lateral miss grows with range); " +
+                "narrower means tighter shooting a manoeuvring ship rarely achieves. Default 7.5."
+        )
+        var pirateCannonBearingToleranceDegrees = 7.5
+
+        @JsonSchema(
+            description = "How far the AI's aim point is scattered per shot, in blocks -- deliberate hand " +
+                "-tremble laid over the ships' own bobbing, so successive solved shots straddle a deck " +
+                "instead of boring one hole. 0 is machine precision. Default 1.5."
+        )
+        var pirateCannonJitterBlocks = 1.5
+
+        @JsonSchema(
+            description = "Pirate guns stop consuming powder and shot. The magazines must still be STOCKED " +
+                "-- an empty gun stays silent, and authored hulls still decide which guns can speak -- but " +
+                "nothing is deducted, so a long fight never runs the batteries dry and boarders find the " +
+                "magazines as full as the author left them. Default false: template stock is finite, spent " +
+                "powder stays spent, and what remains is loot."
+        )
+        var pirateCannonInfiniteAmmo = false
+
+        @JsonSchema(
+            description = "How far out a pirate crew hand OPENS FIRE with a crossbow or bow, in blocks. " +
+                "Vanilla's goals shoot at 8 and 15 -- rowboat distances; a ship's marksman needs deck-to-" +
+                "deck reach. The projectile speed boost below is what makes the extra range actually " +
+                "carry. Default 24.0."
+        )
+        var pirateCrewShootRange = 24.0
+
+        @JsonSchema(
+            description = "How far a pirate crew hand can SEE a target, in blocks (the follow-range " +
+                "attribute stamped on every hand at adoption and respawn). Sets the outer limit on " +
+                "acquiring players; the shoot range above is when they act on it. Default 48.0."
+        )
+        var pirateCrewSightRange = 48.0
+
+        @JsonSchema(
+            description = "Crew-fired projectiles (bolts, arrows) fly this many times faster than a " +
+                "shore monster's, and twice as straight -- the flat arc that lets a deck marksman " +
+                "actually reach the shoot range. 1.0 is vanilla. Default 1.5."
+        )
+        var pirateCrewProjectileSpeedMultiplier = 1.5
         // endregion
 
-        @JsonSchema(
-            description = "Crewman balloon trade: the relative chance of the PLAIN uncoloured balloon. The trade " +
-                "is ONE slot with a colour lottery inside it rather than seventeen separate trades, so these four " +
-                "weights are the whole distribution. At the defaults (100/12/5/1) plain comes up about half the " +
-                "time and pink about one time in two hundred, which is roughly a pink sheep. Default 100."
-        )
-        var balloonTradeWeightPlain = 100
-
-        @JsonSchema(
-            description = "Crewman balloon trade: weight of EACH of white, light gray, gray, black and brown. " +
-                "Default 12."
-        )
-        var balloonTradeWeightNatural = 12
-
-        @JsonSchema(
-            description = "Crewman balloon trade: weight of EACH of red, orange, yellow, lime, green, light blue, " +
-                "cyan and blue. Default 5."
-        )
-        var balloonTradeWeightDyed = 5
-
-        @JsonSchema(
-            description = "Crewman balloon trade: weight of EACH of purple, magenta and pink -- the rare three. " +
-                "Default 1."
-        )
-        var balloonTradeWeightRare = 1
         // endregion
 
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and

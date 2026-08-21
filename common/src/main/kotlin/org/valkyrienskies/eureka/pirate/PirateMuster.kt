@@ -15,6 +15,7 @@ import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
 import net.minecraft.world.phys.shapes.CollisionContext
 import org.joml.Vector3d
+import org.valkyrienskies.eureka.EurekaConfig
 
 /**
  * Putting a pirate crew back on its deck.
@@ -51,7 +52,7 @@ object PirateMuster {
             raider.setPersistenceRequired()
             raider.setHomeTo(BlockPos.containing(centre.x, centre.y, centre.z), HOME_RADIUS)
             raider.addTag(PirateShips.CREW_TAG)
-            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = CREW_SIGHT
+            raider.getAttribute(Attributes.FOLLOW_RANGE)?.baseValue = EurekaConfig.SERVER.pirateCrewSightRange
             spawned.add(raider.uuid)
         }
         return spawned
@@ -124,6 +125,4 @@ object PirateMuster {
     /** How far from the wheel a respawned crew member is allowed to wander. */
     private const val HOME_RADIUS = 24
 
-    /** Mirrors PirateShips.CREW_SIGHT: how far the crew can see a target. */
-    private const val CREW_SIGHT = 48.0
 }

@@ -10,6 +10,8 @@ import net.minecraft.sounds.SoundSource
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.InteractionHand
 import net.minecraft.world.item.Items
+import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.Vec3
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaItems
@@ -52,9 +54,11 @@ object CannonFire {
      * is laid. Deriving it from the pivot and the barrel's length means the flash always leaves the actual
      * mouth of the bore, at every elevation, without a lookup table to keep in step with the models.
      */
-    private const val TRUNNION_FORWARD = -0.3125
-    private const val TRUNNION_HEIGHT = 0.53
-    private const val BORE_LENGTH = 1.375
+    // Internal rather than private: CannonSolver computes firing solutions off the same geometry, and a
+    // solver working from its own copy of the trunnion would drift the first time the model moves.
+    internal const val TRUNNION_FORWARD = -0.3125
+    internal const val TRUNNION_HEIGHT = 0.53
+    internal const val BORE_LENGTH = 1.375
 
     /** Why a gun would not fire, or null if it did. */
     fun fire(level: ServerLevel, clicked: BlockPos, player: ServerPlayer?): Component? {
@@ -64,6 +68,65 @@ object CannonFire {
         // Either half of the gun is a valid place to strike a spark; the magazine is on the breech.
         val facing = state.getValue(HORIZONTAL_FACING)
         val rear = clicked.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+        val pitch = Math.toRadians(EurekaProperties.elevationDegrees(state.getValue(ELEVATION)))
+        return fireCore(level, rear, pitch, worldArc = false, speedOverride = null, consume = true, player = player)
+    }
+
+    /**
+     * The AI's trigger: fire the EXACT solved arc, while the drawn barrel snaps to its nearest 5-degree
+     * step. The blockstate is cosmetic here in precisely the way the helm's wheel is -- the mechanism is
+     * simulated past its own detents, which is the whole reason a pirate can land shots a player's five
+     * -degree ladder would straddle. The player path ([fire]) is untouched: it still flies whatever the
+     * blockstate says.
+     *
+     * The pitch is a WORLD pitch (degrees above the horizon) and the arc is assembled in world terms --
+     * level bore azimuth plus solved elevation -- so the ball flies the arc that was solved even when the
+     * hull is heeled mid-turn. [consume] off is the infinite-ammo server option: the checks still demand
+     * a stocked magazine (an empty gun is silent either way); only the deduction is skipped.
+     */
+    fun fireAimed(
+        level: ServerLevel,
+        rear: BlockPos,
+        pitchDegrees: Double,
+        speed: Double,
+        consume: Boolean = true,
+        player: ServerPlayer? = null
+    ): Component? {
+        val state = level.getBlockState(rear)
+        if (state.block !is CannonBlock) return Component.translatable("info.vs_eureka.cannon_broken")
+        val clamped = pitchDegrees.coerceIn(-45.0, 45.0)
+        layVisual(level, rear, state, clamped)
+        return fireCore(
+            level, rear, Math.toRadians(clamped), worldArc = true,
+            speedOverride = speed, consume = consume, player = player
+        )
+    }
+
+    /** Walk the drawn barrel to the 5-degree step nearest the solved pitch. CrewOperations.layGun's walk. */
+    private fun layVisual(level: ServerLevel, rear: BlockPos, state: BlockState, pitchDegrees: Double) {
+        val index = (Math.round(pitchDegrees / 5.0).toInt() + EurekaProperties.ELEVATION_LEVEL).coerceIn(0, 18)
+        if (state.getValue(ELEVATION) == index) return
+        val facing = state.getValue(HORIZONTAL_FACING)
+        for (part in CannonPart.entries) {
+            val pos = rear.relative(facing, part.ordinal)
+            val there = level.getBlockState(pos)
+            if (there.block !is CannonBlock) continue
+            level.setBlock(pos, there.setValue(ELEVATION, index), Block.UPDATE_CLIENTS)
+        }
+    }
+
+    private fun fireCore(
+        level: ServerLevel,
+        rear: BlockPos,
+        pitchRadians: Double,
+        worldArc: Boolean,
+        speedOverride: Double?,
+        consume: Boolean,
+        player: ServerPlayer?
+    ): Component? {
+        val state = level.getBlockState(rear)
+        if (state.block !is CannonBlock) return Component.translatable("info.vs_eureka.cannon_broken")
+        val facing = state.getValue(HORIZONTAL_FACING)
         val magazine = level.getBlockEntity(rear) as? CannonBlockEntity
             ?: return Component.translatable("info.vs_eureka.cannon_broken")
 
@@ -95,9 +158,8 @@ object CannonFire {
         // Bore geometry, in whatever space the block lives in. The shot leaves along the barrel, so the
         // elevation the player set is the elevation it flies at -- the model and the trajectory are driven
         // by the same number rather than merely looking like they agree.
-        val pitch = Math.toRadians(EurekaProperties.elevationDegrees(state.getValue(ELEVATION)))
-        val alongBore = Math.cos(pitch)
-        val upBore = Math.sin(pitch)
+        val alongBore = Math.cos(pitchRadians)
+        val upBore = Math.sin(pitchRadians)
 
         val forward = TRUNNION_FORWARD + BORE_LENGTH * alongBore
         val height = TRUNNION_HEIGHT + BORE_LENGTH * upBore
@@ -117,15 +179,40 @@ object CannonFire {
         val ahead = ship?.shipToWorld?.transformPosition(Vector3d(shipyardAhead)) ?: shipyardAhead
 
         val from = Vec3(muzzle.x, muzzle.y, muzzle.z)
-        val direction = Vec3(ahead.x - muzzle.x, ahead.y - muzzle.y, ahead.z - muzzle.z)
+        val direction: Vec3 = if (!worldArc) {
+            Vec3(ahead.x - muzzle.x, ahead.y - muzzle.y, ahead.z - muzzle.z)
+        } else {
+            // The AI's arc was solved in WORLD terms, so it is assembled the same way: the bore's LEVEL
+            // azimuth (two points at zero pitch, both carried through the ship transform) plus the solved
+            // elevation. On an even keel this is exactly the mechanical line; heeled mid-turn, the ball
+            // still flies the arc that was solved rather than the heel's corruption of it.
+            val flatForward = TRUNNION_FORWARD + BORE_LENGTH
+            val flatMuzzle = Vector3d(
+                rear.x + 0.5 + facing.stepX * flatForward,
+                rear.y + 0.5 + TRUNNION_HEIGHT,
+                rear.z + 0.5 + facing.stepZ * flatForward
+            )
+            val flatAhead = Vector3d(flatMuzzle).add(
+                facing.stepX.toDouble(), 0.0, facing.stepZ.toDouble()
+            )
+            val fm = ship?.shipToWorld?.transformPosition(Vector3d(flatMuzzle)) ?: flatMuzzle
+            val fa = ship?.shipToWorld?.transformPosition(flatAhead) ?: flatAhead
+            val azimuthX = fa.x - fm.x
+            val azimuthZ = fa.z - fm.z
+            val flat = Math.sqrt(azimuthX * azimuthX + azimuthZ * azimuthZ)
+            if (flat < 1.0e-6) return Component.translatable("info.vs_eureka.cannon_broken")
+            Vec3(azimuthX / flat * alongBore, upBore, azimuthZ / flat * alongBore)
+        }
         if (direction.lengthSqr() < 1.0e-6) return Component.translatable("info.vs_eureka.cannon_broken")
 
         // The shot flies as the PLAIN ball of its metal. A charge is inside the shell, so an explosive round
         // in the air is still just an iron ball -- and the gunpowder pip on the item sprite is a label for
         // the player's inventory, not something you would see going past you.
         val shown = ItemStack(EurekaItems.cannonball(load.ball, CannonCharge.PLAIN))
-        magazine.consumePowder(charge.powder)
-        magazine.shot.shrink(1)
+        if (consume) {
+            magazine.consumePowder(charge.powder)
+            magazine.shot.shrink(1)
+        }
         magazine.readyAt = level.gameTime + cooldown
         magazine.setChanged()
 
@@ -142,7 +229,7 @@ object CannonFire {
             add(head.id)
             ArmadaShipControl.get(head)?.childShips?.keys?.let { addAll(it) }
         }
-        CannonShot.spawn(level, from, direction, load, shown, charge, player, gun, vessel)
+        CannonShot.spawn(level, from, direction, load, shown, charge, player, gun, vessel, speedOverride)
 
         level.playSound(null, from.x, from.y, from.z, SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0f, 1.2f)
         level.playSound(null, from.x, from.y, from.z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0f, 1.4f)

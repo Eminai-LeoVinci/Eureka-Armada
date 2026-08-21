@@ -176,14 +176,32 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * is out of the picture -- and a shot's arc has to keep answering to the measure that actually threw it,
      * not to whatever the breech happens to be set to by the time it lands.
      */
-    fun launch(from: Vec3, direction: Vec3, load: Load, shownAs: ItemStack, charge: PowderCharge) {
+    fun launch(
+        from: Vec3,
+        direction: Vec3,
+        load: Load,
+        shownAs: ItemStack,
+        charge: PowderCharge,
+        speedOverride: Double? = null
+    ) {
         this.load = load
         this.impactsLeft = load.impacts
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         entityData.set(POWDER, charge.ordinal)
         setPos(from.x, from.y, from.z)
-        deltaMovement = direction.normalize().scale(charge.speed)
+        // The override is the AI's solved muzzle speed -- spent once, right here, so it needs no syncing
+        // and no persistence: the client reads the resulting velocity off the spawn packet like any other,
+        // and gravity/drag still come from the synced charge.
+        deltaMovement = direction.normalize().scale(speedOverride ?: charge.speed)
     }
+
+    /**
+     * Vanilla's fluid push is the ONE outside hand that could touch this flight -- a shot skimming a wave
+     * would pick up a flow nudge the client (which re-integrates the arc itself, see [tick]) never applies,
+     * and the solver (which promises the arc is pure arithmetic) never planned for. Refused on all three
+     * counts.
+     */
+    override fun isPushedByFluid(): Boolean = false
 
     override fun tick() {
         super.tick()
@@ -448,14 +466,15 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             charge: PowderCharge,
             firedBy: Entity? = null,
             gun: Array<BlockPos> = emptyArray(),
-            ownVessel: Set<Long> = emptySet()
+            ownVessel: Set<Long> = emptySet(),
+            speedOverride: Double? = null
         ): CannonShot {
             val shot = CannonShot(EurekaEntities.CANNON_SHOT.get(), level)
             shot.firedBy = firedBy
             shot.gun = gun
             shot.muzzle = from
             shot.ownVessel = ownVessel
-            shot.launch(from, direction, load, shownAs, charge)
+            shot.launch(from, direction, load, shownAs, charge, speedOverride)
             level.addFreshEntity(shot)
             return shot
         }

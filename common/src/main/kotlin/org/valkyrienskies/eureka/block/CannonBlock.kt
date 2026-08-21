@@ -15,6 +15,7 @@ import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
+import net.minecraft.world.item.SpawnEggItem
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -38,6 +39,7 @@ import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
 import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.crew.GunnerMounts
 import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.cannon.CannonFire
 import org.valkyrienskies.eureka.util.DirectionalShape
@@ -277,6 +279,23 @@ class CannonBlock : BaseEntityBlock(
             level.playSound(
                 null, breech, SoundEvents.ARMOR_EQUIP_GENERIC.value(), SoundSource.BLOCKS, 0.6f, 1.4f
             )
+            return InteractionResult.CONSUME
+        }
+
+        // A spawn egg on a gun, in creative, aboard an assembled ship: hatch the mob MOUNTED as this gun's
+        // crew. The authoring gesture behind every crewed hull template -- see GunnerMounts. Survival play
+        // never sees this branch (the creative check), and the claim happens before the egg's own useOn can
+        // spawn a loose mob against the barrel.
+        if (stack.item is SpawnEggItem) {
+            if (!player.hasInfiniteMaterials()) return InteractionResult.PASS
+            if (level.isClientSide) return InteractionResult.SUCCESS
+
+            val facing = state.getValue(HORIZONTAL_FACING)
+            val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+            val refusal = GunnerMounts.mountFromEgg(
+                level as ServerLevel, rear, stack.item as SpawnEggItem, stack, player as? ServerPlayer
+            )
+            refusal?.let { player.displayClientMessage(Component.literal(it), true) }
             return InteractionResult.CONSUME
         }
 

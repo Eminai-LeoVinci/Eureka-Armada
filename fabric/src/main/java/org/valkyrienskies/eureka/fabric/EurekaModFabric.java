@@ -34,10 +34,12 @@ import org.valkyrienskies.eureka.blueprint.BlueprintPages;
 import org.valkyrienskies.eureka.crew.CrewDuties;
 import org.valkyrienskies.eureka.crew.FireBrigade;
 import org.valkyrienskies.eureka.crew.GunStations;
+import org.valkyrienskies.eureka.crew.GunnerMounts;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
+import org.valkyrienskies.eureka.fabric.client.CannonRangeRenderer;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
@@ -49,6 +51,7 @@ import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.PirateCommand;
+import org.valkyrienskies.eureka.pirate.PirateGunnery;
 import org.valkyrienskies.eureka.pirate.PirateShips;
 import org.valkyrienskies.eureka.ship.ShipFoundering;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
@@ -136,6 +139,9 @@ public class EurekaModFabric implements ModInitializer {
             // Gun stations: glue each stationed gunner to his seat (their seats sit in non-ticking shipyard
             // chunks, so nothing else will), and once a second reconcile the seats against the crew ledger.
             GunStations.INSTANCE.tick(level);
+            // Mob gun crews: once a second, make every tagged mob's mount agree with its papers -- the
+            // re-seat after a relog or a template placement, and the release after a disassembly.
+            GunnerMounts.INSTANCE.tick(level);
             // Pirate ships: proximity zones around dormant hulls, the 20-second warning, wake-up and the
             // hand-off into ShipFollows. Self-silences to a map check while no pirate wheel is loaded.
             PirateShips.INSTANCE.tick(level);
@@ -161,6 +167,8 @@ public class EurekaModFabric implements ModInitializer {
             FireBrigade.INSTANCE.reset();
             // The seat map holds entity references from the stopped server; the ledger rebuilds it next world.
             GunStations.INSTANCE.reset();
+            // Same shape of map, rebuilt from entity tags instead of a ledger.
+            GunnerMounts.INSTANCE.reset();
             // Reports hold block-entity references and chases hold ship ids from the stopped server; the
             // helm reports rebuild everything within a tick of the next world loading.
             PirateShips.INSTANCE.reset();
@@ -203,6 +211,8 @@ public class EurekaModFabric implements ModInitializer {
             PathRenderer.INSTANCE.register();
             // Pirate proximity zones as wireframe spheres, off until "/vs pirate-zones true". DEV ONLY.
             PirateZoneRenderer.INSTANCE.register();
+            // The cannon engage-range wireframe, its sibling in every respect.
+            CannonRangeRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
@@ -307,6 +317,18 @@ public class EurekaModFabric implements ModInitializer {
                                     PirateShips.setPublishZones(enabled);
                                     ctx.getSource().sendFeedback(
                                         Component.literal("Pirate zones " + (enabled ? "shown" : "hidden")));
+                                    return 1;
+                                })))
+                        // "/vs cannon-range <bool>": draw every chasing pirate's engage-range sphere, plus one
+                        // around whatever armed ship the player stands on -- the gunnery bench's picture.
+                        // Same shape as pirate-zones in every respect. DEV ONLY, strip-listed.
+                        .then(ClientCommandManager.literal("cannon-range")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
+                                    PirateGunnery.setPublishRanges(enabled);
+                                    ctx.getSource().sendFeedback(
+                                        Component.literal("Cannon ranges " + (enabled ? "shown" : "hidden")));
                                     return 1;
                                 })))));
 

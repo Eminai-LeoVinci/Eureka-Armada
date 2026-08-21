@@ -11,7 +11,7 @@ import net.minecraft.world.item.trading.MerchantOffer
 import net.minecraft.world.level.ItemLike
 import net.minecraft.world.level.block.Block
 import org.valkyrienskies.eureka.EurekaBlocks
-import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaLootConfig
 
 /**
  * What a Crewman sells: Eureka's own hardware, plus the Heart of the Sea that buys berths.
@@ -86,11 +86,13 @@ object CrewTrades {
      * `nextInt(total)` throw on a live server.
      */
     private fun weightedBalloons(): List<Pair<Block, Int>> {
-        val cfg = EurekaConfig.SERVER
-        val plain = cfg.balloonTradeWeightPlain.coerceAtLeast(0)
-        val natural = cfg.balloonTradeWeightNatural.coerceAtLeast(0)
-        val dyed = cfg.balloonTradeWeightDyed.coerceAtLeast(0)
-        val rare = cfg.balloonTradeWeightRare.coerceAtLeast(0)
+        // The lottery moved to the loot table file with the rest of the economy; still read live per
+        // offer, so an edit takes effect on the next villager rather than needing a restart.
+        val cfg = EurekaLootConfig.LOOT.balloonTrade
+        val plain = cfg.plain.coerceAtLeast(0)
+        val natural = cfg.natural.coerceAtLeast(0)
+        val dyed = cfg.dyed.coerceAtLeast(0)
+        val rare = cfg.rare.coerceAtLeast(0)
 
         val table = mutableListOf<Pair<Block, Int>>()
         if (plain > 0) table += EurekaBlocks.BALLOON.get() to plain
