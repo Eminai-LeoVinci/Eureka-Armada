@@ -10,6 +10,7 @@ import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.SpawnEggItem
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -36,6 +37,8 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewBerths
+import org.valkyrienskies.eureka.crew.CrewEggs
+import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.pirate.PirateShips
@@ -130,6 +133,22 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
     ): InteractionResult {
         val berth = CrewBerths.offerHeart(level, pos, player, stack)
         if (berth != InteractionResult.PASS) return berth
+
+        // A villager egg on the wheel hatches a crewman already holding the trade -- the same authoring
+        // gesture the shipwright's bench answers, and gated the same way. It sets a TRADE and not a berth:
+        // signing somebody onto the articles is Sneak+C and costs a Heart, exactly as it does for a
+        // villager who wandered up and claimed the wheel on their own.
+        if (stack.item is SpawnEggItem && player.hasInfiniteMaterials() && !PirateHelm.gated(state)) {
+            if (level.isClientSide) return InteractionResult.SUCCESS
+            val refusal = CrewEggs.hatch(
+                level as ServerLevel, pos, hitResult.direction, stack.item as SpawnEggItem, stack,
+                player as? ServerPlayer, CrewProfession.PROFESSION_KEY
+            )
+            if (refusal != CrewEggs.NOT_A_VILLAGER) {
+                CrewEggs.tell(player as? ServerPlayer, refusal, "crewman")
+                return InteractionResult.SUCCESS
+            }
+        }
         return super.useItemOn(stack, state, level, pos, player, hand, hitResult)
     }
 

@@ -1,8 +1,21 @@
 package org.valkyrienskies.eureka.block
 
+import net.minecraft.core.BlockPos
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.ServerPlayer
+import net.minecraft.world.InteractionHand
+import net.minecraft.world.InteractionResult
+import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.SpawnEggItem
+import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.SoundType
+import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.material.MapColor
+import net.minecraft.world.phys.BlockHitResult
+import org.valkyrienskies.eureka.crew.CrewEggs
+import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.blockProps
 
 /**
@@ -28,4 +41,39 @@ class ShipwrightsBenchBlock : Block(
     // Softer than a helm and axe-mineable: it is a carpenter's bench, and a player who finds one in a harbor
     // should be able to take it home even though they cannot make one.
     blockProps().mapColor(MapColor.WOOD).sound(SoundType.WOOD).strength(2.5f)
-)
+) {
+
+    /**
+     * A villager egg on the bench hatches a shipwright already holding the trade.
+     *
+     * The "deliberately not interactive" note above still stands for everything a PLAYER can do here: this
+     * answers only a creative hand holding a villager egg, and every other click falls through untouched, so
+     * an empty hand still does nothing and the bench still answers no questions. See [CrewEggs] for why an
+     * authoring gesture does not undo the rule that a shipwright is made by claiming a bench.
+     */
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hitResult: BlockHitResult
+    ): InteractionResult {
+        if (stack.item !is SpawnEggItem || !player.hasInfiniteMaterials()) {
+            return super.useItemOn(stack, state, level, pos, player, hand, hitResult)
+        }
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val refusal = CrewEggs.hatch(
+            level as ServerLevel, pos, hitResult.direction, stack.item as SpawnEggItem, stack,
+            player as? ServerPlayer, ShipwrightProfession.PROFESSION_KEY
+        )
+        // A zombie egg on a bench is not a mistake worth refusing -- it is somebody spawning a zombie.
+        if (refusal == CrewEggs.NOT_A_VILLAGER) {
+            return super.useItemOn(stack, state, level, pos, player, hand, hitResult)
+        }
+        CrewEggs.tell(player as? ServerPlayer, refusal, "shipwright")
+        return InteractionResult.SUCCESS
+    }
+}
