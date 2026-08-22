@@ -27,6 +27,7 @@ import org.valkyrienskies.eureka.util.WeightedNames
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
 import org.valkyrienskies.mod.util.logger
 import java.util.UUID
 import kotlin.math.max
@@ -77,6 +78,8 @@ object PirateShips {
         val bornAt: Long,
         var standingDown: Boolean = false,
         var nextDisassembleTry: Long = 0L,
+        /** When this hull first found something in the way of its own stand-down. 0 while unobstructed. */
+        var clearingSince: Long = 0L,
         /** The guns' bookkeeping, riding the chase so both go quiet by the same door. See PirateGunnery. */
         val gunnery: PirateGunnery.State = PirateGunnery.State()
     )
@@ -123,7 +126,7 @@ object PirateShips {
         }
         reports[berthId] = Report(pos, shipId, level.gameTime, helm)
         // A report is life: whatever vanished, it was a relocation, not a break.
-        vanished.remove(berthId)
+        vanished.remove(berthId)        }
 
         // A world copied without its SavedData, or a store lost to a crash: re-create the site record so
         // the wheel is not left reporting into the void forever.
@@ -308,6 +311,64 @@ object PirateShips {
             if (corner.y > top) top = corner.y
         }
         return top >= level.maxY - DISASSEMBLE_CEILING_MARGIN
+    }
+
+    /**
+     * Is anything solid standing where this hull's blocks would land?
+     *
+     * Measured over her live world box -- the eight corners of the shipyard box through the transform --
+     * which is deliberately GENEROUS: a box is bigger than the hull inside it, so a ship hovering close
+     * over a rooftop reads as obstructed and rises a little further than she strictly had to. That is the
+     * right way to be wrong here, because being wrong the other way welds a hull into a building and
+     * leaves a raider that can never assemble again.
+     *
+     * Air, fluids, and anything a block can simply be placed into (grass, snow, seagrass) are not in the
+     * way. The sweep answers on the FIRST solid it meets, so the expensive case -- walking the whole box
+     * -- is the CLEAR one, which happens once and is followed immediately by the disassembly.
+     */
+    private fun obstructed(level: ServerLevel, ship: LoadedServerShip): Boolean {
+        val box = ship.shipAABB ?: return false
+        val corner = Vector3d()
+        var minX = Double.MAX_VALUE
+        var minY = Double.MAX_VALUE
+        var minZ = Double.MAX_VALUE
+        var maxX = -Double.MAX_VALUE
+        var maxY = -Double.MAX_VALUE
+        var maxZ = -Double.MAX_VALUE
+        for (dx in 0..1) for (dy in 0..1) for (dz in 0..1) {
+            corner.set(
+                if (dx == 0) box.minX().toDouble() else box.maxX() + 1.0,
+                if (dy == 0) box.minY().toDouble() else box.maxY() + 1.0,
+                if (dz == 0) box.minZ().toDouble() else box.maxZ() + 1.0
+            )
+            ship.shipToWorld.transformPosition(corner)
+            if (corner.x < minX) minX = corner.x
+            if (corner.y < minY) minY = corner.y
+            if (corner.z < minZ) minZ = corner.z
+            if (corner.x > maxX) maxX = corner.x
+            if (corner.y > maxY) maxY = corner.y
+            if (corner.z > maxZ) maxZ = corner.z
+        }
+
+        val cursor = BlockPos.MutableBlockPos()
+        val loX = Math.floor(minX).toInt()
+        val hiX = Math.floor(maxX).toInt()
+        val loZ = Math.floor(minZ).toInt()
+        val hiZ = Math.floor(maxZ).toInt()
+        val loY = Math.floor(minY).toInt().coerceAtLeast(level.minY)
+        val hiY = Math.floor(maxY).toInt().coerceAtMost(level.maxY - 1)
+
+        for (x in loX..hiX) {
+            for (z in loZ..hiZ) {
+                // A column outside the loaded world is not something to force in just to ask about it.
+                if (level.chunkSource.getChunkNow(x shr 4, z shr 4) == null) continue
+                for (y in loY..hiY) {
+                    val state = level.getBlockState(cursor.set(x, y, z))
+                    if (!state.isAir && state.fluidState.isEmpty && !state.canBeReplaced()) return true
+                }
+            }
+        }
+        return false
     }
 
     private fun rangeSpheres(level: ServerLevel): List<PirateGunnery.Sphere> {
@@ -648,6 +709,33 @@ object PirateShips {
                     }
                     continue
                 }
+                // Nothing solid may be standing where her blocks are about to land. A hull that unfills
+                // into a village, a hillside or a tree does not merely look wrong: her blocks MERGE with
+                // whatever they touch, and the next wake's flood-fill walks out of the hull through the
+                // join and tries to assemble the building too. One lightning rod on a city roof was enough
+                // to leave a raider unassemblable for good -- "Ship is too big", on every wake, forever.
+                if (obstructed(level, pirate)) {
+                    // Up and out. Rising clears terrain, buildings and trees alike without any of the
+                    // cornered-in-a-canyon reasoning that choosing a horizontal direction would need, and
+                    // the ceiling case above already owns the other end of the same problem.
+                    if (chase.clearingSince == 0L) chase.clearingSince = now
+                    if (now - chase.clearingSince < DISASSEMBLE_STUCK_TICKS) {
+                        if (control.pathFollowing || control.pathBegin()) {
+                            control.pathCommand(0.0, DISASSEMBLE_CLEAR_MPS, 0.0, 0.0)
+                        }
+                        continue
+                    }
+                    // Wedged, with nowhere to rise to. Taking her apart HERE is the one outcome worth
+                    // avoiding, so she is removed instead -- blocks and all, the way a bottled hull is
+                    // emptied. Her berth generates a fresh ship in its own time, which is a far better end
+                    // than a permanent unassemblable wreck welded to somebody's roof.
+                    logger.info("[pirates] ship {} wedged at stand-down -- removed rather than merged", shipId)
+                    if (control.pathFollowing) control.pathRelease(true)
+                    VSShipAssembler.deleteShip(level, pirate, true, false)
+                    iterator.remove()
+                    continue
+                }
+                chase.clearingSince = 0L
                 if (control.pathFollowing) control.pathRelease(true)
 
                 if (now < chase.nextDisassembleTry) continue
@@ -1431,6 +1519,12 @@ object PirateShips {
 
     /** How fast a stood-down pirate sinks toward a height she can be taken apart at, in m/s. */
     private const val DISASSEMBLE_DESCENT_MPS = 6.0
+
+    /** How fast a hull rises to get out of her own way before standing down. */
+    private const val DISASSEMBLE_CLEAR_MPS = 5.0
+
+    /** How long she may spend looking for clear air before she is removed instead. */
+    private const val DISASSEMBLE_STUCK_TICKS = 300L
 
     /** Blocks of daylight left under the world ceiling before a teardown is considered safe. */
     private const val DISASSEMBLE_CEILING_MARGIN = 8.0
