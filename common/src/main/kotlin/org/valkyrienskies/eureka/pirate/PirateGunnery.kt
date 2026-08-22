@@ -4,6 +4,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.phys.Vec3
+import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaGroup
@@ -89,8 +90,10 @@ object PirateGunnery {
             state.targetShip = 0L
             return
         }
-        val aim = aimPoint(level, pirate, target)
-        if (aim == null) {
+        // The whole-hull fallback, for a gun whose own bore geometry cannot be read (an unloaded chunk
+        // mid-solve). Every gun that CAN be read gets its own aim point below.
+        val fallback = shipCentre(target)
+        if (fallback == null) {
             state.targetShip = 0L
             return
         }
@@ -110,7 +113,7 @@ object PirateGunnery {
                 continue
             }
             manned++
-            val refusal = fireAt(level, gun, aim, cfg.pirateCannonJitterBlocks)
+            val refusal = fireAt(level, gun, aimFor(level, gun, target) ?: fallback, cfg.pirateCannonJitterBlocks)
             if (refusal == null) {
                 state.nextShotAt = now + cfg.pirateCannonStaggerTicks.toLong().coerceAtLeast(1L)
                 return
@@ -121,9 +124,11 @@ object PirateGunnery {
         // Nobody could bear this tick -- the hull is still turning. No point walking every breech again
         // for a few ticks; the ship's own manoeuvre is what changes the answer.
         state.nextShotAt = now + IDLE_RETRY_TICKS
+        val hullRange = shipCentre(pirate)?.let { hullDistanceSq(target, it) }?.let { Math.sqrt(it) } ?: -1.0
         census(
             level, pirate, state, now,
-            "$guns guns, $manned manned, none fired (last: ${lastRefusal ?: "no guns aboard"})"
+            "$guns guns, $manned manned, none fired at %.0fm (last: %s)"
+                .format(hullRange, lastRefusal ?: "no guns aboard")
         )
     }
 
@@ -136,8 +141,8 @@ object PirateGunnery {
         for (candidate in level.shipObjectWorld.loadedShips) {
             if (candidate.id in own || candidate.chunkClaimDimension != level.dimensionId) continue
             if (PirateShips.isPirate(candidate.id)) continue
-            val nearest = playersAboard(level, candidate).minOfOrNull { it.position().distanceToSqr(centre) }
-                ?: continue
+            if (playersAboard(level, candidate).isEmpty()) continue
+            val nearest = hullDistanceSq(candidate, centre) ?: continue
             crewed++
             if (nearest < nearestSq) nearestSq = nearest
         }
@@ -190,10 +195,10 @@ object PirateGunnery {
     }
 
     /**
-     * The enemy: a loaded hull, not of this armada, not a fellow pirate, with a PLAYER aboard, inside
-     * engage range -- nearest first, except the chase's own quarry always outranks the field. "Aboard" is
-     * [ShipCrew]'s live carry-state test, never the stored worldAABB, which this manager has already
-     * caught being seconds stale.
+     * The enemy: a loaded hull, not of this armada, not a fellow pirate, with a PLAYER aboard, whose
+     * NEAREST PLANKING is inside engage range -- closest first, except the chase's own quarry always
+     * outranks the field. "Aboard" is [ShipCrew]'s live carry-state test, never the stored worldAABB,
+     * which this manager has already caught being seconds stale.
      */
     private fun pickTarget(level: ServerLevel, pirate: LoadedServerShip, preferredId: Long?): Long {
         val range = EurekaConfig.SERVER.pirateCannonEngageRange
@@ -205,11 +210,10 @@ object PirateGunnery {
             if (candidate.id in own) return null
             if (candidate.chunkClaimDimension != level.dimensionId) return null
             if (PirateShips.isPirate(candidate.id)) return null
-            // Range to the PEOPLE, not between hull centres. Two big ships fighting alongside can have
-            // sixty blocks between their centres while their rails are ten apart -- centre-to-centre had
-            // the guns declaring an enemy out of range that was close enough to board.
-            val nearest = playersAboard(level, candidate).minOfOrNull { it.position().distanceToSqr(centre) }
-                ?: return null
+            // A crew makes a hull worth shooting at; the HULL is what the range is then measured to. Where
+            // those people are standing on it is no business of the range gate -- see [hullDistanceSq].
+            if (playersAboard(level, candidate).isEmpty()) return null
+            val nearest = hullDistanceSq(candidate, centre) ?: return null
             return if (nearest <= rangeSq) nearest else null
         }
 
@@ -224,8 +228,7 @@ object PirateGunnery {
             if (leader != null && leader.id !in own && !PirateShips.isPirate(leader.id) &&
                 leader.chunkClaimDimension == level.dimensionId
             ) {
-                val distSq = playersAboard(level, leader).minOfOrNull { it.position().distanceToSqr(centre) }
-                    ?: shipCentre(leader)?.distanceToSqr(centre)
+                val distSq = hullDistanceSq(leader, centre) ?: shipCentre(leader)?.distanceToSqr(centre)
                 if (distSq != null && distSq <= rangeSq) return id
             }
         }
@@ -243,14 +246,88 @@ object PirateGunnery {
     }
 
     /**
-     * Where to lay the guns: the aboard player nearest this pirate -- the deck is where the fight is --
-     * and failing that the hull itself, so a quarry whose captain has stepped off is still shot at
-     * rather than quietly forgiven.
+     * Where THIS gun lays: the piece of enemy hull its own bore can reach. Per gun, not once per broadside.
+     *
+     * The guns used to aim at the enemy CAPTAIN, which is a fine idea until the enemy is a hundred blocks
+     * long. A gun answers only within [EurekaConfig.Server.pirateCannonBearingToleranceDegrees] of its bore
+     * ([CannonSolver.solveForGun]'s bearing gate), so a captain walking from stern to bow swung the aim
+     * point through most of a right angle and the whole broadside lost its bearing at once -- guns falling
+     * silent for no reason visible from either deck, and speaking again when they walked back. Cannons
+     * shoot SHIPS; where the crew happen to be standing only decides WHICH ship (see [pickTarget]).
+     *
+     * So each gun is asked the geometric question instead: of every point in the enemy's hull box, which
+     * lies closest to my bore line? Answered in the TARGET's ship space, where its box is axis-aligned and
+     * the closest point is a clamp -- alternating clamp-to-box and project-onto-bore, because each of those
+     * two answers depends on the other, which is the standard convex alternation and settles in two passes
+     * at these scales. A bore that passes through the hull converges to a point inside it and the ball
+     * strikes the near face on its way; a bore that misses converges on the nearest planking to the line,
+     * and the bearing gate is then free to decide that is no shot at all.
      */
-    private fun aimPoint(level: ServerLevel, pirate: LoadedServerShip, target: LoadedServerShip): Vec3? {
-        val centre = shipCentre(pirate) ?: return null
-        val nearest = playersAboard(level, target).minByOrNull { it.position().distanceToSqr(centre) }
-        return nearest?.position()?.add(0.0, 0.5, 0.0) ?: shipCentre(target)
+    private fun aimFor(level: ServerLevel, gun: CannonBlockEntity, target: LoadedServerShip): Vec3? {
+        val bore = CannonSolver.boreOf(level, gun) ?: return null
+        val box = target.shipAABB ?: return null
+
+        val origin = Vector3d(bore.muzzle.x, bore.muzzle.y, bore.muzzle.z)
+        target.worldToShip.transformPosition(origin)
+        val line = Vector3d(bore.direction.x, 0.0, bore.direction.z)
+        target.worldToShip.transformDirection(line)
+        if (line.lengthSquared() < 1.0e-12) return null
+        line.normalize()
+
+        val minX = box.minX().toDouble()
+        val minY = box.minY().toDouble()
+        val minZ = box.minZ().toDouble()
+        val maxX = box.maxX() + 1.0
+        val maxY = box.maxY() + 1.0
+        val maxZ = box.maxZ() + 1.0
+
+        val point = Vector3d(origin)
+        repeat(AIM_PASSES) {
+            // Clamp to the hull: the nearest planking to wherever we last were.
+            point.set(
+                point.x.coerceIn(minX, maxX),
+                point.y.coerceIn(minY, maxY),
+                point.z.coerceIn(minZ, maxZ)
+            )
+            // Project back onto the bore, forwards only -- a gun has no interest in what is behind it.
+            val along = (
+                (point.x - origin.x) * line.x +
+                    (point.y - origin.y) * line.y +
+                    (point.z - origin.z) * line.z
+                ).coerceAtLeast(0.0)
+            point.set(origin.x + line.x * along, origin.y + line.y * along, origin.z + line.z * along)
+        }
+        point.set(
+            point.x.coerceIn(minX, maxX),
+            point.y.coerceIn(minY, maxY),
+            point.z.coerceIn(minZ, maxZ)
+        )
+
+        target.shipToWorld.transformPosition(point)
+        return Vec3(point.x, point.y, point.z)
+    }
+
+    /**
+     * Distance squared from [from] to the nearest point of [ship]'s hull -- the range a gunner would call
+     * out, which is neither of the two this has already been written as.
+     *
+     * Centre to centre was first, and had the guns declaring an enemy out of range whose rails were ten
+     * blocks from their own. Centre to the PEOPLE aboard it was second, which fixed that and quietly
+     * introduced the bug this replaces: on a long ship the range then depended on where the captain was
+     * standing, so walking the deck moved the enemy in and out of reach. The hull is the thing being shot
+     * at, so the hull is the thing measured -- by the same clamp into ship space [aimFor] lays by.
+     */
+    private fun hullDistanceSq(ship: LoadedServerShip, from: Vec3): Double? {
+        val box = ship.shipAABB ?: return null
+        val local = Vector3d(from.x, from.y, from.z)
+        ship.worldToShip.transformPosition(local)
+        local.set(
+            local.x.coerceIn(box.minX().toDouble(), box.maxX() + 1.0),
+            local.y.coerceIn(box.minY().toDouble(), box.maxY() + 1.0),
+            local.z.coerceIn(box.minZ().toDouble(), box.maxZ() + 1.0)
+        )
+        ship.shipToWorld.transformPosition(local)
+        return local.distanceSquared(from.x, from.y, from.z)
     }
 
     /**
@@ -332,6 +409,9 @@ object PirateGunnery {
 
     /** VS2's per-face influence default, mirrored server-side -- the same margin the chase wakes on. */
     private const val INFLUENCE_MARGIN = 2.0
+
+    /** Clamp-and-project passes in [aimFor]. Two settle this geometry; a third moves the point by microns. */
+    private const val AIM_PASSES = 2
 
     /**
      * The best affordable arc from [gun] to [target], or null when no measure in the magazine carries

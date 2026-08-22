@@ -1,9 +1,11 @@
 package org.valkyrienskies.eureka.cannon
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.phys.Vec3
+import org.joml.Matrix4dc
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
@@ -48,6 +50,63 @@ object CannonSolver {
 
     /** One solved arc, in world terms: pitch above the horizon, muzzle speed, and the flight time. */
     class Solution(val pitchDegrees: Double, val speed: Double, val flightTicks: Int)
+
+    /**
+     * One gun's mounting, resolved into world space: where the ball leaves at any elevation, and the level
+     * azimuth the bore points along.
+     *
+     * Both are carried out of shipyard space by the SHIP TRANSFORM rather than by rotating a direction by
+     * hand -- the same rule [CannonFire] fires by, so the solver, the shot and anything asking where a gun
+     * is looking all agree by construction.
+     */
+    class Bore internal constructor(
+        val rear: BlockPos,
+        private val facing: Direction,
+        private val shipToWorld: Matrix4dc?
+    ) {
+        /** The muzzle at [pitchRadians] of elevation -- it rides the trunnion arc, so the lay MOVES it. */
+        fun muzzleAt(pitchRadians: Double): Vec3 {
+            val along = cos(pitchRadians)
+            val up = sin(pitchRadians)
+            val forward = CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH * along
+            val height = CannonFire.TRUNNION_HEIGHT + CannonFire.BORE_LENGTH * up
+            return world(
+                rear.x + 0.5 + facing.stepX * forward,
+                rear.y + 0.5 + height,
+                rear.z + 0.5 + facing.stepZ * forward
+            )
+        }
+
+        /** The level-barrel muzzle: where a flat shot starts, and the origin every bearing is taken from. */
+        val muzzle: Vec3 = muzzleAt(0.0)
+
+        /** The bore's level azimuth, unit length -- or zero for a degenerate mounting, which [boreOf] rejects. */
+        val direction: Vec3 = run {
+            val ahead = world(
+                rear.x + 0.5 + facing.stepX * (CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH + 1.0),
+                rear.y + 0.5 + CannonFire.TRUNNION_HEIGHT,
+                rear.z + 0.5 + facing.stepZ * (CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH + 1.0)
+            )
+            val flat = Vec3(ahead.x - muzzle.x, 0.0, ahead.z - muzzle.z)
+            val length = flat.length()
+            if (length < 1.0e-6) Vec3.ZERO else flat.scale(1.0 / length)
+        }
+
+        private fun world(x: Double, y: Double, z: Double): Vec3 {
+            val point = Vector3d(x, y, z)
+            shipToWorld?.transformPosition(point)
+            return Vec3(point.x, point.y, point.z)
+        }
+    }
+
+    /** The mounting of [gun], or null if that block is not a cannon pointing anywhere. */
+    fun boreOf(level: ServerLevel, gun: CannonBlockEntity): Bore? {
+        val state = gun.blockState
+        if (!state.hasProperty(HORIZONTAL_FACING)) return null
+        val rear = gun.blockPos
+        val bore = Bore(rear, state.getValue(HORIZONTAL_FACING), level.getLoadedShipManagingPos(rear)?.shipToWorld)
+        return if (bore.direction.lengthSqr() < 1.0e-12) null else bore
+    }
 
     /** [Solution] plus the gun geometry the shot needs: the true muzzle and the bore's level azimuth. */
     class GunSolution(
@@ -106,42 +165,9 @@ object CannonSolver {
         maxSpeed: Double,
         bearingToleranceDegrees: Double
     ): GunSolution? {
-        val state = gun.blockState
-        if (!state.hasProperty(HORIZONTAL_FACING)) return null
-        val facing = state.getValue(HORIZONTAL_FACING)
-        val rear = gun.blockPos
-        val ship = level.getLoadedShipManagingPos(rear)
-
-        // The bore's level azimuth, by the same two-point transform CannonFire fires with: never rotate
-        // a direction by hand when the transform that placed the muzzle can carry both ends of a segment.
-        fun muzzleAt(pitchRadians: Double): Vec3 {
-            val along = cos(pitchRadians)
-            val up = sin(pitchRadians)
-            val forward = CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH * along
-            val height = CannonFire.TRUNNION_HEIGHT + CannonFire.BORE_LENGTH * up
-            val shipyard = Vector3d(
-                rear.x + 0.5 + facing.stepX * forward,
-                rear.y + 0.5 + height,
-                rear.z + 0.5 + facing.stepZ * forward
-            )
-            val world = ship?.shipToWorld?.transformPosition(shipyard) ?: shipyard
-            return Vec3(world.x, world.y, world.z)
-        }
-
-        val muzzleLevel = muzzleAt(0.0)
-        val aheadLevel = run {
-            val shipyard = Vector3d(
-                rear.x + 0.5 + facing.stepX * (CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH + 1.0),
-                rear.y + 0.5 + CannonFire.TRUNNION_HEIGHT,
-                rear.z + 0.5 + facing.stepZ * (CannonFire.TRUNNION_FORWARD + CannonFire.BORE_LENGTH + 1.0)
-            )
-            val world = ship?.shipToWorld?.transformPosition(shipyard) ?: shipyard
-            Vec3(world.x, world.y, world.z)
-        }
-        val azimuth = Vec3(aheadLevel.x - muzzleLevel.x, 0.0, aheadLevel.z - muzzleLevel.z)
-        val azimuthLength = azimuth.length()
-        if (azimuthLength < 1.0e-6) return null
-        val bore = azimuth.scale(1.0 / azimuthLength)
+        val mounting = boreOf(level, gun) ?: return null
+        val muzzleLevel = mounting.muzzle
+        val bore = mounting.direction
 
         // Bearing gate: the ship aims the gun, this only reports whether she has.
         val toTargetFlat = Vec3(target.x - muzzleLevel.x, 0.0, target.z - muzzleLevel.z)
@@ -152,12 +178,12 @@ object CannonSolver {
 
         // Pass one from the level-barrel muzzle, pass two from the muzzle the solved pitch implies.
         val first = solve(drag, gravity, range, target.y - muzzleLevel.y, maxSpeed) ?: return null
-        val muzzle = muzzleAt(Math.toRadians(first.pitchDegrees))
+        val muzzle = mounting.muzzleAt(Math.toRadians(first.pitchDegrees))
         val refinedRange = sqrt(
             (target.x - muzzle.x) * (target.x - muzzle.x) + (target.z - muzzle.z) * (target.z - muzzle.z)
         )
         val refined = solve(drag, gravity, refinedRange, target.y - muzzle.y, maxSpeed) ?: first
-        return GunSolution(rear, refined.pitchDegrees, refined.speed, refined.flightTicks, muzzle, bore)
+        return GunSolution(mounting.rear, refined.pitchDegrees, refined.speed, refined.flightTicks, muzzle, bore)
     }
 
     private fun pow(base: Double, n: Int): Double {
