@@ -1245,12 +1245,50 @@ object PirateShips {
     }
 
     /** Every live zone in [level], for the debug wireframe and nothing else. */
-    /** Every live zone in [level], for the debug wireframe and nothing else. */
+    /**
+     * Every zone in this dimension: the live ones from their wheels, and the sleeping ones from the store.
+     *
+     * The store half is not a nicety. A wheel only REPORTS while its block entity ticks, which happens only
+     * inside a player's simulation distance -- so a zone built solely from reports vanishes the moment you
+     * are far enough away, and a big hull's zone is drawn at four times its half-diagonal, which for a large
+     * ship is FURTHER OUT THAN SIMULATION DISTANCE. The ring for a sloop therefore lived comfortably inside
+     * the reporting range and the ring for a hundred-block raider did not: it disappeared as you backed off
+     * and reappeared as you closed, while the same ring drawn around an already-ASSEMBLED pirate stayed put
+     * at any distance -- because an assembled ship's chunks are kept active and her wheel never stops
+     * reporting. That difference is the whole bug, and it is why it looked like the sloops were fine.
+     *
+     * A dormant site cannot move (it is a structure in the world, not a ship), so the berth's own record --
+     * the wheel position it was adopted at, and the template's measurements -- draws exactly the same circle
+     * the wheel would have. Note this only fixes the DRAWING: waking still needs the wheel to be ticking,
+     * so the outer reaches of a very large ring are still drawn further than she can notice you from.
+     */
     fun zones(level: ServerLevel): List<Zone> {
         val now = level.gameTime
-        return reports.mapNotNull { (berthId, report) ->
-            if (now - report.lastSeen > STALE_TICKS) null else zoneOf(level, berthId, report)
+        val out = ArrayList<Zone>()
+        val live = HashSet<Long>()
+
+        for ((berthId, report) in reports) {
+            if (now - report.lastSeen > STALE_TICKS) continue
+            zoneOf(level, berthId, report)?.let {
+                out.add(it)
+                live.add(berthId)
+            }
         }
+
+        for ((berthId, berth) in PirateStore.get(level).allBerths) {
+            if (berthId in live) continue
+            if (berth.state != PirateStore.BERTHED) continue
+            out.add(dormantZone(berthId, berth))
+        }
+        return out
+    }
+
+    /** A sleeping site's ring, drawn from its papers rather than from a wheel that is not ticking. */
+    private fun dormantZone(berthId: Long, berth: PirateStore.Berth): Zone {
+        val pos = BlockPos.of(berthId)
+        val halfDiag = sqrt((berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()) * 0.5
+        val radius = max(EurekaConfig.SERVER.pirateZoneMinRadius, halfDiag * EurekaConfig.SERVER.pirateZoneScale)
+        return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, radius, ZoneState.DORMANT)
     }
 
     /**
