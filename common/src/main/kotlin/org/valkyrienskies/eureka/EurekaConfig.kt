@@ -1417,6 +1417,62 @@ object EurekaConfig {
                 "point the gyro rights it and the wheel answers again. Default 45."
         )
         var damageFreefallBelow = 45
+
+        // A pirate hull answers to its own set of the same five numbers, because a pirate ship is a PRIZE:
+        // the whole reason to shoot one is to take it, so the line where she stops answering her wheel is
+        // the line where a boarding party can reach her -- not the line where a captain's own ship would
+        // give up. Which set applies is decided by the WHEEL aboard, never by who is standing at it. A
+        // pirate-marked helm makes the hull a pirate; breaking that wheel is what conquering one means,
+        // and from that moment the prize sails under the player numbers above, repairs and all.
+
+        @JsonSchema(
+            description = "Whether pirate ships answer to their own damage thresholds (the pirateDamage* " +
+                "keys below) rather than the player-ship ones above. Off, one set of numbers governs every " +
+                "hull afloat. Default true."
+        )
+        var pirateDamageOwnThresholds = true
+
+        @JsonSchema(
+            description = "Pirate-ship integrity at which damage starts to cost speed. Default 100 -- a " +
+                "raider pays for her damage from the first plank, so a broadside tells on her at once."
+        )
+        var pirateDamageSpeedLossStart = 100
+
+        @JsonSchema(
+            description = "Pirate-ship integrity at which the speed loss reaches its full " +
+                "pirateDamageSpeedLossMaxPercent. Default 60, the freefall line: she is at her slowest " +
+                "right up to the moment she stops answering at all."
+        )
+        var pirateDamageSpeedLossFull = 60
+
+        @JsonSchema(
+            description = "The most speed a damaged pirate ship can lose, as a percent of her top speed. " +
+                "Default 50."
+        )
+        var pirateDamageSpeedLossMaxPercent = 50
+
+        @JsonSchema(
+            description = "Pirate-ship integrity at which she starts to settle. Default 95."
+        )
+        var pirateDamageSinkStart = 95
+
+        @JsonSchema(
+            description = "Pirate-ship integrity at which the settle rate reaches its full " +
+                "pirateDamageSinkMaxMetersPerSecond. Default 60."
+        )
+        var pirateDamageSinkFull = 60
+
+        @JsonSchema(
+            description = "The fastest a damaged pirate ship settles, in m/s. Default 2.5."
+        )
+        var pirateDamageSinkMaxMetersPerSecond = 2.5
+
+        @JsonSchema(
+            description = "Below this integrity a pirate ship goes ungoverned and ragdolls -- which is what " +
+                "conquering one by gunfire means. Default 65: a player's ship must be shot to 45 before " +
+                "she is anyone's, a raider only to 65, so a prize can be taken before she is scrap."
+        )
+        var pirateDamageFreefallBelow = 65
         // endregion
 
         // region Helm-less foundering

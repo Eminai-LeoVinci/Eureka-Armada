@@ -276,7 +276,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     // boat honestly reads no loss -- it has nowhere lower to go. All zero on a sound ship, which is what
     // hides the suffixes. See ShipIntegrity.
     val damageSpeedLossPercent: Int get() = control?.let {
-        ((1.0 - ShipIntegrity.speedMultiplier(ShipIntegrity.integrityPercent(it))) * 100).roundToInt()
+        ((1.0 - ShipIntegrity.speedMultiplier(ShipIntegrity.integrityPercent(it), it.pirateHelms > 0)) * 100).roundToInt()
     } ?: 0
     val damageSinkTenths: Int get() = ((control?.damageSinkApplied ?: 0.0) * 10).roundToInt()
     val damageBlocksLost: Int get() = control?.let {
@@ -915,6 +915,15 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // stands (a ship damaged before the update owns that damage). Assembly stamps blocksCounted,
             // so this is a no-op for everything assembled since. See ShipIntegrity.census.
             if (!curControl.blocksCounted) ShipIntegrity.census(sLevel, curShip, curControl)
+            // The same one-time bridge for the pirate damage band, which the count above is read against:
+            // a raider already afloat when this shipped has a zero in a field that did not exist when she
+            // was assembled, and would answer to the player thresholds until she next assembled. A marked
+            // wheel that finds the count at zero seeds it. Idempotent by the zero test, and self-healing:
+            // the delta on a broken wheel can only take it back to zero, where a surviving marked wheel
+            // puts it back the next tick.
+            if (blockState.getValue(EurekaProperties.MARK) != HelmMark.NORMAL && curControl.pirateHelms <= 0) {
+                curControl.pirateHelms = 1
+            }
             // ~36 fluid reads per helm per sample, so only every 4th tick, staggered by block position so a
             // fleet of helms doesn't all sample on the same one. The hysteresis downstream (wet on contact,
             // dry only on a full clear -- see EurekaShipControl) absorbs a verdict up to 0.2s stale.
@@ -1115,12 +1124,16 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // What a ship is made of, counted the same way however the block set was arrived at. This used to be a
         // side effect of the flood-fill predicate, which welded "which blocks are the ship" to "what are they".
         var pirateWheelAboard = false
+        var pirateHelmCount = 0
         fun tally(state: BlockState) {
             blockCount++
             when (state.block) {
                 is ShipHelmBlock -> {
                     helmCount++
-                    if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) pirateWheelAboard = true
+                    if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) {
+                        pirateWheelAboard = true
+                        pirateHelmCount++
+                    }
                 }
                 is BalloonBlock -> balloonCount++
                 // Floater buoyancy scales with 15 - redstone power, matching FloaterBlock.onPlace.
@@ -1289,6 +1302,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // Set helms (>= 1 for any real ship) first so the deleteIfEmpty() in the
             // remaining setters can't drop the attachment mid-update when a count is 0.
             control.helms = helmCount
+            // Which set of damage thresholds this hull answers to, decided by her wheel. See ShipIntegrity.
+            control.pirateHelms = pirateHelmCount
             control.balloons = balloonCount
             control.floaters = floaterCount
             control.anchors = anchorCount

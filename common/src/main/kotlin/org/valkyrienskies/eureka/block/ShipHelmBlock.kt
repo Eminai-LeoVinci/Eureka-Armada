@@ -72,7 +72,11 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         if (oldState.block == this) return
 
         val ship = level.getLoadedShipManagingPos(pos) ?: return
-        EurekaShipControl.getOrCreate(ship).helms += 1
+        val control = EurekaShipControl.getOrCreate(ship)
+        control.helms += 1
+        // A marked wheel makes the hull a raider, which is all the damage repercussions need to know to
+        // pick her thresholds. Counted here rather than looked up, because the physics thread reads it.
+        if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) control.pirateHelms += 1
     }
 
     override fun affectNeighborsAfterRemoval(state: BlockState, level: ServerLevel, pos: BlockPos, isMoving: Boolean) {
@@ -81,7 +85,8 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
         // A pirate-marked wheel vanishing MIGHT be the conquest -- or just assembly relocating the block.
         // The manager owns telling those apart (the relocated wheel reports back within a tick or two; a
         // broken one never does), so this only reports the disappearance.
-        if (state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL) {
+        val wasMarked = state.getValue(EurekaProperties.MARK) != HelmMark.NORMAL
+        if (wasMarked) {
             PirateShips.helmVanished(level, pos)
         }
 
@@ -93,6 +98,9 @@ class ShipHelmBlock(properties: Properties, val woodType: IWoodType) : BaseEntit
             }
 
             control.helms -= 1
+            // The moment a raider's wheel breaks she stops being a raider, which is exactly the moment a
+            // conquest happens -- the prize is on the player thresholds from here, repairs and all.
+            if (wasMarked) control.pirateHelms = (control.pirateHelms - 1).coerceAtLeast(0)
         }
     }
 

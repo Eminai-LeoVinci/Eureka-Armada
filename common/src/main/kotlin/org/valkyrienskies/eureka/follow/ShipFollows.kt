@@ -104,7 +104,7 @@ object ShipFollows {
         // in freefall. Either way the ship ahead is falling, and a follower that kept station would follow
         // it faithfully into the ground or the seabed -- pursuit is for ships that are going somewhere.
         val leaderControl = leader.getAttachment(EurekaShipControl::class.java)
-        if (leaderControl == null || ShipIntegrity.freefall(ShipIntegrity.integrityPercent(leaderControl))) {
+        if (leaderControl == null || ShipIntegrity.freefall(leaderControl)) {
             breakOff(level, ship, follower, "Breaking off -- the leader is going down.")
             return
         }

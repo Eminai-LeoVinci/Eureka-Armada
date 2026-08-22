@@ -40,6 +40,13 @@ import org.valkyrienskies.mod.common.getLoadedShipManagingPos
  *    hull ragdolls exactly as if every helm aboard were broken. Repair her back over the line and the gyro
  *    rights her and the wheel answers again.
  *
+ * ## Two sets of thresholds, chosen by the wheel
+ * Every number above comes in a player set and a pirate set ([band]). A pirate ship is a prize rather than
+ * an opponent: she is meant to be shot until a boarding party can take her, not until she is scrap, so she
+ * goes ungoverned far earlier and starts losing speed from her first lost plank. A hull is a pirate exactly
+ * while a pirate-marked helm stands aboard it, which means the act of conquering one -- breaking that wheel
+ * -- is the same act that puts the prize on the player numbers for the rest of her life.
+ *
  * ## Ships from before this existed
  * An attachment that has never had its count established ([EurekaShipControl.blocksCounted] false) reads
  * 100% -- "unknown" must never mean "everything is gone", or a world of old ships would fall out of the sky
@@ -85,13 +92,49 @@ object ShipIntegrity {
         control.blocksCounted = true
     }
 
+    /**
+     * The five numbers one hull answers to. Two sets exist and a ship reads exactly one of them.
+     *
+     * A pirate ship is a PRIZE -- the reason to shoot one is to take it -- so she is beaten well before a
+     * player's ship would be, and pays for her damage from the first plank. Which set applies is decided
+     * by the WHEEL: [EurekaShipControl.pirateHelms] counts the pirate-marked helms aboard, so conquering
+     * a raider (breaking her wheel) is the same gesture that hands her the player numbers, repairs and all.
+     */
+    private class Band(
+        val speedStart: Int,
+        val speedFull: Int,
+        val speedMaxLoss: Int,
+        val sinkStart: Int,
+        val sinkFull: Int,
+        val sinkMax: Double,
+        val freefallBelow: Int
+    )
+
+    private fun band(pirate: Boolean): Band {
+        val cfg = EurekaConfig.SERVER
+        return if (pirate && cfg.pirateDamageOwnThresholds) {
+            Band(
+                cfg.pirateDamageSpeedLossStart, cfg.pirateDamageSpeedLossFull,
+                cfg.pirateDamageSpeedLossMaxPercent, cfg.pirateDamageSinkStart, cfg.pirateDamageSinkFull,
+                cfg.pirateDamageSinkMaxMetersPerSecond, cfg.pirateDamageFreefallBelow
+            )
+        } else {
+            Band(
+                cfg.damageSpeedLossStart, cfg.damageSpeedLossFull,
+                cfg.damageSpeedLossMaxPercent, cfg.damageSinkStart, cfg.damageSinkFull,
+                cfg.damageSinkMaxMetersPerSecond, cfg.damageFreefallBelow
+            )
+        }
+    }
+
     /** What is left of the ship's speed, 0.5..1.0 at the default config. */
-    fun speedMultiplier(integrity: Int): Double {
+    fun speedMultiplier(integrity: Int, pirate: Boolean = false): Double {
         val cfg = EurekaConfig.SERVER
         if (!cfg.shipDamageRepercussions) return 1.0
-        val start = cfg.damageSpeedLossStart.coerceIn(1, 100)
-        val full = cfg.damageSpeedLossFull.coerceIn(0, start - 1)
-        val maxLoss = cfg.damageSpeedLossMaxPercent.coerceIn(0, 99) / 100.0
+        val band = band(pirate)
+        val start = band.speedStart.coerceIn(1, 100)
+        val full = band.speedFull.coerceIn(0, start - 1)
+        val maxLoss = band.speedMaxLoss.coerceIn(0, 99) / 100.0
         if (integrity >= start) return 1.0
         if (integrity <= full) return 1.0 - maxLoss
         return 1.0 - maxLoss * (start - integrity).toDouble() / (start - full).toDouble()
@@ -105,23 +148,28 @@ object ShipIntegrity {
      * which a ship fell to how far apart two config numbers happened to be; a captain setting the start and
      * the cap should get exactly those, with the ramp fitted between them.
      */
-    fun sinkRate(integrity: Int): Double {
+    fun sinkRate(integrity: Int, pirate: Boolean = false): Double {
         val cfg = EurekaConfig.SERVER
         if (!cfg.shipDamageRepercussions) return 0.0
-        val start = cfg.damageSinkStart.coerceIn(1, 100)
-        val full = cfg.damageSinkFull.coerceIn(0, start - 1)
-        val maxRate = cfg.damageSinkMaxMetersPerSecond.coerceAtLeast(0.0)
+        val band = band(pirate)
+        val start = band.sinkStart.coerceIn(1, 100)
+        val full = band.sinkFull.coerceIn(0, start - 1)
+        val maxRate = band.sinkMax.coerceAtLeast(0.0)
         if (integrity >= start) return 0.0
         if (integrity <= full) return maxRate
         return maxRate * (start - integrity).toDouble() / (start - full).toDouble()
     }
 
     /** Whether the hull is too far gone to answer its helm at all. */
-    fun freefall(integrity: Int): Boolean {
+    fun freefall(integrity: Int, pirate: Boolean = false): Boolean {
         val cfg = EurekaConfig.SERVER
         if (!cfg.shipDamageRepercussions) return false
-        return integrity < cfg.damageFreefallBelow.coerceIn(0, 100)
+        return integrity < band(pirate).freefallBelow.coerceIn(0, 100)
     }
+
+    /** The same question asked of a whole ship: is this hull ungoverned right now? */
+    fun freefall(control: EurekaShipControl): Boolean =
+        freefall(integrityPercent(control), control.pirateHelms > 0)
 
     /**
      * One block changed somewhere in the world; if it was aboard a ship, keep her count honest.

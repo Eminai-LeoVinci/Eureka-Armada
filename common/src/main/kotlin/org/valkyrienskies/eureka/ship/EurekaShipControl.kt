@@ -544,7 +544,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // and fluid drag. Everything is behind this return, so recovery is free too -- repair her back over
         // the line and the very next tick stabilizes and answers the wheel. See ShipIntegrity.
         damageIntegrity = ShipIntegrity.integrityPercent(this)
-        if (helms < 1 || ShipIntegrity.freefall(damageIntegrity)) {
+        if (helms < 1 || ShipIntegrity.freefall(damageIntegrity, pirateHelms > 0)) {
             // Enable fluid drag if all the helms have been destroyed
             physShip.doFluidDrag = true
             // The foundering. A helm-less hull is dying, not parked: buoyancy goes to NEUTRAL immediately
@@ -727,8 +727,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // (a welded child never reaches this line; pooling child integrity is future work), and published
         // so the helm's readouts report what was actually applied rather than a recomputation.
         val damageSink = when {
-            activeProfile == ControlProfile.AIRSHIP -> ShipIntegrity.sinkRate(damageIntegrity)
-            stillInWater -> ShipIntegrity.sinkRate(damageIntegrity)
+            activeProfile == ControlProfile.AIRSHIP -> ShipIntegrity.sinkRate(damageIntegrity, pirateHelms > 0)
+            stillInWater -> ShipIntegrity.sinkRate(damageIntegrity, pirateHelms > 0)
             else -> 0.0
         }
         damageSinkApplied = damageSink
@@ -1383,7 +1383,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // throttle through this multiplier IS the damaged ceiling; asking for more simply means full power,
         // exactly as the clamp comment in setCruiseValueMenu promises. Integrity was published by physTick
         // at the head of this same physics tick.
-        speed *= ShipIntegrity.speedMultiplier(damageIntegrity)
+        speed *= ShipIntegrity.speedMultiplier(damageIntegrity, pirateHelms > 0)
 
         // Drag trim: integrate the shortfall between the speed being asked for and the speed actually
         // being made, so the ship converges on the former instead of stalling out below it (see
@@ -1556,6 +1556,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         set(v) {
             field = v; deleteIfEmpty()
         }
+
+    // How many of those helms are pirate-marked wheels. Nonzero means this hull is a raider, which is the
+    // only thing the damage repercussions need to know to pick her thresholds (ShipIntegrity.band) -- and
+    // it answers on the PHYSICS thread, which is why the question is a counted field here rather than a
+    // lookup in the pirate manager's game-thread maps. Counted exactly as `helms` is: at assembly, and one
+    // step per wheel placed or broken. No deleteIfEmpty -- zero is the normal state of nearly every ship.
+    // Conquest keeps itself honest for free: breaking the marked wheel is what takes the ship, and the
+    // same break drops this to zero, so the prize sails under the player numbers from that tick on.
+    @Volatile
+    var pirateHelms = 0
 
     @Volatile
     var floaters = 0 // Amount of floaters * 15
