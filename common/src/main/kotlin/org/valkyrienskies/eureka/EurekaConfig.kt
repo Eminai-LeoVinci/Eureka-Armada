@@ -1473,6 +1473,16 @@ object EurekaConfig {
                 "she is anyone's, a raider only to 65, so a prize can be taken before she is scrap."
         )
         var pirateDamageFreefallBelow = 65
+
+        @JsonSchema(
+            description = "Below this integrity a pirate ship's wheel BREAKS ITSELF, which is the same " +
+                "thing as being conquered by gunfire: the hull founders, comes apart where it lies, and " +
+                "hands its berth back to the regeneration clock. Without it a raider shot to pieces at sea " +
+                "simply drifts -- ungoverned, still assembled, waiting forever for a wheel nobody is coming " +
+                "to break. Default 60, five points below pirateDamageFreefallBelow, so she goes ungoverned " +
+                "first and is visibly dying before she gives up. 0 disables it."
+        )
+        var pirateHelmBreaksBelow = 60
         // endregion
 
         // region Helm-less foundering

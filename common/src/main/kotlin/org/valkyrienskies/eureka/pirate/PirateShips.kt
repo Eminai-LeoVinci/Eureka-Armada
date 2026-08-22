@@ -629,6 +629,9 @@ object PirateShips {
                 continue
             }
 
+            // Shot to pieces: her wheel gives out, and that is the same event as a boarder breaking it.
+            if (fresh && report != null && shootDownWheel(level, report, control)) continue
+
             if (chase.standingDown) {
                 // Never take the deck out from under a player -- the boarding fight IS the feature, and
                 // disassembly under someone's feet is the fall-through case. Wait them out.
@@ -1052,6 +1055,37 @@ object PirateShips {
     }
 
     /** A line for everyone near a POINT -- the crew messages, where there may be no ship to speak from. */
+    /**
+     * A raider shot below [EurekaConfig.Server.pirateHelmBreaksBelow] breaks her own wheel. Returns whether
+     * she did, in which case this tick is over for her.
+     *
+     * Conquest was only ever written one way -- somebody boards and breaks the wheel -- and that left a hole
+     * the moment gunnery could beat a ship without anyone setting foot on her. A raider shot to pieces at
+     * sea went ungoverned, ragdolled, and then simply DRIFTED: still assembled, still holding a berth, still
+     * costing physics, waiting forever for a boarder who had no reason to come. Letting the hull finish
+     * herself closes it. Everything downstream is the machinery that already exists -- the wheel vanishing
+     * is reported by [ShipHelmBlock.affectNeighborsAfterRemoval] exactly as a pickaxe's break is, the
+     * manager sees no report come back, the conquest lands, the hull founders and comes apart where it
+     * lies, and the berth starts its regeneration clock.
+     *
+     * No drops. A wheel that failed with the ship is wreckage, not salvage; a boarder who wants the helm
+     * itself can still take it the old way, by breaking it before her hull gives out.
+     */
+    private fun shootDownWheel(level: ServerLevel, report: Report, control: EurekaShipControl): Boolean {
+        val threshold = EurekaConfig.SERVER.pirateHelmBreaksBelow
+        if (threshold <= 0) return false
+        if (ShipIntegrity.integrityPercent(control) >= threshold.coerceIn(1, 100)) return false
+
+        val pos = report.helmPos
+        if (!PirateHelm.gated(level.getBlockState(pos))) return false
+
+        val centre = helmWorldCentre(level, pos)
+        level.destroyBlock(pos, false)
+        tellAround(level, centre, "The pirate ship is beaten -- her wheel has given out!")
+        logger.info("[pirates] berth {} shot down at {}% integrity", report.helmPos, ShipIntegrity.integrityPercent(control))
+        return true
+    }
+
     private fun tellAround(level: ServerLevel, centre: Vector3d, message: String) {
         for (player in level.players()) {
             if (!player.isAlive || player.isSpectator) continue
