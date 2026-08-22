@@ -107,6 +107,20 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
     var powderC: ItemStack = ItemStack.EMPTY
     var shot: ItemStack = ItemStack.EMPTY
 
+    /**
+     * A raider's gun, not a shipwright's: this cannon came aboard with a pirate hull.
+     *
+     * Stamped once when the site is adopted (PirateShips.adopt), persisted, and never cleared -- which is
+     * the point. A pirate's guns are furniture of the fight, not salvage: they give nothing when broken,
+     * no gun and no magazine, so the sixty cannons of a conquered prize cannot be mined into sixty cannons
+     * in a chest. Cannons are earned from the loot tables and nowhere else.
+     *
+     * It says nothing about who is FIRING her. Bottomless ammunition belongs to the raiders' gunnery
+     * (pirateCannonInfiniteAmmo), so a prize taken and sailed away answers her new captain on real powder
+     * and real shot -- she simply can never be sold for parts.
+     */
+    var pirate: Boolean = false
+
     /** Every measure of powder aboard this gun, across all three slots. */
     val powderCount: Int get() = powderA.count + powderB.count + powderC.count
 
@@ -165,6 +179,7 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         if (!shot.isEmpty) output.store("Shot", ItemStack.CODEC, shot)
         output.putLong("ReadyAt", readyAt)
         output.putInt("PowderCharge", powderChargeOrdinal)
+        if (pirate) output.putBoolean("Pirate", true)
     }
 
     override fun loadAdditional(input: ValueInput) {
@@ -175,6 +190,7 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
         shot = input.read("Shot", ItemStack.CODEC).orElse(ItemStack.EMPTY)
         readyAt = input.getLongOr("ReadyAt", 0L)
         powderChargeOrdinal = input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal)
+        pirate = input.getBooleanOr("Pirate", false)
     }
 
     /**

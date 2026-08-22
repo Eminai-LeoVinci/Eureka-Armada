@@ -21,6 +21,7 @@ import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.follow.ShipFollows
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipIntegrity
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.eureka.util.WeightedNames
 import org.valkyrienskies.mod.common.dimensionId
@@ -197,7 +198,21 @@ object PirateShips {
             )
         )
 
-        logger.info("[pirates] adopted berth at {} ({}, {} crew)", pos, templateId, crew.size)
+        // Every gun aboard becomes a raider's gun: bottomless while her crew serve her, and worth nothing to
+        // a salvager ever after. Stamped at the same hook the holds are rolled at, and for the same reason --
+        // jigsaw worldgen runs no code and regeneration places without jigsaw, but every new hull's wheel
+        // adopts on its first loaded tick. Idempotent, the stamp being a boolean.
+        val guns = PirateGuns.stampAll(
+            level,
+            AABB(
+                pos.x - reach, pos.y - rise, pos.z - reach,
+                pos.x + reach, pos.y + rise, pos.z + reach
+            )
+        )
+
+        logger.info(
+            "[pirates] adopted berth at {} ({}, {} crew, {} guns)", pos, templateId, crew.size, guns
+        )
         return berthId
     }
 
@@ -1195,6 +1210,7 @@ object PirateShips {
         return false
     }
 
+    /** Every live zone in [level], for the debug wireframe and nothing else. */
     /** Every live zone in [level], for the debug wireframe and nothing else. */
     fun zones(level: ServerLevel): List<Zone> {
         val now = level.gameTime

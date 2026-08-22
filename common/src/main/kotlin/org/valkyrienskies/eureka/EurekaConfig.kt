@@ -1654,10 +1654,11 @@ object EurekaConfig {
             description = "Pirate guns stop consuming powder and shot. The magazines must still be STOCKED " +
                 "-- an empty gun stays silent, and authored hulls still decide which guns can speak -- but " +
                 "nothing is deducted, so a long fight never runs the batteries dry and boarders find the " +
-                "magazines as full as the author left them. Default false: template stock is finite, spent " +
-                "powder stays spent, and what remains is loot."
+                "magazines as full as the author left them. Default TRUE: a raider is furniture of the " +
+                "fight, not a magazine to be looted -- her crew never run dry, and her guns give nothing at all when " +
+                "broken, so cannons are won from the holds and nowhere else."
         )
-        var pirateCannonInfiniteAmmo = false
+        var pirateCannonInfiniteAmmo = true
 
         @JsonSchema(
             description = "How far out a pirate crew hand OPENS FIRE with a crossbow or bow, in blocks. " +

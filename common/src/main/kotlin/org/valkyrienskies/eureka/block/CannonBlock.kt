@@ -28,6 +28,8 @@ import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.world.level.storage.loot.LootParams
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams
 import net.minecraft.world.level.block.state.StateDefinition
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.material.MapColor
@@ -374,10 +376,32 @@ class CannonBlock : BaseEntityBlock(
         level.playSound(null, rear, SoundEvents.LANTERN_PLACE, SoundSource.BLOCKS, 0.7f, 1.4f)
     }
 
+    /**
+     * A pirate's gun gives nothing.
+     *
+     * Cannons are meant to come from a raider's HOLDS -- the loot tables -- and from nowhere else, which a
+     * conquered prize with sixty guns bolted to her decks would quietly undo: mine the deck, pocket sixty
+     * cannons. So a gun stamped by [CannonBlockEntity.pirate] drops no gun and, in [playerWillDestroy]
+     * below, no magazine either. She still fires, she still repairs, she simply cannot be sold for parts.
+     *
+     * The stamp rides the block entity rather than the blockstate so it survives every relocation a hull
+     * goes through -- assembly, bottling, a template save and place -- by the same route the gun's powder
+     * and shot do.
+     */
+    override fun getDrops(state: BlockState, builder: LootParams.Builder): MutableList<ItemStack> {
+        val be = builder.getOptionalParameter(LootContextParams.BLOCK_ENTITY)
+        if ((be as? CannonBlockEntity)?.pirate == true) return mutableListOf()
+        return super.getDrops(state, builder)
+    }
+
     /** Spill the powder and shot when the gun is broken, like any other container. */
     override fun playerWillDestroy(level: Level, pos: BlockPos, state: BlockState, player: Player): BlockState {
         if (!level.isClientSide && state.getValue(CANNON_PART) == CannonPart.REAR) {
-            (level.getBlockEntity(pos) as? CannonBlockEntity)?.let { Containers.dropContents(level, pos, it) }
+            (level.getBlockEntity(pos) as? CannonBlockEntity)?.let { gun ->
+                // A raider's magazine is scenery, not stock: clearing it here is what makes the spill on
+                // the OTHER half give nothing either, since that path reads the same container.
+                if (gun.pirate) gun.clearContent() else Containers.dropContents(level, pos, gun)
+            }
         }
         return super.playerWillDestroy(level, pos, state, player)
     }
