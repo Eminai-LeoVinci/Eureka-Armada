@@ -1,0 +1,54 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:beds",
+    "#minecraft:shulker_boxes",
+    "minecraft:chest",
+    "minecraft:trapped_chest",
+    "minecraft:ender_chest",
+    "minecraft:barrel",
+    "minecraft:furnace",
+    "minecraft:blast_furnace",
+    "minecraft:smoker",
+    "minecraft:crafting_table",
+    "minecraft:cartography_table",
+    "minecraft:fletching_table",
+    "minecraft:smithing_table",
+    "minecraft:loom",
+    "minecraft:stonecutter",
+    "minecraft:grindstone",
+    "minecraft:brewing_stand",
+    "minecraft:enchanting_table",
+    "minecraft:lectern",
+    "minecraft:composter",
+    "minecraft:jukebox",
+    "minecraft:note_block",
+    "minecraft:dispenser",
+    "minecraft:dropper",
+    "minecraft:hopper",
+    "minecraft:observer",
+    "minecraft:anvil",
+    "minecraft:chipped_anvil",
+    "minecraft:damaged_anvil",
+    "minecraft:cauldron",
+    "minecraft:campfire",
+    "minecraft:soul_campfire",
+    "minecraft:armor_stand",
+    {
+      "id": "minecraft:lodestone",
+      "required": false
+    },
+    {
+      "id": "minecraft:respawn_anchor",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:cannon",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:engine",
+      "required": false
+    }
+  ]
+}

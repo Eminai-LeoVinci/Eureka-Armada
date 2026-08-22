@@ -2,8 +2,10 @@ package org.valkyrienskies.eureka.shipwright
 
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
+import net.minecraft.tags.TagKey
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.item.Item
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
@@ -11,6 +13,7 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.cannon.GunLabels
+import org.valkyrienskies.eureka.template.BillOfMaterials
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -99,7 +102,7 @@ object ShipRepair {
         val match: Float,
         val missing: Map<Item, Int>,
         /** Shipyard positions that need writing, with the state to write. Empty unless [accepted]. */
-        val repairs: List<Pair<BlockPos, BlockState>>
+        val repairs: List<Repair>
     ) {
         val accepted: Boolean get() = fits && nameMatches && match >= matchThreshold
         val sound: Boolean get() = accepted && missing.isEmpty()
@@ -115,6 +118,16 @@ object ShipRepair {
                 else -> null
             }
     }
+
+    /**
+     * One block to put back, and what may be used to put it back.
+     *
+     * [family] is set only where the plans call for ANY member of a family rather than one named item. The
+     * concrete block is not decided here on purpose: the assessment runs whenever a menu opens, and what is
+     * in the pot then is not what will be in the pot when the captain finally presses Repair. So the choice
+     * is deferred to [apply], which has the pot in hand.
+     */
+    class Repair(val pos: BlockPos, val state: BlockState, val family: TagKey<Item>? = null)
 
     /** A hull's tight block bounds: the corner it is measured from, and how big it actually is. */
     class Bounds(val min: BlockPos, val width: Int, val height: Int, val length: Int, val blocks: Int)
@@ -299,12 +312,19 @@ object ShipRepair {
         var wanted = 0
         var correct = 0
         val missing = LinkedHashMap<Item, Int>()
-        val repairs = ArrayList<Pair<BlockPos, BlockState>>()
+        val repairs = ArrayList<Repair>()
+        val alteration = plans.alteration
 
         val cursor = BlockPos.MutableBlockPos()
         for (palette in template.palettes) {
             for (info in palette.blocks()) {
                 if (info.state.isAir) continue
+
+                // A block the captain left off these plans is not damage and never was. It is not counted,
+                // not billed, and not looked at -- so the match percentage describes the ship they asked
+                // for rather than the one the page was drafted from.
+                val cost = BillOfMaterials.itemFor(info.state)
+                if (cost != null && alteration.isExcluded(cost)) continue
                 wanted++
 
                 cursor.set(
@@ -312,15 +332,35 @@ object ShipRepair {
                     anchor.y + info.pos.y,
                     anchor.z + info.pos.z
                 )
+                // What these plans call for HERE, which is not always what the page drew. A swapped row is
+                // mended in the material the captain chose; an ANY row is mended in anything of its family.
+                val swap = cost?.let { alteration.swaps[it] }
+                val family = (swap as? Alteration.Any)?.family
+                val wantedState = when (swap) {
+                    null -> info.state
+                    is Alteration.Fixed -> ShipAlterations.restate(info.state, swap.item) ?: info.state
+                    is Alteration.Any -> info.state
+                }
+
                 // Compared by BLOCK, not by full state. A door left open or a stair turned round is wear, not
                 // damage, and charging a player a fresh door for having opened one would be absurd.
-                if (level.getBlockState(cursor).block == info.state.block) {
+                //
+                // An ANY row compares by FAMILY instead: the hull was built out of a mixture and nothing
+                // recorded which member landed where, so any slab standing in a slab's place is correct.
+                // Comparing to one named member would report a sound ship as half destroyed.
+                val standing = level.getBlockState(cursor)
+                val ok = if (family != null) {
+                    standing.block.asItem().let { it != Items.AIR && ItemStack(it).`is`(family) }
+                } else {
+                    standing.block == wantedState.block
+                }
+                if (ok) {
                     correct++
                     continue
                 }
 
-                repairs.add(cursor.immutable() to info.state)
-                val item = itemFor(info.state)
+                repairs.add(Repair(cursor.immutable(), wantedState, family))
+                val item = if (swap is Alteration.Any) swap.representative else itemFor(wantedState)
                 if (item != null) missing[item] = (missing[item] ?: 0) + 1
             }
         }
@@ -338,13 +378,13 @@ object ShipRepair {
      * with no wheel to say which end is forward falls back to its shipyard axes, which keeps the order total
      * and stable even if it no longer means "bow".
      */
-    fun ordered(level: ServerLevel, ship: LoadedServerShip, assessment: Assessment): List<Pair<BlockPos, BlockState>> {
+    fun ordered(level: ServerLevel, ship: LoadedServerShip, assessment: Assessment): List<Repair> {
         val forward = GunLabels.forwardOf(level, ship) ?: Direction.SOUTH
         val starboard = forward.clockWise
         return assessment.repairs.sortedWith(
-            compareBy<Pair<BlockPos, BlockState>> { it.first.y }
-                .thenByDescending { it.first.dot(forward) }
-                .thenBy { it.first.dot(starboard) }
+            compareBy<Repair> { it.pos.y }
+                .thenByDescending { it.pos.dot(forward) }
+                .thenBy { it.pos.dot(starboard) }
         )
     }
 
@@ -367,33 +407,49 @@ object ShipRepair {
      * these are shipyard positions, and asking for neighbour updates across a hull being rebuilt block by
      * block is how you get a cascade of falling gravel and popped-off torches inside somebody's ship.
      */
-    fun apply(level: ServerLevel, repairs: List<Pair<BlockPos, BlockState>>, pot: MutableMap<Item, Int>): Outcome {
+    fun apply(level: ServerLevel, repairs: List<Repair>, pot: MutableMap<Item, Int>): Outcome {
         val consumed = LinkedHashMap<Item, Int>()
         var placed = 0
 
-        val free = ArrayList<Pair<BlockPos, BlockState>>()
-        for ((pos, state) in repairs) {
-            val item = itemFor(state)
+        val free = ArrayList<Repair>()
+        for (repair in repairs) {
+            // An ANY row takes whatever member of its family the pot actually holds, decided here rather
+            // than at assessment time because the pot is only real now. Nothing in the family means the
+            // block is skipped, exactly as a missing named item is -- see the note above about why a
+            // repair steps over what it cannot afford instead of stopping at it.
+            val item = if (repair.family != null) {
+                fromFamily(pot, repair.family)
+            } else {
+                itemFor(repair.state)
+            }
             if (item == null) {
-                free.add(pos to state)
+                if (repair.family == null) free.add(repair)
                 continue
             }
             val held = pot[item] ?: 0
             if (held <= 0) continue
 
+            // The state actually written follows the item actually spent, so a hull mended out of a mixture
+            // ends up wearing what was paid for rather than what the page happened to draw.
+            val state = if (repair.family != null) {
+                ShipAlterations.restate(repair.state, item) ?: repair.state
+            } else {
+                repair.state
+            }
+
             // Cooled on the way in. A replacement engine is a NEW engine with an empty block entity, and
             // writing back the heat the old one died with gives a glowing gauge over an empty firebox --
             // which only corrects itself once somebody adds fuel and the next tick overwrites the state.
             // Bottled and blueprinted ships deliberately do not do this; see ShipTemplate.cooled.
-            level.setBlock(pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
+            level.setBlock(repair.pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
             pot[item] = held - 1
             consumed[item] = (consumed[item] ?: 0) + 1
             placed++
         }
 
-        for ((pos, state) in free) {
-            if (!partnerStands(level, pos, state)) continue
-            level.setBlock(pos, ShipTemplate.cooled(state), Block.UPDATE_CLIENTS)
+        for (repair in free) {
+            if (!partnerStands(level, repair.pos, repair.state)) continue
+            level.setBlock(repair.pos, ShipTemplate.cooled(repair.state), Block.UPDATE_CLIENTS)
             placed++
         }
 
@@ -417,22 +473,21 @@ object ShipRepair {
         return true
     }
 
+    /** The first member of [family] the pot can actually pay with, or null when it holds none. */
+    private fun fromFamily(pot: Map<Item, Int>, family: TagKey<Item>): Item? =
+        pot.entries.firstOrNull { (item, held) -> held > 0 && ItemStack(item).`is`(family) }?.key
+
     private fun BlockPos.dot(direction: Direction): Int =
         x * direction.stepX + y * direction.stepY + z * direction.stepZ
 
     /**
-     * What one block costs to replace, mirroring [org.valkyrienskies.eureka.template.BillOfMaterials].
+     * What one block costs to replace: [BillOfMaterials.itemFor], not a copy of it.
      *
-     * The upper half of a door and the head of a bed are the same purchase as their partner, so only one end is
-     * charged for -- and a block with no item form costs nothing rather than appearing on a bill as "air".
+     * This was a hand-copy of that function for as long as the two were only ever read separately. They are
+     * not any more -- a swapped or excluded material has to price the same here as it does on the bill the
+     * player was quoted, or a repair asks for something the build never charged for.
      */
-    private fun itemFor(state: BlockState): Item? {
-        if (state.isAir) return null
-        if (state.hasProperty(DOUBLE_HALF) && state.getValue(DOUBLE_HALF) == UPPER) return null
-        if (state.hasProperty(BED_PART) && state.getValue(BED_PART) == HEAD) return null
-        val item = state.block.asItem()
-        return if (item == Items.AIR) null else item
-    }
+    private fun itemFor(state: BlockState): Item? = BillOfMaterials.itemFor(state)
 
     private val DOUBLE_HALF =
         net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF

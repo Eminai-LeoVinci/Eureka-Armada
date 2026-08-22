@@ -1361,6 +1361,39 @@ object EurekaConfig {
         )
         var shipwrightRepairBlockRange = 100.0
 
+        // region Altering a set of plans
+        // A captain may strike decoration off a design and build the hull without it, and may build a design
+        // out of a different material of the same kind. Both are lenses over the census as filed -- the page
+        // itself never changes -- so anything switched off here simply stops being offered.
+
+        @JsonSchema(
+            description = "Whether a captain may leave decoration and furniture off a design when the " +
+                "shipwright builds it. Off, every block on the page must be paid for. Default true."
+        )
+        var shipwrightExclude = true
+
+        @JsonSchema(
+            description = "Whether a required material may be swapped for another of the SAME KIND -- any " +
+                "slab for any slab, any whole block for any whole block. Never across kinds: a slab does " +
+                "not become a plank. Default true."
+        )
+        var shipwrightSwapMaterials = true
+
+        @JsonSchema(
+            description = "Whether the swap above also applies to STRUCTURE -- planks, logs, stone, the hull " +
+                "itself -- rather than only to decoration and furniture. Default true: rebuilding a design " +
+                "in another wood is most of the point of being able to swap a material at all."
+        )
+        var shipwrightSwapFoundational = true
+
+        @JsonSchema(
+            description = "Whether a shipwright will break a ship up for its materials. The hull is " +
+                "counted into a claim list the captain draws down at their own pace -- nothing is " +
+                "dropped -- but the ship itself is gone and cannot be brought back. Default true."
+        )
+        var shipwrightDismantle = true
+        // endregion
+
         // region Ship damage repercussions
         // Integrity = the ship's current block count as a percentage of its count at assembly, so 100 is
         // pristine and the numbers below are integrity thresholds, not damage amounts. Maintained live: every

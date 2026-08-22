@@ -162,7 +162,12 @@ object ShipwrightYard {
         for (plans in ShipwrightLedger.get(level.server).allPlans(owner)) {
             val template = ShipTemplate.find(level, plans.template) ?: continue
             val size = template.size
-            if (size.x != hull.width || size.y != hull.height || size.z != hull.length) continue
+            // Fits inside, rather than measures the same. A hull built with its decor left off can be
+            // SMALLER than the page that describes it -- strike the lanterns off an outer face and the
+            // tight bounds shrink by a block -- and an exact test would then refuse to recognise a ship
+            // built from these very plans. The match percentage below is what decides identity; this is
+            // only here to skip pages that could not possibly be it.
+            if (size.x < hull.width || size.y < hull.height || size.z < hull.length) continue
 
             // A ship whose wheel this page does not describe is not this page's ship, whatever else lines up.
             if (helm != null && templateHelm(template) != null && templateHelm(template) != helm) continue

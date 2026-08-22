@@ -1,0 +1,57 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:wool_carpets",
+    "#minecraft:flowers",
+    "#minecraft:saplings",
+    "#minecraft:banners",
+    "#minecraft:signs",
+    "#minecraft:hanging_signs",
+    "#minecraft:candles",
+    "minecraft:painting",
+    "minecraft:item_frame",
+    "minecraft:glow_item_frame",
+    "minecraft:flower_pot",
+    "minecraft:torch",
+    "minecraft:soul_torch",
+    "minecraft:redstone_torch",
+    "minecraft:lantern",
+    "minecraft:soul_lantern",
+    {
+      "id": "minecraft:chain",
+      "required": false
+    },
+    "minecraft:end_rod",
+    "minecraft:ladder",
+    "minecraft:scaffolding",
+    "minecraft:cobweb",
+    "minecraft:bookshelf",
+    {
+      "id": "minecraft:chiseled_bookshelf",
+      "required": false
+    },
+    "minecraft:sea_lantern",
+    "minecraft:bell",
+    "minecraft:vine",
+    {
+      "id": "minecraft:glow_lichen",
+      "required": false
+    },
+    {
+      "id": "minecraft:hanging_roots",
+      "required": false
+    },
+    {
+      "id": "minecraft:big_dripleaf",
+      "required": false
+    },
+    {
+      "id": "minecraft:small_dripleaf",
+      "required": false
+    },
+    {
+      "id": "minecraft:decorated_pot",
+      "required": false
+    }
+  ]
+}

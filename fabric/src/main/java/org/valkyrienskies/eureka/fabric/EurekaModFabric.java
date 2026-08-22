@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.crew.CrewDuties;
 import org.valkyrienskies.eureka.crew.FireAtWill;
 import org.valkyrienskies.eureka.crew.FireBrigade;
 import org.valkyrienskies.eureka.crew.GunStations;
+import org.valkyrienskies.eureka.shipwright.ShipwrightTalk;
 import org.valkyrienskies.eureka.crew.GunnerMounts;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
@@ -55,6 +56,7 @@ import org.valkyrienskies.eureka.command.PirateCommand;
 import org.valkyrienskies.eureka.pirate.PirateGunnery;
 import org.valkyrienskies.eureka.pirate.PirateShips;
 import org.valkyrienskies.eureka.ship.ShipFoundering;
+import org.valkyrienskies.eureka.command.MaterialCommand;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
@@ -95,6 +97,8 @@ public class EurekaModFabric implements ModInitializer {
             // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
             // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
             ShipTemplateCommand.INSTANCE.register(dispatcher);
+            // DEV ONLY: the shipwright material classifier bench -- strip with the ROADMAP 6c sweep.
+            MaterialCommand.INSTANCE.register(dispatcher);
             // "/vs pirate set-mark ..." -- DEV ONLY, remove before release. The pirate machinery's harness.
             PirateCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
@@ -146,6 +150,9 @@ public class EurekaModFabric implements ModInitializer {
             // Mob gun crews: once a second, make every tagged mob's mount agree with its papers -- the
             // re-seat after a relog or a template placement, and the release after a disassembly.
             GunnerMounts.INSTANCE.tick(level);
+            // Shipwrights serving a captain: hold each one at his counter while the book is open, so he
+            // cannot stroll out of reach mid-sale. Self-silences to a map check.
+            ShipwrightTalk.INSTANCE.tick(level);
             // Pirate ships: proximity zones around dormant hulls, the 20-second warning, wake-up and the
             // hand-off into ShipFollows. Self-silences to a map check while no pirate wheel is loaded.
             PirateShips.INSTANCE.tick(level);

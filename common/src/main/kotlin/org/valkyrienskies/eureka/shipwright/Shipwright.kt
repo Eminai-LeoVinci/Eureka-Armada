@@ -81,6 +81,121 @@ object Shipwright {
     }
 
     /**
+     * File the altered plans as a second, independent set, leaving the original alone.
+     *
+     * ## Metadata, not a new template
+     * The variant keeps pointing at the SAME template and carries the alteration beside it. Baking a
+     * second .nbt for every saved variant would leak one file per variant into the world folder forever,
+     * because deleting a set of plans has no hook that could clean it up -- and there is nothing a baked
+     * copy would buy here, since the shelf can read an alteration perfectly well.
+     *
+     * A page handed to another player is the opposite case and bakes; see [takeBlueprint].
+     *
+     * Materials already paid toward the original stay owed on the original. The variant starts empty,
+     * because it is a different order for a different ship.
+     */
+    fun saveAsNew(
+        level: ServerLevel,
+        player: ServerPlayer,
+        plans: ShipwrightLedger.Plans,
+        name: String? = null
+    ): String? {
+        if (plans.alteration.isEmpty) return "There is nothing altered about those plans to save."
+
+        val ledger = ShipwrightLedger.get(level.server)
+        val chosen = name?.takeIf { it.isNotBlank() } ?: variantName(ledger, player, plans.shipName)
+        val refusal = ledger.file(
+            player.uuid,
+            ShipwrightLedger.Plans(chosen, plans.template, plans.baseCost, alteration = plans.alteration)
+        )
+        if (refusal != null) return refusal
+
+        // The variant now holds the changes, so the original goes back to what the page describes. Two
+        // sets of plans that both claim to be "the altered one" is the state nobody can reason about.
+        plans.alteration = Alteration.NONE
+        plans.deliveries.clear()
+
+        PathMessages.send(player, "Filed '$chosen' beside the original.", PathMessages.Kind.GOOD)
+        return null
+    }
+
+    /**
+     * Bake the alteration into a template of its own and hand back a page describing it.
+     *
+     * ## This one bakes, and has to
+     * A page is read on the CLIENT, off the item's own component, possibly on another server entirely --
+     * it cannot reach into a ledger to find out what its owner had altered. And `BlueprintCopyRecipe`
+     * copies that component byte for byte on the understanding that a template never changes once written.
+     * So the page is given a real template of its own, which makes it exactly what it claims to be:
+     * indistinguishable from a drafted one, copyable, and correct wherever the file travels.
+     *
+     * The census comes back out of [Blueprint.draftFromTemplate] recomputed from the baked template, so the
+     * page's bill already reflects every exclusion and swap without any of it being written twice.
+     */
+    fun takeBlueprint(level: ServerLevel, player: ServerPlayer, plans: ShipwrightLedger.Plans): Boolean {
+        if (plans.alteration.isEmpty) {
+            PathMessages.send(player, "Those plans are unaltered -- copy the page instead.", PathMessages.Kind.WARN)
+            return false
+        }
+        val blank = blankBlueprint(player) ?: run {
+            PathMessages.send(player, "You need a blank blueprint to draw that up.", PathMessages.Kind.WARN)
+            return false
+        }
+
+        val baked = "blueprint/${UUID.randomUUID().toString().replace("-", "")}"
+        if (!ShipTemplate.copy(level, plans.template, baked)) {
+            PathMessages.send(player, "The plans could not be copied.", PathMessages.Kind.ERROR)
+            return false
+        }
+        if (!ShipAlterations.rewrite(level, baked, plans.alteration, plans.deliveries)) {
+            ShipTemplate.delete(level, baked)
+            PathMessages.send(player, "The alterations could not be applied.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        val page = Blueprint.draftFromTemplate(level, baked, plans.shipName) ?: run {
+            ShipTemplate.delete(level, baked)
+            PathMessages.send(player, "The page could not be drawn up.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        // Spent only once the template is on disk and the page is in hand -- the same order every other
+        // door here works in, so a refusal never costs the player their blank.
+        blank.shrink(1)
+        if (!player.inventory.add(page)) {
+            // Nowhere to put it. Nothing is ever dropped on the floor here, so the blank goes back, the
+            // baked template is scrapped, and the captain is told to make room -- the state they were in
+            // a moment ago, exactly.
+            blank.grow(1)
+            ShipTemplate.delete(level, baked)
+            PathMessages.send(player, "No room in your pack for the page.", PathMessages.Kind.WARN)
+            return false
+        }
+        PathMessages.send(player, "Drawn up: '${plans.shipName}', as altered.", PathMessages.Kind.GOOD)
+        return true
+    }
+
+    /** A blank blueprint in [player]'s pack, or null. The [freeBottle] pattern, for the other page. */
+    fun blankBlueprint(player: ServerPlayer): ItemStack? {
+        for (slot in 0 until player.inventory.containerSize) {
+            val stack = player.inventory.getItem(slot)
+            if (stack.isEmpty || !stack.`is`(EurekaItems.BLUEPRINT.get())) continue
+            if (Blueprint.read(stack) == null) return stack
+        }
+        return null
+    }
+
+    /** '<name> (altered)', then '(altered 2)' and so on -- whatever the shelf does not already hold. */
+    private fun variantName(ledger: ShipwrightLedger, player: ServerPlayer, base: String): String {
+        val held = ledger.libraryOf(player.uuid).plans.keys
+        val first = "$base (altered)"
+        if (first !in held) return first
+        var n = 2
+        while ("$base (altered $n)" in held) n++
+        return "$base (altered $n)"
+    }
+
+    /**
      * Hand over everything in [player]'s inventory that these plans still need.
      *
      * All at once rather than stack by stack: the alternative is a player clicking through forty stacks of
@@ -153,10 +268,7 @@ object Shipwright {
             return false
         }
 
-        if (ShipTemplate.place(level, plans.template, corner) !is ShipTemplate.Placed) {
-            PathMessages.send(player, "The ship could not be built.", PathMessages.Kind.ERROR)
-            return false
-        }
+        if (!lay(level, player, plans, corner)) return false
 
         ShipwrightLedger.get(level.server).spendMaterials(plans)
         PathMessages.send(
@@ -165,6 +277,56 @@ object Shipwright {
             PathMessages.Kind.GOOD
         )
         return true
+    }
+
+    /**
+     * Put the hull in the water -- the plans as filed, or the plans as the captain altered them.
+     *
+     * ## Unaltered plans take the old road exactly
+     * A ship nobody has changed is placed straight from its own template, with no copy, no temporary file
+     * and no new way to fail. The whole apparatus below exists for the altered case and costs the ordinary
+     * one nothing, which matters because the ordinary one is almost all of them.
+     *
+     * ## Why the copy is not optional
+     * `ShipTemplate.place` hands out the structure manager's CACHED template. Rewriting that would change
+     * the plans themselves -- and a template is shared by every copy of a blueprint page, so the damage
+     * would show up on a ship built by somebody who never altered anything. The copy is thrown away the
+     * moment the hull is standing, by DELETE rather than `forget`: forgetting only drops the in-memory
+     * copy and the file stays on disk forever, one per build.
+     */
+    private fun lay(
+        level: ServerLevel,
+        player: ServerPlayer,
+        plans: ShipwrightLedger.Plans,
+        corner: BlockPos
+    ): Boolean {
+        if (plans.alteration.isEmpty) {
+            if (ShipTemplate.place(level, plans.template, corner) is ShipTemplate.Placed) return true
+            PathMessages.send(player, "The ship could not be built.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        val working = "altered/${UUID.randomUUID().toString().replace("-", "")}"
+        try {
+            if (!ShipTemplate.copy(level, plans.template, working)) {
+                PathMessages.send(player, "The altered plans could not be drawn up.", PathMessages.Kind.ERROR)
+                return false
+            }
+            if (!ShipAlterations.rewrite(level, working, plans.alteration, plans.deliveries)) {
+                PathMessages.send(player, "The alterations could not be applied.", PathMessages.Kind.ERROR)
+                return false
+            }
+            if (ShipTemplate.place(level, working, corner) !is ShipTemplate.Placed) {
+                PathMessages.send(player, "The ship could not be built.", PathMessages.Kind.ERROR)
+                return false
+            }
+            return true
+        } finally {
+            // Whether it went up or fell over on the way, the working copy is scrap either way. delete
+            // drops it from the manager AND takes the .nbt off disk; forget would only do the first, and
+            // leave one file per build in the world folder forever.
+            ShipTemplate.delete(level, working)
+        }
     }
 
     /**
@@ -214,6 +376,14 @@ object Shipwright {
         val bottleTemplate = "bottled/${UUID.randomUUID().toString().replace("-", "")}"
         if (!ShipTemplate.copy(level, plans.template, bottleTemplate)) {
             PathMessages.send(player, "The ship would not go in the bottle.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        // The bottle holds the ship as ORDERED, not as drawn. Without this a captain who struck the
+        // decor off a design and bottled it would find every carpet back the moment they let it out.
+        if (!ShipAlterations.rewrite(level, bottleTemplate, plans.alteration, plans.deliveries)) {
+            ShipTemplate.delete(level, bottleTemplate)
+            PathMessages.send(player, "The alterations could not be applied.", PathMessages.Kind.ERROR)
             return false
         }
 

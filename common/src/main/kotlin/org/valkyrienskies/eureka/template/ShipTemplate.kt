@@ -602,6 +602,17 @@ object ShipTemplate {
     }
 
     /**
+     * Write [name]'s in-memory template back to disk.
+     *
+     * Only ever right for a template this code OWNS -- a working copy it made. Saving one the structure
+     * manager handed out from its cache writes somebody else's ship over the original.
+     */
+    fun save(level: ServerLevel, name: String): Boolean {
+        val id = idFor(name) ?: return false
+        return level.server.structureManager.save(id)
+    }
+
+    /**
      * A civilian copy of a pirate hull, for the special loot blueprint: the design without the menace.
      * Returns the new template's name under `looted/`, or null when the source is missing.
      *

@@ -3,12 +3,15 @@ package org.valkyrienskies.eureka.shipwright
 import java.util.UUID
 import net.minecraft.core.BlockPos
 import net.minecraft.core.GlobalPos
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.world.entity.ai.memory.MemoryModuleType
+import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
-import net.minecraft.world.entity.ai.memory.MemoryModuleType
 import net.minecraft.world.entity.npc.villager.Villager
+import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import org.valkyrienskies.eureka.EurekaConfig
@@ -55,11 +58,81 @@ object ShipwrightTalk {
 
     /** Send this player their whole shelf, as the screen draws it. */
     fun openShelf(level: ServerLevel, player: ServerPlayer, villager: Villager) {
+        attend(level, player, villager)
         val shelf = shelfFor(level, player, villager)
         sender?.invoke(player, shelf)
     }
 
+    /**
+     * One shipwright, currently serving one captain.
+     *
+     * Held by villager id rather than by a reference, so an unloaded chunk drops the hold instead of
+     * pinning an entity that no longer exists.
+     */
+    private class Attention(val player: UUID, var until: Long)
+
+    private val attending = HashMap<Int, Attention>()
+
+    /** Five minutes of held attention, refreshed by every action. The failsafe for a client that vanishes. */
+    private const val ATTENTION_TICKS = 20L * 60L * 5L
+
+    /** Twice the reach the actions themselves check, so the hold outlives a step backwards. */
+    private const val ATTENTION_RANGE_SQR = 144.0
+
+    /**
+     * Keep the shipwright's attention on [player] while their book is open.
+     *
+     * Every action re-checks that the villager is still within reach, so one that strolled off mid-browse
+     * would start refusing Dismiss and Claim -- from the captain's side, a menu that stopped working for
+     * no stated reason. A shopkeeper does not wander away from the counter mid-sale.
+     *
+     * This is a HOLD, not a freeze: the brain keeps running, he keeps looking at you, he can still be hurt
+     * and still be talked to. Only the walk target is taken away, which is the same light measure a
+     * stationed gunner gets in [org.valkyrienskies.eureka.crew.GunStations] and for the same reason -- a
+     * navigation that is never given a destination never builds a path.
+     */
+    private fun attend(level: ServerLevel, player: ServerPlayer, villager: Villager) {
+        attending[villager.id] = Attention(player.uuid, level.gameTime + ATTENTION_TICKS)
+    }
+
+    /** The captain closed the book. Let him get back to his day. */
+    fun dismissAttention(villager: Villager) {
+        attending.remove(villager.id)
+    }
+
+    /**
+     * Hold every attending shipwright still, and let go of the ones whose captain has gone.
+     *
+     * The deadline is the failsafe: a client that closes without a word, crashes, or logs out must not
+     * leave a villager rooted to a spot forever.
+     */
+    fun tick(level: ServerLevel) {
+        if (attending.isEmpty()) return
+        val gone = ArrayList<Int>()
+        for ((id, attention) in attending) {
+            val villager = level.getEntity(id) as? Villager
+            // A villager in another dimension belongs to another level's tick, and one that has unloaded
+            // is not ours to hold. Neither is a reason to drop the hold; only time and distance are.
+            if (villager == null) {
+                if (level.gameTime > attention.until) gone.add(id)
+                continue
+            }
+            val captain = level.server.playerList.getPlayer(attention.player)
+            if (captain == null || level.gameTime > attention.until ||
+                villager.distanceToSqr(captain) > ATTENTION_RANGE_SQR
+            ) {
+                gone.add(id)
+                continue
+            }
+            villager.lookControl.setLookAt(captain, 30.0f, 30.0f)
+            villager.brain.eraseMemory(MemoryModuleType.WALK_TARGET)
+            if (!villager.navigation.isDone) villager.navigation.stop()
+        }
+        for (id in gone) attending.remove(id)
+    }
+
     fun shelfFor(level: ServerLevel, player: ServerPlayer, villager: Villager): ShipwrightMenu.Shelf {
+        reconcileOrphans(level, player)
         val shelf = ShipwrightMenu.snapshot(
             ledger = ShipwrightLedger.get(level.server),
             owner = player.uuid,
@@ -71,8 +144,58 @@ object ShipwrightTalk {
             shelf.villager, shelf.slots, shelf.hasFreeBottle, shelf.rows,
             vesselsFor(level, player, villager),
             repairEnabled = EurekaConfig.SERVER.shipwrightRepair,
-            partialRepair = EurekaConfig.SERVER.shipwrightPartialRepair
+            partialRepair = EurekaConfig.SERVER.shipwrightPartialRepair,
+            hasBlankBlueprint = Shipwright.blankBlueprint(player) != null,
+            excludeEnabled = EurekaConfig.SERVER.shipwrightExclude,
+            swapEnabled = EurekaConfig.SERVER.shipwrightSwapMaterials,
+            swapFoundational = EurekaConfig.SERVER.shipwrightSwapFoundational,
+            salvage = pilesFor(level, player),
+            dismantleEnabled = EurekaConfig.SERVER.shipwrightDismantle
         )
+    }
+
+    /**
+     * The captain's broken-up ships, as claim lists.
+     *
+     * Sorted largest first within a tab so the rows that matter are the ones on screen; a hull is four
+     * thousand planks and a hundred other things, and the hundred are not what the captain came for.
+     */
+    private fun pilesFor(level: ServerLevel, player: ServerPlayer): List<ShipwrightMenu.Pile> {
+        val ledger = ShipwrightLedger.get(level.server)
+        return ledger.salvageFor(player.uuid).map { pile ->
+            ShipwrightMenu.Pile(
+                shipName = pile.shipName,
+                hull = pile.hull.entries.sortedByDescending { it.value }
+                    .map { ShipwrightMenu.Material(it.key, it.value, 0) },
+                cargo = pile.cargo.entries.sortedByDescending { it.value }
+                    .map { ShipwrightMenu.Material(it.key, it.value, 0) },
+                keepsakes = pile.keepsakes.mapIndexed { index, stack ->
+                    ShipwrightMenu.Keepsake(
+                        index, stack.item, stack.count, ShipSalvage.describe(stack)
+                    )
+                }
+            )
+        }
+    }
+
+    /**
+     * Hand back anything credited to a row that is no longer on the bill.
+     *
+     * An alteration lasts a session, and materials paid into an "Any slabs" row are credited under the
+     * family rather than under the slab that was handed over. So a captain who sets a swap, pays into it,
+     * and then logs out comes back to a bill that no longer has that row -- and their materials sitting
+     * against a line nothing reads. Not lost, exactly, but not theirs either.
+     *
+     * The shelf opening is the one moment they are demonstrably standing in front of the shipwright, which
+     * is the only moment a refund can actually reach them. Nothing is dropped: what will not fit stays
+     * credited, exactly as every other refund here behaves.
+     */
+    private fun reconcileOrphans(level: ServerLevel, player: ServerPlayer) {
+        val ledger = ShipwrightLedger.get(level.server)
+        for (plans in ledger.allPlans(player.uuid)) {
+            if (plans.delivered.keys.all { it in plans.cost }) continue
+            refund(level, player, plans) { /* the bill already moved; this only settles up */ }
+        }
     }
 
     /**
@@ -173,9 +296,16 @@ object ShipwrightTalk {
         villager: Villager,
         action: ShipwrightMenu.Action,
         shipName: String,
-        argument: String = ""
+        argument: String = "",
+        argument2: String = ""
     ) {
         val ledger = ShipwrightLedger.get(level.server)
+
+        // Closing the book names nothing at all, so it resolves before any lookup could refuse it.
+        if (action == ShipwrightMenu.Action.CLOSED) {
+            dismissAttention(villager)
+            return
+        }
 
         // The yard actions name a HULL rather than a set of plans, so they resolve differently and are handled
         // before the shelf lookup below would fail on a slug it has never heard of.
@@ -184,6 +314,23 @@ object ShipwrightTalk {
             action == ShipwrightMenu.Action.REPAIR
         ) {
             yardAction(level, player, villager, action, shipName, argument)
+            openShelf(level, player, villager)
+            return
+        }
+
+        // Dismantling names a hull; claiming names a pile. Neither is a set of plans, so both resolve here
+        // rather than falling through the plans lookup below and being refused as a missing blueprint.
+        if (action == ShipwrightMenu.Action.DISMANTLE) {
+            dismantle(level, player, villager, shipName)
+            openShelf(level, player, villager)
+            return
+        }
+        if (action == ShipwrightMenu.Action.CLAIM_ALL ||
+            action == ShipwrightMenu.Action.CLAIM_ONE ||
+            action == ShipwrightMenu.Action.SALVAGE_DISMISS ||
+            action == ShipwrightMenu.Action.SALVAGE_DISMISS_ALL
+        ) {
+            salvageAction(level, player, action, shipName, argument, argument2)
             openShelf(level, player, villager)
             return
         }
@@ -221,12 +368,157 @@ object ShipwrightTalk {
                     Shipwright.bottle(level, player, plans)
                 }
             }
+            ShipwrightMenu.Action.EXCLUDE_CATEGORY -> excludeCategory(player, plans, argument)
+            ShipwrightMenu.Action.EXCLUDE_ITEM -> excludeItem(player, plans, argument)
+            ShipwrightMenu.Action.SWAP -> swap(player, plans, argument, argument2)
+            ShipwrightMenu.Action.RESET_ALTERATION -> {
+                if (!plans.alteration.isEmpty) {
+                    refund(level, player, plans) { plans.alteration = Alteration.NONE }
+                    PathMessages.send(player, "The plans are as drawn again.", PathMessages.Kind.GOOD)
+                }
+            }
+            ShipwrightMenu.Action.SAVE_AS_NEW -> {
+                val refusal = Shipwright.saveAsNew(level, player, plans, argument)
+                if (refusal != null) PathMessages.send(player, refusal, PathMessages.Kind.WARN)
+            }
+            ShipwrightMenu.Action.TAKE_BLUEPRINT -> Shipwright.takeBlueprint(level, player, plans)
             // Handled above, before the shelf lookup -- these name a hull, not a set of plans.
             else -> Unit
         }
+        ledger.setDirty()
 
         openShelf(level, player, villager)
     }
+
+    // region altering the plans
+
+    /**
+     * Every change to an alteration goes through here, and every one of them can hand materials back.
+     *
+     * A captain who has already paid forty birch planks toward a row and then strikes that row off is owed
+     * forty birch planks. The alternative -- keeping them against a line that no longer exists, or quietly
+     * voiding them -- is the kind of small theft that makes people stop trusting a menu. Unlike a repair
+     * re-quote, where the world changed underfoot, this change was the captain's own click.
+     *
+     * Whatever will not fit stays credited against the plans rather than being dropped or voided, so a full
+     * pack costs the captain nothing but a second click once they have made room.
+     */
+    private fun refund(
+        level: ServerLevel,
+        player: ServerPlayer,
+        plans: ShipwrightLedger.Plans,
+        change: () -> Unit
+    ): Boolean {
+        val before = HashMap(plans.delivered)
+        change()
+
+        val owed = ArrayList<ItemStack>()
+        for ((item, had) in before) {
+            val room = plans.cost[item] ?: 0
+            if (had <= room) continue
+            var over = had - room
+            plans.delivered[item] = room
+            while (over > 0) {
+                val stack = ItemStack(item, minOf(over, item.defaultMaxStackSize))
+                owed.add(stack)
+                over -= stack.count
+            }
+        }
+        if (owed.isEmpty()) return true
+
+        // Creative hands nothing back because it was never taken -- `Shipwright.pay` grants the bill
+        // outright there rather than emptying a pack.
+        if (player.abilities.instabuild) return true
+
+        var stuck = 0
+        for (stack in owed) {
+            if (player.inventory.add(stack)) continue
+            // No room. The materials stay CREDITED against the plans rather than being dropped or voided,
+            // so the captain has lost nothing: clear a slot, change the row again, and they come across.
+            // Nothing in this menu ever puts items on the ground.
+            plans.delivered[stack.item] = (plans.delivered[stack.item] ?: 0) + stack.count
+            stuck += stack.count
+        }
+        if (stuck > 0) {
+            PathMessages.send(
+                player,
+                "Your pack is full -- $stuck materials stay on the bench.",
+                PathMessages.Kind.WARN
+            )
+        }
+        return true
+    }
+
+    private fun excludeCategory(player: ServerPlayer, plans: ShipwrightLedger.Plans, argument: String) {
+        val category = MaterialFamilies.Category.entries.firstOrNull { it.name == argument } ?: return
+        if (category == MaterialFamilies.Category.FOUNDATIONAL) return
+        if (!EurekaConfig.SERVER.shipwrightExclude) return
+
+        val categories = plans.alteration.excludedCategories.toMutableSet()
+        if (!categories.remove(category)) categories.add(category)
+        plans.alteration = Alteration(categories, plans.alteration.excludedItems, plans.alteration.swaps)
+    }
+
+    private fun excludeItem(player: ServerPlayer, plans: ShipwrightLedger.Plans, argument: String) {
+        if (!EurekaConfig.SERVER.shipwrightExclude) return
+        val item = itemOf(argument) ?: return
+        // Structure is never optional, whatever the client asked for. The screen greys these rows, but a
+        // screen is not a gate.
+        if (MaterialFamilies.categoryOf(item) == MaterialFamilies.Category.FOUNDATIONAL) {
+            PathMessages.send(player, "That is part of the hull -- it cannot be left off.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val items = plans.alteration.excludedItems.toMutableSet()
+        if (!items.remove(item)) items.add(item)
+        plans.alteration = Alteration(plans.alteration.excludedCategories, items, plans.alteration.swaps)
+    }
+
+    /**
+     * Set, change or clear one row's swap.
+     *
+     * [to] is a plain item id, "*<family id>" for an Any row, or blank to put the row back. Everything is
+     * re-checked here: that swapping is on at all, that structure may be swapped if this row is structure,
+     * and above all that the replacement is genuinely of the same kind. A client that offers a bad swap is
+     * a client that gets refused.
+     */
+    private fun swap(player: ServerPlayer, plans: ShipwrightLedger.Plans, from: String, to: String) {
+        if (!EurekaConfig.SERVER.shipwrightSwapMaterials) return
+        val original = itemOf(from) ?: return
+        if (MaterialFamilies.categoryOf(original) == MaterialFamilies.Category.FOUNDATIONAL &&
+            !EurekaConfig.SERVER.shipwrightSwapFoundational
+        ) {
+            PathMessages.send(player, "This shipwright will not re-material the hull itself.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val swaps = LinkedHashMap(plans.alteration.swaps)
+        when {
+            to.isBlank() -> swaps.remove(original)
+            to.startsWith("*") -> {
+                val family = MaterialFamilies.familyOf(original) ?: return
+                if (family.location().toString() != to.substring(1)) return
+                val members = MaterialFamilies.replacementsFor(original)
+                swaps[original] = Alteration.Any(family, members.first())
+            }
+            else -> {
+                val chosen = itemOf(to) ?: return
+                if (!MaterialFamilies.interchangeable(original, chosen)) {
+                    PathMessages.send(player, "That is not the same kind of thing.", PathMessages.Kind.WARN)
+                    return
+                }
+                swaps[original] = Alteration.Fixed(chosen)
+            }
+        }
+        plans.alteration =
+            Alteration(plans.alteration.excludedCategories, plans.alteration.excludedItems, swaps)
+    }
+
+    private fun itemOf(id: String): Item? =
+        if (id.isBlank()) null
+        else BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)
+
+    // endregion
 
     /**
      * The three actions that act on a hull in the water rather than on a page.
@@ -234,6 +526,124 @@ object ShipwrightTalk {
      * [slug] names the ship; for [ShipwrightMenu.Action.SELECT], [argument] names the plans chosen in the
      * dropdown.
      */
+    /**
+     * Break a hull up into a claim list.
+     *
+     * The hull is re-resolved from what the SHIPWRIGHT can see, not from the slug on the wire, exactly as
+     * [yardAction] does -- this is the most destructive thing in the menu, and a client that could name any
+     * ship in the world could delete any ship in the world.
+     */
+    private fun dismantle(level: ServerLevel, player: ServerPlayer, villager: Villager, slug: String) {
+        if (!EurekaConfig.SERVER.shipwrightDismantle) {
+            PathMessages.send(player, "This shipwright does not break ships up.", PathMessages.Kind.WARN)
+            return
+        }
+        val ship = ShipwrightYard.visible(level, yard(villager)).firstOrNull { it.first.slug == slug }?.first
+            ?: run {
+                PathMessages.send(player, "That ship is no longer in the yard.", PathMessages.Kind.WARN)
+                return
+            }
+        ShipSalvage.dismantle(level, player, ship)
+    }
+
+    /**
+     * Claim off a pile, or throw a row away.
+     *
+     * [argument] names the tab -- "hull", "cargo", or "keep" -- and [argument2] one row, or blank for all
+     * of it. Everything is re-checked against the ledger: the pile, the tab, and the row.
+     */
+    private fun salvageAction(
+        level: ServerLevel,
+        player: ServerPlayer,
+        action: ShipwrightMenu.Action,
+        shipName: String,
+        argument: String,
+        argument2: String
+    ) {
+        val ledger = ShipwrightLedger.get(level.server)
+        val pile = ledger.salvagePile(player.uuid, shipName) ?: run {
+            PathMessages.send(player, "That salvage has already been carried off.", PathMessages.Kind.WARN)
+            return
+        }
+
+        val useShulkers = argument.endsWith("+box")
+        val tab = argument.removeSuffix("+box")
+        if (tab == "keep") {
+            // Keepsakes are addressed by position, not by item: two shulker boxes are the same item and
+            // the entire reason they are kept whole is that their contents differ.
+            val index = argument2.toIntOrNull()
+            when {
+                action == ShipwrightMenu.Action.SALVAGE_DISMISS_ALL -> {
+                    val kinds = ledger.dismissAllKeepsakes(player.uuid, pile)
+                    PathMessages.send(
+                        player,
+                        if (kinds > 0) "$kinds kept items thrown back into the sea."
+                        else "There was nothing left on that list.",
+                        if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                    )
+                }
+                action == ShipwrightMenu.Action.CLAIM_ALL -> Salvaging.claimKeepsakes(ledger, player, pile)
+                index == null -> PathMessages.send(
+                    player, "The shipwright could not tell which one that was.", PathMessages.Kind.WARN
+                )
+                action == ShipwrightMenu.Action.SALVAGE_DISMISS -> {
+                    val name = pile.keepsakes.getOrNull(index)?.hoverName?.string
+                    ledger.dismissKeepsake(player.uuid, pile, index)
+                    PathMessages.send(
+                        player,
+                        if (name != null) "$name thrown back into the sea."
+                        else "There was nothing left to throw away.",
+                        if (name != null) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                    )
+                }
+                else -> Salvaging.claimKeepsake(ledger, player, pile, index)
+            }
+            return
+        }
+        val cargoSide = tab == "cargo"
+
+        if (action == ShipwrightMenu.Action.SALVAGE_DISMISS_ALL) {
+            val kinds = ledger.dismissTab(player.uuid, pile, cargoSide)
+            PathMessages.send(
+                player,
+                if (kinds > 0) "$kinds kinds thrown back into the sea."
+                else "There was nothing left on that list.",
+                if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+            )
+            return
+        }
+
+        if (action == ShipwrightMenu.Action.CLAIM_ALL) {
+            Salvaging.claimAll(ledger, player, pile, cargoSide, useShulkers)
+            return
+        }
+
+        // Both remaining actions name ONE row, so a row that cannot be resolved is a refusal rather than a
+        // shrug. Doing nothing quietly is how a broken Dismiss looks exactly like a working one.
+        val item = argument2.takeIf { it.isNotEmpty() }
+            ?.let { BuiltInRegistries.ITEM.getOptional(Identifier.parse(it)).orElse(null) }
+        if (item == null) {
+            PathMessages.send(
+                player, "The shipwright could not tell which row that was.", PathMessages.Kind.WARN
+            )
+            return
+        }
+
+        if (action == ShipwrightMenu.Action.SALVAGE_DISMISS) {
+            val had = pile.tab(cargoSide)[item] ?: 0
+            ledger.dismissSalvage(player.uuid, pile, cargoSide, item)
+            val name = ItemStack(item).hoverName.string
+            PathMessages.send(
+                player,
+                if (had > 0) "$had $name thrown back into the sea."
+                else "There was none of that left to throw away.",
+                if (had > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+            )
+        } else {
+            Salvaging.claimOne(ledger, player, pile, cargoSide, item, useShulkers)
+        }
+    }
+
     private fun yardAction(
         level: ServerLevel,
         player: ServerPlayer,

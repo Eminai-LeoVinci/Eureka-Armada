@@ -54,8 +54,13 @@ object BillOfMaterials {
      *
      * Null covers three cases that all look different and behave the same: air, a block whose item is air
      * because it has none, and the second half of a double block whose first half was already charged for.
+     *
+     * Public because everything that prices a block must agree on the answer. It used to be private with a
+     * hand-copy in ShipRepair, and two copies of a rule about beds and doors is one copy too many -- the
+     * shipwright's exclusions and swaps now hang off this, so a drift between them would show up as a bill
+     * that cannot be paid.
      */
-    private fun itemFor(state: BlockState): Item? {
+    fun itemFor(state: BlockState): Item? {
         if (state.isAir) return null
 
         // The upper half of a door or tall plant, and the head of a bed, are the same purchase as their

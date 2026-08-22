@@ -87,6 +87,9 @@ object ShipwrightNetworkingFabric {
             val action = ShipwrightMenu.Action.entries.getOrNull(buf.readVarInt()) ?: return@registerGlobalReceiver
             val shipName = buf.readUtf()
             val argument = buf.readUtf()
+            // A second argument, appended rather than packed into the first: SWAP needs a row AND a
+            // replacement, and a registry id may not contain a separator that would make splitting safe.
+            val argument2 = if (buf.isReadable) buf.readUtf() else ""
 
             val player = context.player()
             val level = player.level() as? ServerLevel ?: return@registerGlobalReceiver
@@ -97,7 +100,7 @@ object ShipwrightNetworkingFabric {
                 if (!ShipwrightTalk.isShipwright(villager)) return@execute
                 if (villager.distanceToSqr(player) > REACH_SQR) return@execute
 
-                ShipwrightTalk.act(level, player, villager, action, shipName, argument)
+                ShipwrightTalk.act(level, player, villager, action, shipName, argument, argument2)
             }
         }
     }
@@ -112,13 +115,53 @@ object ShipwrightNetworkingFabric {
 
     /** Called from the screen. */
     @Environment(EnvType.CLIENT)
-    fun send(villager: Int, action: ShipwrightMenu.Action, shipName: String, argument: String = "") {
+    fun send(
+        villager: Int,
+        action: ShipwrightMenu.Action,
+        shipName: String,
+        argument: String = "",
+        argument2: String = ""
+    ) {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeVarInt(villager)
         buf.writeVarInt(action.ordinal)
         buf.writeUtf(shipName)
         buf.writeUtf(argument)
+        buf.writeUtf(argument2)
         ClientPlayNetworking.send(ActionPayload(toArray(buf)))
+    }
+
+    /**
+     * One material line, written in one place.
+     *
+     * The two halves of this codec sit fifty lines apart and the compiler cannot tell when they disagree --
+     * a field added to one and forgotten in the other shifts every byte after it and the screen decodes
+     * gibberish. Writing and reading a row through a matched pair is what keeps that from being possible.
+     */
+    private fun writeMaterial(buf: FriendlyByteBuf, material: ShipwrightMenu.Material) {
+        buf.writeUtf(BuiltInRegistries.ITEM.getKey(material.item).toString())
+        buf.writeVarInt(material.needed)
+        buf.writeVarInt(material.given)
+        buf.writeUtf(material.swappedFrom?.let { BuiltInRegistries.ITEM.getKey(it).toString() } ?: "")
+        buf.writeUtf(material.family ?: "")
+        buf.writeUtf(material.category)
+    }
+
+    private fun readMaterial(buf: FriendlyByteBuf): ShipwrightMenu.Material? {
+        val id = buf.readUtf()
+        val needed = buf.readVarInt()
+        val given = buf.readVarInt()
+        val from = buf.readUtf()
+        val family = buf.readUtf()
+        val category = buf.readUtf()
+        val item: Item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null) ?: return null
+        return ShipwrightMenu.Material(
+            item, needed, given,
+            swappedFrom = from.takeIf { it.isNotEmpty() }
+                ?.let { BuiltInRegistries.ITEM.getOptional(Identifier.parse(it)).orElse(null) },
+            family = family.takeIf { it.isNotEmpty() },
+            category = category
+        )
     }
 
     private fun encodeShelf(shelf: ShipwrightMenu.Shelf): ByteArray {
@@ -128,6 +171,10 @@ object ShipwrightNetworkingFabric {
         buf.writeBoolean(shelf.hasFreeBottle)
         buf.writeBoolean(shelf.repairEnabled)
         buf.writeBoolean(shelf.partialRepair)
+        buf.writeBoolean(shelf.hasBlankBlueprint)
+        buf.writeBoolean(shelf.excludeEnabled)
+        buf.writeBoolean(shelf.swapEnabled)
+        buf.writeBoolean(shelf.swapFoundational)
         buf.writeVarInt(shelf.rows.size)
         for (row in shelf.rows) {
             buf.writeUtf(row.shipName)
@@ -138,12 +185,11 @@ object ShipwrightNetworkingFabric {
             buf.writeDouble(row.mass)
             buf.writeDouble(row.topSpeed)
             buf.writeUtf(row.profile)
+            buf.writeBoolean(row.altered)
             buf.writeVarInt(row.materials.size)
-            for (material in row.materials) {
-                buf.writeUtf(BuiltInRegistries.ITEM.getKey(material.item).toString())
-                buf.writeVarInt(material.needed)
-                buf.writeVarInt(material.given)
-            }
+            for (material in row.materials) writeMaterial(buf, material)
+            buf.writeVarInt(row.struck.size)
+            for (material in row.struck) writeMaterial(buf, material)
         }
 
         buf.writeVarInt(shelf.vessels.size)
@@ -166,6 +212,23 @@ object ShipwrightNetworkingFabric {
                 buf.writeVarInt(material.given)
             }
         }
+
+        buf.writeBoolean(shelf.dismantleEnabled)
+        buf.writeVarInt(shelf.salvage.size)
+        for (pile in shelf.salvage) {
+            buf.writeUtf(pile.shipName)
+            buf.writeVarInt(pile.keepsakes.size)
+            for (kept in pile.keepsakes) {
+                buf.writeVarInt(kept.index)
+                buf.writeUtf(BuiltInRegistries.ITEM.getKey(kept.item).toString())
+                buf.writeVarInt(kept.count)
+                buf.writeUtf(kept.label)
+            }
+            buf.writeVarInt(pile.hull.size)
+            for (material in pile.hull) writeMaterial(buf, material)
+            buf.writeVarInt(pile.cargo.size)
+            for (material in pile.cargo) writeMaterial(buf, material)
+        }
         return toArray(buf)
     }
 
@@ -177,6 +240,10 @@ object ShipwrightNetworkingFabric {
         val hasFreeBottle = buf.readBoolean()
         val repairEnabled = buf.readBoolean()
         val partialRepair = buf.readBoolean()
+        val hasBlankBlueprint = buf.readBoolean()
+        val excludeEnabled = buf.readBoolean()
+        val swapEnabled = buf.readBoolean()
+        val swapFoundational = buf.readBoolean()
         val rows = List(buf.readVarInt()) {
             val shipName = buf.readUtf()
             val width = buf.readVarInt()
@@ -186,17 +253,14 @@ object ShipwrightNetworkingFabric {
             val mass = buf.readDouble()
             val topSpeed = buf.readDouble()
             val profile = buf.readUtf()
+            val altered = buf.readBoolean()
             val materials = ArrayList<ShipwrightMenu.Material>()
-            repeat(buf.readVarInt()) {
-                val id = buf.readUtf()
-                val needed = buf.readVarInt()
-                val given = buf.readVarInt()
-                val item: Item? = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)
-                if (item != null) materials.add(ShipwrightMenu.Material(item, needed, given))
-            }
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { materials.add(it) } }
+            val struck = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { struck.add(it) } }
             ShipwrightMenu.Row(
                 shipName, width, height, length, blocks,
-                materials.sumOf { it.needed }, mass, topSpeed, profile, materials
+                materials.sumOf { it.needed }, mass, topSpeed, profile, materials, struck, altered
             )
         }
         val vessels = List(buf.readVarInt()) {
@@ -224,7 +288,30 @@ object ShipwrightNetworkingFabric {
             )
         }
 
-        return ShipwrightMenu.Shelf(villager, slots, hasFreeBottle, rows, vessels, repairEnabled, partialRepair)
+        val dismantleEnabled = buf.readBoolean()
+        val salvage = List(buf.readVarInt()) {
+            val shipName = buf.readUtf()
+            val keepsakes = ArrayList<ShipwrightMenu.Keepsake>()
+            repeat(buf.readVarInt()) {
+                val index = buf.readVarInt()
+                val id = buf.readUtf()
+                val count = buf.readVarInt()
+                val label = buf.readUtf()
+                BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)?.let {
+                    keepsakes.add(ShipwrightMenu.Keepsake(index, it, count, label))
+                }
+            }
+            val hull = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { hull.add(it) } }
+            val cargo = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { cargo.add(it) } }
+            ShipwrightMenu.Pile(shipName, hull, cargo, keepsakes)
+        }
+
+        return ShipwrightMenu.Shelf(
+            villager, slots, hasFreeBottle, rows, vessels, repairEnabled, partialRepair,
+            hasBlankBlueprint, excludeEnabled, swapEnabled, swapFoundational, salvage, dismantleEnabled
+        )
     }
 
     private fun toArray(buf: FriendlyByteBuf): ByteArray {
