@@ -1709,6 +1709,17 @@ object EurekaConfig {
                 "Default 2, the same roll a hand-called broadside has."
         )
         var fireAtWillStaggerTicks = 2
+
+        @JsonSchema(
+            description = "A villager seated at a gun is put fully to sleep -- no brain, no pathfinding, " +
+                "no looking about -- and wakes the instant they are stood down. A gunner bolted to a " +
+                "cannon has nothing to think about, and thinking is expensive aboard a ship: every block " +
+                "a pathfinder reads costs a ship-intersection query, and sixty seated gunners were " +
+                "measured taking 95 percent of the server thread. The price is that they stop turning to " +
+                "watch you and cannot be traded with while stationed. They still take damage, still die, " +
+                "still hold their post. Default true."
+        )
+        var crewGunnerFreeze = true
         // endregion
 
         @JsonSchema(

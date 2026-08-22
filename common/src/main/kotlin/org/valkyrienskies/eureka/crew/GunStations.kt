@@ -3,11 +3,13 @@ package org.valkyrienskies.eureka.crew
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.entity.ai.memory.MemoryModuleType
 import net.minecraft.world.entity.npc.villager.Villager
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.phys.AABB
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.follow.ShipCrew
@@ -38,10 +40,15 @@ import java.util.UUID
  * positions its rider server-side, and syncs its drive anchor so the client drives it identically. No glue,
  * no packets of our own, both sides agree.
  *
- * "The gunner ignores everything" still costs nothing beyond the mount: a mounted mob's navigation cannot
- * move it, and vanilla mobs never dismount by choice -- zombies, damage and wanderlust are all answered by
- * the seat. Death still works: the ledger strikes the berth, the binding evaporates, and the seat -- which
- * self-kills the tick its rider is gone -- cleans itself up.
+ * "The gunner ignores everything" comes free of the mount itself: a mounted mob's navigation cannot move it,
+ * and vanilla mobs never dismount by choice -- zombies, damage and wanderlust are all answered by the seat.
+ * Death still works: the ledger strikes the berth, the binding evaporates, and the seat -- which self-kills
+ * the tick its rider is gone -- cleans itself up.
+ *
+ * What it does NOT come free of is the THINKING, which this class was originally written believing. A
+ * navigation that cannot move a mob still runs in full, and aboard a ship each path costs many times what
+ * it does ashore -- so sixty seated gunners were quietly eating the server thread whole. See
+ * [standDownNavigation], which is the profile and the fix.
  */
 object GunStations {
 
@@ -52,7 +59,72 @@ object GunStations {
     private val seats = HashMap<UUID, Seating>()
 
     fun tick(level: ServerLevel) {
+        if (seats.isNotEmpty()) standDownNavigation(level)
         if (level.gameTime % RECONCILE_INTERVAL == 0L) reconcile(level)
+    }
+
+    /**
+     * A gunner at his gun does not walk anywhere, so he must not THINK about walking either.
+     *
+     * The note above this class says a mounted mob's navigation cannot move it, and that is true -- but it
+     * was the wrong thing to have checked. Navigation that cannot move a mob still RUNS: the brain keeps a
+     * walk target, `MoveToTargetTask` keeps calling for a path to it, and the path is computed in full
+     * every time. A spark profile of a ship with sixty seated gunners put **95.7% of the entire server
+     * thread** under `VillagerEntity`, 95.9% of it inside the pathfinder and 86.3% under that one task --
+     * for sixty villagers who were bolted to cannons and could not have taken a step if they wanted to.
+     *
+     * It is worse than ordinary wasted work, for two reasons that compound:
+     *
+     *  - Two thirds of the cost is not vanilla's at all. Every block the path evaluator reads goes through
+     *    VS2's `getBlockState` overlay, which asks which ships intersect that position -- a spatial query,
+     *    a map iteration and an allocation, per block, and a path evaluator reads thousands of blocks.
+     *    (67% of the thread was inside that mixin.) Pathfinding aboard a ship costs an order of magnitude
+     *    more than pathfinding ashore, which is exactly why this never showed up on land.
+     *  - Vanilla's own escape hatch is disarmed. `EntityNavigation` gives up on a path when the mob stops
+     *    making progress -- but a seated gunner is snapped to a moving seat every tick, so he reads as
+     *    moving beautifully while never getting anywhere. The stuck-detector never fires, and the path is
+     *    recomputed forever.
+     *
+     * So the walk target is erased and the navigation stopped every tick a gunner is in his seat. Erasing
+     * the memory is the lever rather than stopping the path, because `MoveToTargetTask` requires the memory
+     * to be there at all: with it gone the task never starts and no path is ever built. Standing a gunner
+     * down removes him from [seats] and his brain resumes untouched the same tick.
+     */
+    private fun standDownNavigation(level: ServerLevel) {
+        val freeze = EurekaConfig.SERVER.crewGunnerFreeze
+        for (seating in seats.values) {
+            // [seats] is one map for every dimension, while this tick is per level -- so a seat belonging
+            // to another world is skipped rather than reached into. (The same rule GunnerMounts' posts
+            // learned the hard way: a global map maintained by a per-level tick will be wrong otherwise.)
+            if (seating.seat.level() !== level) continue
+            val gunner = seating.seat.passengers.firstOrNull() as? Villager ?: continue
+
+            // The whole hammer: no brain, no navigation, no looking about. `isNoAi` is what the pillager
+            // gun crews have always run on ([GunnerMounts]), and it makes a seated villager cost about
+            // what a dropped item costs. Damage, death and the ledger all still work -- what is given up
+            // is that he no longer turns to watch you, and cannot be traded with until he is stood down.
+            if (freeze) {
+                if (!gunner.isNoAi) gunner.isNoAi = true
+                continue
+            }
+
+            // The lighter measure, for a captain who would rather keep his crew looking alive: leave the
+            // brain running but take away the one thing it does that costs -- the walk target, without
+            // which `MoveToTargetTask` never starts and no path is ever built.
+            if (gunner.isNoAi) gunner.isNoAi = false
+            gunner.brain.eraseMemory(MemoryModuleType.WALK_TARGET)
+            if (!gunner.navigation.isDone) gunner.navigation.stop()
+        }
+    }
+
+    /**
+     * Wake a gunner as he leaves his seat. Called from every path that ends a seating, because [isNoAi] is
+     * PERSISTED on the entity: a crew member stood down while frozen and never woken would be a statue for
+     * the rest of the save, and one released by a disassembly would be a statue on the deck of a ship that
+     * no longer exists.
+     */
+    private fun wake(seat: ShipMountingEntity) {
+        (seat.passengers.firstOrNull() as? Villager)?.let { if (it.isNoAi) it.isNoAi = false }
     }
 
     /** Server stopped: entities are gone with it, only the map survives to be wrong. */
@@ -75,7 +147,7 @@ object GunStations {
         val behind = behindOf(level, gunPos) ?: return false
 
         // Re-stationing: free the old seat before the move, so its orphan can never hold a stale claim.
-        (villager.vehicle as? ShipMountingEntity)?.takeIf { !it.isController }?.kill(level)
+        (villager.vehicle as? ShipMountingEntity)?.takeIf { !it.isController }?.let { wake(it); it.kill(level) }
 
         val ship = level.getLoadedShipManagingPos(gunPos) ?: return false
         val footing = footingOf(level, gunPos) as? Footing.Stand ?: return false
@@ -92,7 +164,7 @@ object GunStations {
 
     /** Take [villagerId] out of any gunner seat now -- unassignment and duty changes call this. */
     fun unseat(level: ServerLevel, villagerId: UUID) {
-        seats.remove(villagerId)?.seat?.takeIf { !it.isRemoved }?.kill(level)
+        seats.remove(villagerId)?.seat?.takeIf { !it.isRemoved }?.let { wake(it); it.kill(level) }
         // Belt and braces for a binding the map lost track of (a reload, a dimension hop): the villager
         // itself knows what it is riding. Never a CONTROLLER seat -- that is the helm's, and no villager
         // legitimately sits one.
@@ -170,6 +242,7 @@ object GunStations {
             }
             if (seating.seat.level() !== level) continue
             if (villagerId !in bound) {
+                wake(seating.seat)
                 seating.seat.kill(level)
                 iterator.remove()
             }
@@ -249,7 +322,7 @@ object GunStations {
             return true
         }
         // Seated at the wrong gun (the station changed), or in something else entirely.
-        seats.remove(villager.uuid)?.seat?.takeIf { !it.isRemoved }?.kill(level)
+        seats.remove(villager.uuid)?.seat?.takeIf { !it.isRemoved }?.let { wake(it); it.kill(level) }
         if (riding is ShipMountingEntity && !riding.isController) riding.kill(level)
         else if (riding != null) villager.stopRiding()
 
