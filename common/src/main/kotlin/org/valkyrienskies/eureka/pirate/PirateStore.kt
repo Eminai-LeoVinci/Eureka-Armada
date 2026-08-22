@@ -34,6 +34,13 @@ class PirateStore : SavedData() {
         val sizeY: Int,
         val sizeZ: Int,
         var state: Int = BERTHED,
+        /**
+         * Where this site's wheel was last seen, in WORLD coordinates -- which is not [originPos] the
+         * moment a ship has sailed anywhere. The proximity ring is drawn here while the wheel is not
+         * reporting, so a hull that chased somebody across an ocean and then drifted out of simulation
+         * keeps its ring around HERSELF rather than snapping back to the beach she was generated on.
+         */
+        var lastPos: Long = originPos,
         /** gameTime deadline for site regeneration, or -1 while none is running. */
         var regenAt: Long = -1L,
         /** gameTime deadline for the crew respawn, or -1 while none is running. */
@@ -67,6 +74,7 @@ class PirateStore : SavedData() {
             val entry = CompoundTag()
             entry.putLong(ID_KEY, id)
             entry.putLong(ORIGIN_KEY, berth.originPos)
+            entry.putLong(LAST_POS_KEY, berth.lastPos)
             entry.putString(TEMPLATE_KEY, berth.templateId)
             entry.putIntArray(SIZE_KEY, intArrayOf(berth.sizeX, berth.sizeY, berth.sizeZ))
             entry.putInt(STATE_KEY, berth.state)
@@ -96,6 +104,7 @@ class PirateStore : SavedData() {
         private const val BERTHS_KEY = "berths"
         private const val ID_KEY = "id"
         private const val ORIGIN_KEY = "origin"
+        private const val LAST_POS_KEY = "last_pos"
         private const val TEMPLATE_KEY = "template"
         private const val SIZE_KEY = "size"
         private const val STATE_KEY = "state"
@@ -125,6 +134,7 @@ class PirateStore : SavedData() {
                 val size = entry.getIntArray(SIZE_KEY).orElse(intArrayOf(16, 16, 16))
                 store.berths[id] = Berth(
                     originPos = entry.getLong(ORIGIN_KEY).orElse(id),
+                    lastPos = entry.getLong(LAST_POS_KEY).orElse(entry.getLong(ORIGIN_KEY).orElse(id)),
                     templateId = template,
                     sizeX = size.getOrElse(0) { 16 },
                     sizeY = size.getOrElse(1) { 16 },

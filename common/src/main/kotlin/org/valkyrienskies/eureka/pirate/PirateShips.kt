@@ -128,6 +128,18 @@ object PirateShips {
         // A report is life: whatever vanished, it was a relocation, not a break.
         vanished.remove(berthId)
 
+        // Remember where she IS, in the world, for the ring to be drawn at once she stops reporting. A
+        // wheel's own address is a shipyard one the moment she assembles, so it is the transformed centre
+        // that is worth keeping -- see PirateStore.Berth.lastPos.
+        PirateStore.get(level).berth(berthId)?.let { berth ->
+            val centre = helmWorldCentre(level, pos)
+            val here = BlockPos.containing(centre.x, centre.y, centre.z).asLong()
+            if (berth.lastPos != here) {
+                berth.lastPos = here
+                PirateStore.get(level).markDirty()
+            }
+        }
+
         // A world copied without its SavedData, or a store lost to a crash: re-create the site record so
         // the wheel is not left reporting into the void forever.
         val store = PirateStore.get(level)
@@ -1420,7 +1432,7 @@ object PirateShips {
 
     /** A sleeping site's ring, drawn from its papers rather than from a wheel that is not ticking. */
     private fun dormantZone(level: ServerLevel, berthId: Long, berth: PirateStore.Berth): Zone {
-        val pos = BlockPos.of(berthId)
+        val pos = BlockPos.of(berth.lastPos)
         val halfDiag = sqrt((berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()) * 0.5
         return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, zoneRadius(level, halfDiag), ZoneState.DORMANT)
     }
