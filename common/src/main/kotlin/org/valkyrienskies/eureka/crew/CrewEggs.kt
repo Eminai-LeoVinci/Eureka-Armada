@@ -2,12 +2,14 @@ package org.valkyrienskies.eureka.crew
 
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
+import net.minecraft.core.GlobalPos
 import net.minecraft.core.registries.Registries
 import net.minecraft.resources.ResourceKey
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.EntitySpawnReason
 import net.minecraft.world.entity.EntityType
+import net.minecraft.world.entity.ai.memory.MemoryModuleType
 import net.minecraft.world.entity.npc.villager.Villager
 import net.minecraft.world.entity.npc.villager.VillagerProfession
 import net.minecraft.world.item.ItemStack
@@ -56,28 +58,52 @@ object CrewEggs {
     ): String? {
         if (egg.getType(stack) != EntityType.VILLAGER) return NOT_A_VILLAGER
 
-        // Beside the block, never inside it -- and through the ship transform when the station is aboard an
-        // assembled hull, because a wheel's own address is a SHIPYARD one and hatching at it would drop the
-        // villager in the shipyard, thousands of blocks from the deck the player is standing on.
-        val beside = pos.relative(face)
+        // Vanilla's own placement rule, followed exactly rather than approximated: hatch INSIDE the clicked
+        // block when it has no collision, otherwise against the face. The chosen block's FLOOR is where they
+        // stand, which is what a villager standing on a bench or a deck plank is actually doing -- the first
+        // version buried them a block down by asking vanilla to align against world blocks that, aboard a
+        // ship, are not there.
+        val solid = !level.getBlockState(pos).getCollisionShape(level, pos).isEmpty
+        val target = if (solid) pos.relative(face) else pos
+
+        // Where they should END UP, worked out in the frame the click happened in and then carried into the
+        // world -- because aboard a ship every address here is a SHIPYARD one, millions of blocks from the
+        // deck the player is standing on.
+        //
+        // The obvious thing is to let vanilla align the spawn in shipyard space, where the deck actually
+        // is, and move the result afterwards. It does not survive the move: the villager is added to the
+        // world at the shipyard and simply stays there, invisible, which is what "the message appeared but
+        // nothing hatched" was. So the position is computed first and the villager is created AT it, the
+        // same order GunnerMounts posts a gun crew in -- the one pattern known to work across the two frames.
         val ship = level.getLoadedShipManagingPos(pos) as? LoadedServerShip
-        val local = Vector3d(beside.x + 0.5, beside.y.toDouble(), beside.z + 0.5)
+        val local = Vector3d(target.x + 0.5, target.y.toDouble(), target.z + 0.5)
         val world = ship?.shipToWorld?.transformPosition(local) ?: local
 
         val spawned = egg.getType(stack).spawn(
             level, stack, player, BlockPos.containing(world.x, world.y, world.z),
-            EntitySpawnReason.SPAWN_ITEM_USE, true, false
+            EntitySpawnReason.SPAWN_ITEM_USE, false, false
         )
         val villager = spawned as? Villager
         if (villager == null) {
             spawned?.discard()
             return NOT_A_VILLAGER
         }
+        // Exactly where the arithmetic said, rather than wherever rounding to a block put them: a deck is
+        // rarely at an integer world height once a hull is under way.
+        villager.snapTo(world.x, world.y, world.z, villager.yRot, villager.xRot)
 
         val held = level.registryAccess()
             .lookupOrThrow(Registries.VILLAGER_PROFESSION)
             .getOrThrow(profession)
-        villager.villagerData = villager.villagerData.withProfession(held)
+        // The trade, a point of standing to hold it with, and the workstation it belongs to. The trade
+        // alone is what was asked for; the other two are so it survives contact with the villager's own
+        // brain, which hands back a job held at level one with nothing earned and no job site to show for
+        // it. The job site is the block that was clicked, which is the same one they would have claimed on
+        // their own -- so a hatched shipwright works the bench they were hatched against.
+        villager.villagerData = villager.villagerData.withProfession(held).withLevel(1)
+        if (villager.villagerXp <= 0) villager.villagerXp = 1
+        villager.brain.setMemory(MemoryModuleType.JOB_SITE, GlobalPos.of(level.dimension(), pos))
+        villager.refreshBrain(level)
         // Hatched to work here, so they stay: an authored harbor whose shipwright despawned overnight is
         // the same bug as one that never had a shipwright.
         villager.setPersistenceRequired()
