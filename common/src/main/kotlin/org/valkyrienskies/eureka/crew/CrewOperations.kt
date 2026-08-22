@@ -78,12 +78,28 @@ object CrewOperations {
 
     // region the orders
 
-
-
     /** Answer a screen asking what the holds hold. */
+    /**
+     * Answer a screen asking what the holds hold.
+     *
+     * Deliberately a LIGHTER gate than every order below it. The full [gate] also demands a crew key, which
+     * is derived from the wheel's NAME -- so an unnamed wheel, or one whose captain has signed nobody on,
+     * could not be told what was in its own chests. Reading the holds is a question about the ship, not
+     * about a roster: a captain looking at their own cargo has not asked anybody to do anything.
+     */
     fun requestStores(level: ServerLevel, player: ServerPlayer, helm: Long) {
-        val op = gate(level, player, helm) ?: return
-        pushStores(op)
+        val station = CrewManifest.stationAt(level, player, helm)
+        if (station == null) {
+            // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
+            storesLog.info("[stores] helm {} refused: stationAt (reach, crew station, or pirate gate)", helm)
+            return
+        }
+        val ship = CrewStations.shipOf(level, station)
+        if (ship == null) {
+            storesLog.info("[stores] helm {} refused: no ship under the wheel", helm)
+            return
+        }
+        pushStores(level, player, station, ship)
     }
 
     /**
@@ -779,12 +795,21 @@ object CrewOperations {
         return Op(level, player, station, key, ship)
     }
 
-    private fun pushStores(op: Op) {
-        val decks = GunLabels.layerCounts(GunLabels.labeled(op.level, op.ship))
-        val firing = op.ship.getAttachment(EurekaShipControl::class.java)?.fireAtWill ?: false
-        storesSender(
-            op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship), decks, firing
-        )
+    // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
+    private val storesLog by org.valkyrienskies.mod.util.logger()
+
+    private fun pushStores(op: Op) = pushStores(op.level, op.player, op.station, op.ship)
+
+    private fun pushStores(
+        level: ServerLevel,
+        player: ServerPlayer,
+        station: ShipHelmBlockEntity,
+        ship: LoadedServerShip
+    ) {
+        val decks = GunLabels.layerCounts(GunLabels.labeled(level, ship))
+        val firing = ship.getAttachment(EurekaShipControl::class.java)?.fireAtWill ?: false
+        val tally = ShipStores.tally(level, ship)
+        storesSender(player, station.blockPos.asLong(), tally, decks, firing)
     }
 
     /**

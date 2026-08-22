@@ -1,8 +1,10 @@
 package org.valkyrienskies.eureka.crew
 
 import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.core.component.DataComponents
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.component.ItemContainerContents
 import net.minecraft.world.item.Items
 import net.minecraft.world.level.block.entity.BarrelBlockEntity
 import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
@@ -94,13 +96,27 @@ object ShipStores {
         )
     }
 
-    /** How many items matching [predicate] the holds contain, across every stack of every box. */
+    /**
+     * How many items matching [predicate] the holds contain -- loose in the boxes, and packed in any
+     * shulker box sitting in one.
+     *
+     * A hold full of shulkers is how anybody actually stores a thousand cannonballs, so a tally that could
+     * not see inside them reported an empty ship to a captain standing on a magazine.
+     */
     fun count(level: ServerLevel, ship: LoadedServerShip, predicate: (ItemStack) -> Boolean): Int {
         var total = 0
         for (hold in containersAboard(level, ship)) {
             for (slot in 0 until hold.containerSize) {
                 val stack = hold.getItem(slot)
-                if (!stack.isEmpty && predicate(stack)) total += stack.count
+                if (stack.isEmpty) continue
+                if (predicate(stack)) {
+                    total += stack.count
+                    continue
+                }
+                val packed = stack.get(DataComponents.CONTAINER) ?: continue
+                for (inner in packed.nonEmptyItems()) {
+                    if (predicate(inner)) total += inner.count
+                }
             }
         }
         return total
@@ -133,6 +149,58 @@ object ShipStores {
                 stack.shrink(take)
                 if (stack.isEmpty) hold.setItem(slot, ItemStack.EMPTY)
                 taken += take
+                touched = true
+            }
+            if (touched) hold.setChanged()
+            if (taken >= amount) break
+        }
+        if (taken < amount) taken += unpack(level, ship, predicate, amount - taken)
+        return taken
+    }
+
+    /**
+     * The second pass: break into the shulker boxes, once the loose stacks have run out.
+     *
+     * Loose first is the rule and the order matters -- a captain who leaves a few dozen balls in a chest
+     * beside a hold full of sealed shulkers expects the loose ones spent first, exactly as they would
+     * reach for them by hand.
+     *
+     * The shulker is not consumed and rebuilt, whatever it looks like from the deck: its contents
+     * component is rewritten in place, on the very same item stack in the very same slot. That is what
+     * makes the box come back the same colour, under the same name, with the same everything else still
+     * inside it and only the rounds taken missing -- there is no copy for any of that to be lost by.
+     */
+    private fun unpack(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        predicate: (ItemStack) -> Boolean,
+        amount: Int
+    ): Int {
+        var taken = 0
+        for (hold in containersAboard(level, ship)) {
+            var touched = false
+            for (slot in 0 until hold.containerSize) {
+                if (taken >= amount) break
+                val box = hold.getItem(slot)
+                if (box.isEmpty || predicate(box)) continue
+                val packed = box.get(DataComponents.CONTAINER) ?: continue
+
+                val items = packed.stream().map { it.copy() }.toList()
+                var drawn = 0
+                for (inner in items) {
+                    if (taken + drawn >= amount) break
+                    if (inner.isEmpty || !predicate(inner)) continue
+                    val take = minOf(amount - taken - drawn, inner.count)
+                    inner.shrink(take)
+                    drawn += take
+                }
+                if (drawn == 0) continue
+
+                // A shulker emptied to nothing keeps its component rather than losing it: an empty box
+                // and a box with no contents component are the same thing to the game, and rewriting it
+                // is what keeps the stack -- name, colour, slot -- otherwise untouched.
+                box.set(DataComponents.CONTAINER, ItemContainerContents.fromItems(items))
+                taken += drawn
                 touched = true
             }
             if (touched) hold.setChanged()
@@ -201,25 +269,38 @@ object ShipStores {
         val fuels = HashMap<String, IntArray>() // itemId -> [count, burnTicks]
         val fuelValues = level.fuelValues()
 
+        // One stack, counted into whichever pile it belongs to. Answers whether it was stock at all, which
+        // is what tells the sweep below to look INSIDE a stack it did not recognise.
+        fun record(stack: ItemStack): Boolean {
+            val item = stack.item
+            if (stack.`is`(Items.GUNPOWDER)) {
+                gunpowder += stack.count
+                return true
+            }
+            if (item is CannonballItem) {
+                ammo.merge(item.ball to item.charge, stack.count, Int::plus)
+                return true
+            }
+            val burn = FuelRegistry.INSTANCE.get(stack, fuelValues)
+            if (burn > 0) {
+                val id = BuiltInRegistries.ITEM.getKey(item).toString()
+                fuels.getOrPut(id) { intArrayOf(0, burn) }[0] += stack.count
+                return true
+            }
+            return false
+        }
+
         for (hold in containersAboard(level, ship)) {
             for (slot in 0 until hold.containerSize) {
                 val stack = hold.getItem(slot)
                 if (stack.isEmpty) continue
+                if (record(stack)) continue
 
-                val item = stack.item
-                if (stack.`is`(Items.GUNPOWDER)) {
-                    gunpowder += stack.count
-                    continue
-                }
-                if (item is CannonballItem) {
-                    ammo.merge(item.ball to item.charge, stack.count, Int::plus)
-                    continue
-                }
-                val burn = FuelRegistry.INSTANCE.get(stack, fuelValues)
-                if (burn > 0) {
-                    val id = BuiltInRegistries.ITEM.getKey(item).toString()
-                    fuels.getOrPut(id) { intArrayOf(0, burn) }[0] += stack.count
-                }
+                // A shulker box in the hold is stock like anything else, and the restocks can reach into
+                // one -- so the tally has to see the same shelf they do, or the Operations tab reports an
+                // empty ship to a captain standing on a full magazine.
+                val packed = stack.get(DataComponents.CONTAINER) ?: continue
+                for (inner in packed.nonEmptyItems()) record(inner)
             }
         }
 

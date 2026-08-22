@@ -903,7 +903,7 @@ from the renderer work. Same call, made in the VS2 repo rather than here.
 **Also**
 
 - Any `PathMessages` line that names an internal value rather than telling the player something.
-- The bracket-prefixed dev log lines — `[pirates]`, `[gunnery]`, `[loot]`, `[shot-trace]`-style
+- The bracket-prefixed dev log lines — `[pirates]`, `[gunnery]`, `[loot]`, `[stores]`, `[shot-trace]`-style
   one-offs — are greppable by design; audit them in this sweep (most `logger.info` lines should
   drop to debug or go).
 - `/vs template`'s permission gate is `COMMANDS_GAMEMASTER`, which is *not* a substitute for
