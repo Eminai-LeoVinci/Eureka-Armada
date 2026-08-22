@@ -241,7 +241,22 @@ object GunnerMounts {
         // (capture/placement/reassembly) -- recover the assignment by proximity and re-write the
         // papers. No gun left to serve means the gun was shot away: the gunner stands down into the
         // fighting crew.
-        val ship = shipUnder(level, mob)
+        // ...but only onto a hull this gunner could plausibly belong to.
+        //
+        // [shipUnder] answers by GEOMETRY when the drag has not claimed the mob -- any hull whose box
+        // contains it, give or take a deck's reach -- and geometry cannot tell "my ship" from "the ship
+        // that happens to be moored alongside". A raider's gunner left over from a conquered hull, drifting
+        // within three blocks of a captain's ship, was therefore handed the nearest unmanned gun ABOARD
+        // THAT SHIP: uninvited pillagers appearing at the guns of a ship they were never part of, noticed
+        // on the relog that ran the reconcile.
+        //
+        // A pirate crew member belongs on a pirate hull and nobody else's; a gunner a captain mounted with
+        // an egg belongs on a hull that is not a raider's. That is the whole test, and it is enough --
+        // between two hulls of the same kind a mix-up is possible but harmless, while this one put hostile
+        // mobs on somebody's deck.
+        val ship = shipUnder(level, mob)?.takeIf { hull ->
+            PirateHelm.shipHasPirateWheel(level, hull) == (PirateShips.CREW_TAG in mob.tags)
+        }
         if (ship != null) {
             val gun = nearestUnmannedGun(level, ship, mob)
             if (gun != null) {
