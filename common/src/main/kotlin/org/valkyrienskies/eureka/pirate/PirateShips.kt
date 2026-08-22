@@ -558,6 +558,19 @@ object PirateShips {
             // A refused wake (cap, cooldown) retries in a couple of seconds rather than restarting the whole
             // countdown -- the player already had their warning; the queue is the pirates' problem.
             if (!arm(level, berthId, report, trespass.ship.id, trespass.players.firstOrNull()?.uuid, now)) {
+                // A silent refusal reads as a broken feature: the countdown reaches zero, nothing happens,
+                // and it does it again two seconds later forever. Whatever the throttle decided, say so.
+                val cfg = EurekaConfig.SERVER
+                val waiting = if (chases.size >= cfg.pirateMaxAssembled) {
+                    "There are already ${chases.size} pirate ships under way."
+                } else {
+                    val ticks = (cfg.pirateAssemblyCooldownSeconds * 20.0).toLong() - (now - lastAssemblyAt)
+                    val left = ((ticks + 19) / 20).coerceAtLeast(1L)
+                    "The pirates are still getting under way -- ${left}s."
+                }
+                for (player in trespass.players) {
+                    PathMessages.send(player, waiting, PathMessages.Kind.WARN)
+                }
                 entry.setValue(now + ARM_RETRY_TICKS)
                 continue
             }
@@ -673,7 +686,19 @@ object PirateShips {
                 continue
             }
 
-            val pirate = world.loadedShips.getById(shipId) ?: continue // unloaded; hold our breath
+            val pirate = world.loadedShips.getById(shipId)
+            if (pirate == null) {
+                // Unloaded: hold our breath for a moment, because a hull crossing a chunk boundary is
+                // briefly nobody's. But not FOREVER -- a chase whose ship never comes back was pinning a
+                // slot against pirateMaxAssembled for the rest of the session, so every later wake was
+                // refused and the countdown looped at zero with nothing to show for it. Letting go is
+                // safe: [adoptAwake] picks the pursuit straight back up if she ever reports again.
+                if (!fresh && now - (report?.lastSeen ?: 0L) > HELM_LOST_TICKS) {
+                    logger.info("[pirates] chase for ship {} retired -- unloaded and silent", shipId)
+                    iterator.remove()
+                }
+                continue
+            }
             // loadedShips is GLOBAL across dimensions while this tick is PER-DIMENSION -- the same trap
             // ShipFollows.tick guards with this same line. Without it, the Nether's tick resolves an
             // overworld pirate, asks the NETHER for nearby players, finds none, and executes the ship;
