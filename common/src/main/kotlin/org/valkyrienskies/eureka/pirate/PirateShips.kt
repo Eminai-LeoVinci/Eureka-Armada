@@ -126,7 +126,7 @@ object PirateShips {
         }
         reports[berthId] = Report(pos, shipId, level.gameTime, helm)
         // A report is life: whatever vanished, it was a relocation, not a break.
-        vanished.remove(berthId)        }
+        vanished.remove(berthId)
 
         // A world copied without its SavedData, or a store lost to a crash: re-create the site record so
         // the wheel is not left reporting into the void forever.
