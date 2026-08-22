@@ -1204,7 +1204,7 @@ object PirateShips {
                 (berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()
             ) * 0.5
         }
-        val radius = max(cfg.pirateZoneMinRadius, halfDiag * cfg.pirateZoneScale)
+        val radius = zoneRadius(level, halfDiag)
 
         // Read most-urgent-first: a ship in pursuit is pursuing whatever else is true of its berth --
         // and a BOARDED ship is every bit as engaged as a pursuing one, so it burns the same red.
@@ -1278,17 +1278,38 @@ object PirateShips {
         for ((berthId, berth) in PirateStore.get(level).allBerths) {
             if (berthId in live) continue
             if (berth.state != PirateStore.BERTHED) continue
-            out.add(dormantZone(berthId, berth))
+            out.add(dormantZone(level, berthId, berth))
         }
         return out
     }
 
+    /**
+     * How far a site's zone reaches -- and it never promises more than it can deliver.
+     *
+     * The size-scaled radius is what a captain asked for, but a dormant site can only NOTICE anyone while
+     * its wheel is ticking, and a wheel ticks only inside a player's simulation distance. On a large hull
+     * four times the half-diagonal reaches past that, so the outer band of the ring was decoration: you
+     * could cross it, watch the line go by, and nothing aboard would ever stir. Clamped, the ring means
+     * exactly one thing again -- inside it she wakes.
+     *
+     * A chunk of margin off the simulation edge, because a chunk that has only just come into range is a
+     * chunk whose block entities have not necessarily ticked yet, and a line drawn on that boundary would
+     * be true only most of the time.
+     */
+    private fun zoneRadius(level: ServerLevel, halfDiag: Double): Double {
+        val cfg = EurekaConfig.SERVER
+        val wanted = max(cfg.pirateZoneMinRadius, halfDiag * cfg.pirateZoneScale)
+        if (!cfg.pirateZoneClampToSimulationDistance) return wanted
+        val reach = ((level.server.playerList.simulationDistance - 1) * 16).toDouble()
+        // Never below the configured floor: a tiny simulation distance should shrink the ring, not delete it.
+        return wanted.coerceAtMost(max(reach, cfg.pirateZoneMinRadius))
+    }
+
     /** A sleeping site's ring, drawn from its papers rather than from a wheel that is not ticking. */
-    private fun dormantZone(berthId: Long, berth: PirateStore.Berth): Zone {
+    private fun dormantZone(level: ServerLevel, berthId: Long, berth: PirateStore.Berth): Zone {
         val pos = BlockPos.of(berthId)
         val halfDiag = sqrt((berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()) * 0.5
-        val radius = max(EurekaConfig.SERVER.pirateZoneMinRadius, halfDiag * EurekaConfig.SERVER.pirateZoneScale)
-        return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, radius, ZoneState.DORMANT)
+        return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, zoneRadius(level, halfDiag), ZoneState.DORMANT)
     }
 
     /**

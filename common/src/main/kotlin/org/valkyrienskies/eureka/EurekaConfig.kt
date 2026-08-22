@@ -1551,6 +1551,16 @@ object EurekaConfig {
         var pirateZoneMinRadius = 40.0
 
         @JsonSchema(
+            description = "Whether a proximity ring is capped at the distance a sleeping ship can actually " +
+                "notice you from. A dormant site only wakes while its wheel is ticking, which happens only " +
+                "inside a player's simulation distance -- so on a large hull the size-scaled ring reaches " +
+                "past that and its outer band is decoration you can cross with nothing stirring. On, the " +
+                "ring means one thing again: inside it she wakes. Off, the ring is drawn at its full " +
+                "configured size and the outer part of it is a promise the site cannot keep. Default true."
+        )
+        var pirateZoneClampToSimulationDistance = true
+
+        @JsonSchema(
             description = "How many seconds a player standing inside a pirate ship's zone is given to get " +
                 "clear before the ship assembles and gives chase. Default 15."
         )
