@@ -371,9 +371,9 @@ object PathNetworkingFabric {
             }
         }
 
-        CrewOperations.storesSender = { player, helm, stores, decks ->
+        CrewOperations.storesSender = { player, helm, stores, decks, firing ->
             if (ServerPlayNetworking.canSend(player, CREW_STORES_TYPE)) {
-                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks)))
+                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks, firing)))
                 true
             } else {
                 false
@@ -531,6 +531,12 @@ object PathNetworkingFabric {
                 OPS_STORES -> { level: ServerLevel ->
                     CrewOperations.requestStores(level, player, helm)
                 }
+                OPS_FIRE_AT_WILL -> {
+                    val on = buf.readBoolean()
+                    ({ level: ServerLevel ->
+                        CrewOperations.requestFireAtWill(level, player, helm, on)
+                    })
+                }
                 OPS_ASSIGN_GUNNERS -> {
                     val count = buf.readByte().toInt()
                     val side = readSide(buf) ?: return@registerGlobalReceiver
@@ -683,8 +689,18 @@ object PathNetworkingFabric {
         }
 
         ClientPlayNetworking.registerGlobalReceiver(CREW_STORES_TYPE) { payload, context ->
-            val (helm, stores, decks) = decodeStores(payload.data)
-            context.client().execute { CrewManifestScreen.acceptStores(helm, stores, decks) }
+            // A malformed tally is worth a line: it is silent on screen otherwise, and the tab simply
+            // sits on "Reading the holds" forever with nothing to say why.
+            val update = try {
+                decodeStores(payload.data)
+            } catch (t: Throwable) {
+                org.slf4j.LoggerFactory.getLogger("vs_eureka")
+                    .error("[stores] client DECODE failed on {} bytes", payload.data.size, t)
+                return@registerGlobalReceiver
+            }
+            context.client().execute {
+                CrewManifestScreen.acceptStores(update.helm, update.stores, update.decks, update.firing)
+            }
         }
         ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
@@ -777,6 +793,7 @@ object PathNetworkingFabric {
     private const val OPS_LOCK: Byte = 10
     private const val OPS_SET_POWER: Byte = 11
     private const val OPS_OPEN_HELM: Byte = 12
+    private const val OPS_FIRE_AT_WILL: Byte = 13
 
     /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
     private const val MAX_ITEM_ID = 256
@@ -794,6 +811,10 @@ object PathNetworkingFabric {
     /** Client: ask what the holds hold. Answered by a [CrewStoresPayload], or by silence. */
     @Environment(EnvType.CLIENT)
     fun sendCrewStoresAsk(helm: Long) = sendOps(helm, OPS_STORES) {}
+
+    /** Client: give or lift the Fire at Will order -- the gun crews lay their own guns. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewFireAtWill(helm: Long, on: Boolean) = sendOps(helm, OPS_FIRE_AT_WILL) { it.writeBoolean(on) }
 
     /** Client: work [side]'s guns on deck [layer] (0 = all) per [mode], to a total of [count] manned. */
     @Environment(EnvType.CLIENT)
@@ -894,7 +915,12 @@ object PathNetworkingFabric {
     /** A count byte's honest ceiling; berth caps live far below it. */
     private const val MAX_OPS_COUNT = 127
 
-    private fun encodeStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>): ByteArray {
+    private fun encodeStores(
+        helm: Long,
+        stores: ShipStores.Stores,
+        decks: List<Int>,
+        firing: Boolean
+    ): ByteArray {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeLong(helm)
         buf.writeVarInt(stores.gunpowder)
@@ -915,10 +941,21 @@ object PathNetworkingFabric {
         // screen-open and after every ops order.
         buf.writeVarInt(decks.size.coerceAtMost(MAX_LAYERS))
         for (deck in decks.take(MAX_LAYERS)) buf.writeVarInt(deck)
+        // Whether this ship is under Fire at Will, so the tab's toggle shows the ORDER rather than what
+        // the last person to press it happened to want. Rides here for the same reason the deck counts
+        // do: the payload already refreshes on screen-open and after every ops order.
+        buf.writeBoolean(firing)
         return toArray(buf)
     }
 
-    private fun decodeStores(data: ByteArray): Triple<Long, ShipStores.Stores, List<Int>> {
+    class StoresUpdate(
+        val helm: Long,
+        val stores: ShipStores.Stores,
+        val decks: List<Int>,
+        val firing: Boolean
+    )
+
+    private fun decodeStores(data: ByteArray): StoresUpdate {
         val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
         val helm = buf.readLong()
         val gunpowder = buf.readVarInt()
@@ -941,7 +978,7 @@ object PathNetworkingFabric {
         val deckCount = buf.readVarInt().coerceIn(0, MAX_LAYERS)
         val decks = List(deckCount) { buf.readVarInt() }
 
-        return Triple(helm, ShipStores.Stores(gunpowder, ammo, fuels), decks)
+        return StoresUpdate(helm, ShipStores.Stores(gunpowder, ammo, fuels), decks, buf.readBoolean())
     }
 
     /** Decode bound on shot kinds; the item set is 15 today, and a hostile length is clamped, not trusted. */

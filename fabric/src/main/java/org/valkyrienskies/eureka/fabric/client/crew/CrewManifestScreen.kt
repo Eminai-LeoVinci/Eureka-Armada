@@ -127,6 +127,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** What the holds last reported, or null before the first stores payload has landed. */
     private var stores: ShipStores.Stores? = null
 
+    /** Whether this ship is under the Fire at Will order. Server state; the stores payload carries it. */
+    private var fireAtWill = false
+
     /** Guns per deck, keel up, off the same payload the holds ride. Empty until it lands (or no guns). */
     private var deckCounts: List<Int> = emptyList()
 
@@ -1145,6 +1148,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, OPS_AMMO_LABEL_TEXT, left + 8, opsRowY(OPS_V_ROW_AMMO) + 4, TEXT)
         opsButton(guiGraphics, STOP_AMMO_MENU, ammoButtonText(), mouseX, mouseY)
 
+        // The standing order: the gun crews lay their own guns at the nearest raider, and keep doing it
+        // until it is lifted or the ship is shot below her line. Shift+G still works while it stands.
+        small(guiGraphics, OPS_FIRE_AT_WILL_TEXT, left + 8, opsRowY(OPS_V_ROW_FIRE_AT_WILL) + 4, TEXT)
+        opsButton(
+            guiGraphics, STOP_FIRE_AT_WILL,
+            if (fireAtWill) OPS_FIRE_AT_WILL_ON_TEXT else OPS_FIRE_AT_WILL_OFF_TEXT, mouseX, mouseY
+        )
+
         guiGraphics.fill(left + 8, opsRowY(OPS_V_SEP2), left + PANEL_W - 8, opsRowY(OPS_V_SEP2) + 1, SEPARATOR)
         small(guiGraphics, OPS_RESTOCK_TEXT, left + 8, opsRowY(OPS_V_RESTOCK_LABEL), DIM)
 
@@ -1431,6 +1442,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_PWR -> intArrayOf(left + 8, OPS_V_ROW_PWR, OPS_ELEV_BTN_W, OPS_CTRL_H)
         STOP_PWR_LEVEL -> intArrayOf(left + OPS_SEGS_X, OPS_V_ROW_PWR, ELEV_SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_AMMO, OPS_AMMO_W, OPS_CTRL_H)
+        STOP_FIRE_AT_WILL -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_FIRE_AT_WILL, OPS_WIDE_W, OPS_CTRL_H)
         STOP_SHOT -> intArrayOf(left + 8, OPS_V_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
         STOP_SHOT_SIDE -> intArrayOf(left + OPS_SHOT_SIDES_X, OPS_V_ROW_SHOT, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
         STOP_REFUEL -> intArrayOf(left + 8, OPS_V_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
@@ -1485,6 +1497,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 // cut off. Opening rides the body to its floor instead: the ammo row at its highest,
                 // and the six menu rows end exactly at the body's bottom edge.
                 opsScroll = (OPS_CONTENT_H - OPS_BODY_H).coerceAtLeast(0)
+            }
+            // Flipped locally so the button answers the press at once; the stores push that the order
+            // triggers is what the state really comes from, and corrects this if the gate refused.
+            STOP_FIRE_AT_WILL -> {
+                fireAtWill = !fireAtWill
+                PathNetworkingFabric.sendCrewFireAtWill(snapshot.helm, fireAtWill)
             }
             STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
                 PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, shotSide, ball, charge, ctrlLayer)
@@ -1663,9 +1681,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             .orElse(itemId)
 
     /** A fresh count of the holds. Also picks a default round -- the most plentiful -- if none is chosen. */
-    private fun acceptStoresNow(next: ShipStores.Stores, decks: List<Int>) {
+    private fun acceptStoresNow(next: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
         stores = next
         deckCounts = decks
+        fireAtWill = firing
         val chosen = selectedAmmo
         val stillThere = chosen != null && next.ammo.any { it.ball == chosen.first && it.charge == chosen.second }
         if (!stillThere) {
@@ -2332,10 +2351,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         /** A stores tally arriving, decks census riding along. Ignored unless it is about this wheel. */
-        fun acceptStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>) {
+        fun acceptStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
             val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
             if (screen.snapshot.helm != helm) return
-            screen.acceptStoresNow(stores, decks)
+            screen.acceptStoresNow(stores, decks, firing)
         }
 
         private val TITLE: Component = Component.translatable("gui.vs_eureka.crew_manifest")
@@ -2374,6 +2393,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val OPS_MODE_RELEASE_TEXT: Component =
             Component.translatable("gui.vs_eureka.crew_ops_mode_release")
         private val OPS_AMMO_LABEL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_ammo")
+        private val OPS_FIRE_AT_WILL_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_fire_at_will")
+        private val OPS_FIRE_AT_WILL_ON_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_fire_at_will_on")
+        private val OPS_FIRE_AT_WILL_OFF_TEXT: Component =
+            Component.translatable("gui.vs_eureka.crew_ops_fire_at_will_off")
         private val OPS_LAYER_ALL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_layer_all")
         private val OPS_SIDE_PORT_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_port")
         private val OPS_SIDE_BOTH_TEXT: Component = Component.translatable("gui.vs_eureka.crew_side_both")
@@ -2469,11 +2494,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_V_ROW_ELEV = 102
         private const val OPS_V_ROW_PWR = 120
         private const val OPS_V_ROW_AMMO = 138
-        private const val OPS_V_SEP2 = 156
-        private const val OPS_V_RESTOCK_LABEL = 162
-        private const val OPS_V_ROW_SHOT = 172
-        private const val OPS_V_ROW_REFUEL = 190
-        private const val OPS_V_ROW_POWDER = 208
+        private const val OPS_V_ROW_FIRE_AT_WILL = 156
+        private const val OPS_V_SEP2 = 174
+        private const val OPS_V_RESTOCK_LABEL = 180
+        private const val OPS_V_ROW_SHOT = 190
+        private const val OPS_V_ROW_REFUEL = 208
+        private const val OPS_V_ROW_POWDER = 226
         private const val OPS_CONTENT_H = OPS_V_ROW_POWDER + OPS_CTRL_H + 4
 
         private const val OPS_HOLDS_Y = 219
@@ -2569,12 +2595,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STOP_PWR = 16
         private const val STOP_PWR_LEVEL = 17
         private const val STOP_AMMO_MENU = 18
-        private const val STOP_SHOT = 19
-        private const val STOP_SHOT_SIDE = 20
-        private const val STOP_REFUEL = 21
-        private const val STOP_FUEL_LIST = 22
-        private const val STOP_POWDER = 23
-        private const val OPS_STOP_COUNT = 24
+        private const val STOP_FIRE_AT_WILL = 19
+        private const val STOP_SHOT = 20
+        private const val STOP_SHOT_SIDE = 21
+        private const val STOP_REFUEL = 22
+        private const val STOP_FUEL_LIST = 23
+        private const val STOP_POWDER = 24
+        private const val OPS_STOP_COUNT = 25
 
         // endregion
 

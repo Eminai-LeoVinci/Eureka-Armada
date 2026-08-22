@@ -1670,6 +1670,47 @@ object EurekaConfig {
         )
         var pirateCannonInfiniteAmmo = true
 
+        // region Fire at Will
+        // The captain's half of the same machine: a standing order, set from the Operations tab, that has
+        // a ship's own villager gun crews lay and fire on the nearest raider without being told each time.
+        // The gun-laying is literally the pirates' -- one shared solver -- so these keys exist to let a
+        // player crew be tuned as better or worse hands than the pillagers, rather than as a second system.
+
+        @JsonSchema(
+            description = "Whether the Fire at Will order exists at all. Off, the toggle does nothing and " +
+                "gun crews only ever fire when the captain calls the broadside. Default true."
+        )
+        var fireAtWillEnabled = true
+
+        @JsonSchema(
+            description = "How far out a crew under Fire at Will will engage a raider, in blocks, measured " +
+                "hull to hull. The SOLVER is the real limit -- a gun that cannot reach simply refuses -- so " +
+                "this is a leash on how eagerly the crew open up, not a range table. Default 160."
+        )
+        var fireAtWillEngageRange = 160.0
+
+        @JsonSchema(
+            description = "How far off its own bore a gun under Fire at Will will accept a target, in " +
+                "degrees. A cannon's azimuth is the ship's business; this is how much slop the crew will " +
+                "take before waiting for a better bearing. Default 7.5."
+        )
+        var fireAtWillBearingToleranceDegrees = 7.5
+
+        @JsonSchema(
+            description = "The hand-tremble on a Fire at Will shot, in blocks of scatter at the aim point. " +
+                "Default 1.0 -- steadier than the pirates' 1.5, because a crew that berths cost Hearts of " +
+                "the Sea should shoot a little better than press-ganged pillagers."
+        )
+        var fireAtWillJitterBlocks = 1.0
+
+        @JsonSchema(
+            description = "Ticks between one gun of a Fire at Will battery speaking and the next. Each gun " +
+                "still reloads on its own clock, so this paces the thunder rather than the rate of fire. " +
+                "Default 2, the same roll a hand-called broadside has."
+        )
+        var fireAtWillStaggerTicks = 2
+        // endregion
+
         @JsonSchema(
             description = "How far out a pirate crew hand OPENS FIRE with a crossbow or bow, in blocks. " +
                 "Vanilla's goals shoot at 8 and 15 -- rowboat distances; a ship's marksman needs deck-to-" +

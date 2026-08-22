@@ -1567,6 +1567,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @Volatile
     var pirateHelms = 0
 
+    // The Fire at Will standing order (see crew/FireAtWill): PERSISTED, because an order given is an order
+    // given -- a ship left under it should still be under it after a relog, exactly as Keep Active is. The
+    // three clocks beside it are not: a target and a stagger are a second of bookkeeping, and reloading
+    // mid-broadside should re-scan rather than resume a fight that may be long over.
+    var fireAtWill = false
+
+    @JsonIgnore @Volatile var fireAtWillTarget = 0L
+    @JsonIgnore @Volatile var fireAtWillNextScanAt = 0L
+    @JsonIgnore @Volatile var fireAtWillNextShotAt = 0L
+
     @Volatile
     var floaters = 0 // Amount of floaters * 15
         set(v) {

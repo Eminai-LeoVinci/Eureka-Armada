@@ -32,6 +32,7 @@ import org.valkyrienskies.eureka.blockentity.renderer.CannonBlockEntityRenderer;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
 import org.valkyrienskies.eureka.crew.CrewDuties;
+import org.valkyrienskies.eureka.crew.FireAtWill;
 import org.valkyrienskies.eureka.crew.FireBrigade;
 import org.valkyrienskies.eureka.crew.GunStations;
 import org.valkyrienskies.eureka.crew.GunnerMounts;
@@ -133,6 +134,9 @@ public class EurekaModFabric implements ModInitializer {
             ShipFollows.INSTANCE.tick(level);
             // Crew duties: walk any broadside in progress one gun further along. Self-silences to a map check.
             CrewDuties.INSTANCE.tick(level);
+            // Fire at Will: any ship under the standing order lays her own guns on the nearest raider.
+            // Self-silences to a flag check on each loaded hull.
+            FireAtWill.INSTANCE.tick(level);
             // The fire party: steer every firefighter already running at their flame (every tick, so arrival
             // and a moving deck are never missed), and look for new fires on a once-a-second clock.
             FireBrigade.INSTANCE.tick(level);

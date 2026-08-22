@@ -22,6 +22,8 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.cannon.AutoGunnery
 import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.follow.ShipCrew
@@ -109,12 +111,16 @@ object PirateCommand {
                 ctx.source.sendSuccess({ Component.literal("$label cooling") }, false)
                 continue
             }
-            val lay = PirateGunnery.lay(level, gun, target)
+            val tolerance = EurekaConfig.SERVER.pirateCannonBearingToleranceDegrees
+            val lay = AutoGunnery.lay(level, gun, target, tolerance)
             if (lay == null) {
                 ctx.source.sendSuccess({ Component.literal("$label cannot bear") }, false)
                 continue
             }
-            val refusal = PirateGunnery.fireAt(level, gun, target, jitterBlocks = 0.0)
+            val refusal = AutoGunnery.fireAt(
+                level, gun, target, jitterBlocks = 0.0, bearingToleranceDegrees = tolerance,
+                consume = !EurekaConfig.SERVER.pirateCannonInfiniteAmmo
+            )
             if (refusal == null) {
                 fired++
                 ctx.source.sendSuccess({

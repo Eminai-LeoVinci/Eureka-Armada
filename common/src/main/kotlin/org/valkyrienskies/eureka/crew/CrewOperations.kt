@@ -21,9 +21,11 @@ import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.PowderCharge
+import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.item.Cannonball
 import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.eureka.ship.EurekaShipControl
 import java.util.UUID
 
 /**
@@ -71,13 +73,47 @@ object CrewOperations {
      */
     @Volatile
     @JvmField
-    var storesSender: (ServerPlayer, Long, ShipStores.Stores, List<Int>) -> Boolean = { _, _, _, _ -> false }
+    var storesSender: (ServerPlayer, Long, ShipStores.Stores, List<Int>, Boolean) -> Boolean =
+        { _, _, _, _, _ -> false }
 
     // region the orders
+
+
 
     /** Answer a screen asking what the holds hold. */
     fun requestStores(level: ServerLevel, player: ServerPlayer, helm: Long) {
         val op = gate(level, player, helm) ?: return
+        pushStores(op)
+    }
+
+    /**
+     * Give or lift the Fire at Will order: the gun crews lay their own guns at the nearest raider until
+     * told otherwise. The order lives on the SHIP ([EurekaShipControl.fireAtWill]) rather than on the
+     * captain who gave it, for the reason every duty here does -- crew work for the hull they stand on,
+     * and a ship crewed by two captains is not two half-orders.
+     */
+    fun requestFireAtWill(level: ServerLevel, player: ServerPlayer, helm: Long, on: Boolean) {
+        val op = gate(level, player, helm) ?: return
+        val control = op.ship.getAttachment(EurekaShipControl::class.java)
+        if (control == null) {
+            PathMessages.send(player, "That hull has no wheel to give the order from.", PathMessages.Kind.ERROR)
+            return
+        }
+        if (control.fireAtWill == on) {
+            pushStores(op)
+            return
+        }
+        control.fireAtWill = on
+        control.fireAtWillTarget = 0L
+        if (on) {
+            ShipCrew.tellOthers(
+                level, op.ship, player,
+                "${ShipCrew.name(op.ship)}'s guns are free to fire.", PathMessages.Kind.WARN
+            )
+            PathMessages.send(player, "Fire at will -- the gun crews will lay their own.", PathMessages.Kind.GOOD)
+        } else {
+            PathMessages.send(player, "Cease fire.", PathMessages.Kind.GOOD)
+        }
         pushStores(op)
     }
 
@@ -745,7 +781,10 @@ object CrewOperations {
 
     private fun pushStores(op: Op) {
         val decks = GunLabels.layerCounts(GunLabels.labeled(op.level, op.ship))
-        storesSender(op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship), decks)
+        val firing = op.ship.getAttachment(EurekaShipControl::class.java)?.fireAtWill ?: false
+        storesSender(
+            op.player, op.station.blockPos.asLong(), ShipStores.tally(op.level, op.ship), decks, firing
+        )
     }
 
     /**
