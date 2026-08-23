@@ -2195,7 +2195,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         } else {
             drawDuties(guiGraphics, card, mouseX, mouseY)
         }
-        drawLockButton(guiGraphics, card, mouseX, mouseY)
+        // The Lock goes with the rest of the controls on the Crews tab: it is the captain's "do not touch"
+        // on a berth serving THIS ship, and a read-only card has nothing to protect.
+        if (activeTab != Tab.CREWS) drawLockButton(guiGraphics, card, mouseX, mouseY)
         if (stationMenuOpen) drawStationMenu(guiGraphics, card, mouseX, mouseY)
         if (cardAmmoMenuOpen) drawCardAmmoMenu(guiGraphics, mouseX, mouseY)
     }

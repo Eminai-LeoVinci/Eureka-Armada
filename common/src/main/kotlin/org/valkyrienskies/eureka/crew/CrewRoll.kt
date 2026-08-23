@@ -35,8 +35,21 @@ object CrewRoll {
         val fare: Int
     )
 
-    /** Every crew [captain] owns, and which of them this wheel keeps. [helm] is the packed wheel position. */
-    data class Roll(val helm: Long, val entries: List<Entry>)
+    /**
+     * Every crew [captain] owns, and which of them this wheel keeps. [helm] is the packed wheel position.
+     *
+     * [shipName] rides along because the helm menu has no other reliable way to learn it. The menu used to
+     * read the wheel's own block entity, which is server-authoritative and correct -- but the CLIENT's copy of
+     * it goes stale and stays stale: a block-entity update pushes only when the server's value changes, so
+     * once the two disagree there is nothing left to correct them, and a wheel that missed one showed the
+     * wrong name until the world was reloaded. On a hull with eight helms that meant eight wheels disagreeing
+     * about what the ship was called.
+     *
+     * Sending it here is not a workaround so much as the pattern this screen already follows: the crew list,
+     * the manifest and the holds tally all travel by payload for the same reason -- DataSlots carry 16 bits
+     * and block entities do not reliably carry anything at all.
+     */
+    data class Roll(val helm: Long, val shipName: String, val entries: List<Entry>)
 
     /**
      * How a roll reaches its client. Filled in by the networking layer at registration.
@@ -101,7 +114,7 @@ object CrewRoll {
      * pressed. Both read the same config value; neither guesses.
      */
     fun build(captain: ServerPlayer, station: ShipHelmBlockEntity): Roll {
-        val server = captain.level().server ?: return Roll(station.blockPos.asLong(), emptyList())
+        val server = captain.level().server ?: return Roll(station.blockPos.asLong(), "", emptyList())
         val ledger = CrewLedger.get(server)
 
         // The binding lives on the wheel that keeps the ARTICLES, which need not be the wheel the captain is
@@ -125,7 +138,15 @@ object CrewRoll {
                 fare = if (aboard || perHead <= 0) 0 else heads * perHead
             )
         }
-        return Roll(station.blockPos.asLong(), entries)
+        // What this wheel says the hull is called, read on the SERVER where it cannot be behind. The wheel's
+        // own name while Keep Name is on -- that is what names the hull under the current model -- and the
+        // ship's slug otherwise, which is what the hull answers to when no wheel is naming it.
+        val level = captain.level() as? ServerLevel
+        val shipName = station.helmName?.string?.takeIf { station.keepName && it.isNotBlank() }
+            ?: level?.let { CrewStations.shipOf(it, station) }?.slug?.replace('-', ' ')
+            ?: ""
+
+        return Roll(station.blockPos.asLong(), shipName, entries)
     }
 
     /**

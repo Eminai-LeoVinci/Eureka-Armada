@@ -197,7 +197,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // The crew list hangs under the book, because both are about the same thing: who is aboard. Picking
         // from it costs nothing and moves nobody -- it tells the wheel which crew Assemble should bring, and
         // which crew the Summon button opposite would call.
-        crewList = CrewDropdown(font, CREW_LIST_X, cruiseRowY(3), CREW_LIST_W, CREW_LIST_H).also {
+        crewList = CrewDropdown(font, CREW_LIST_X, CREW_LIST_Y, CREW_LIST_W, CREW_LIST_H).also {
             it.placeholder = CREW_LIST_EMPTY_TEXT
             it.onPick = { key -> pos?.let { p -> CrewRoll.clientSelect(p.asLong(), key as? UUID) } }
         }
@@ -392,6 +392,10 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             val helmPos = pos
             if (helmPos != null && typed.isNotEmpty() && typed != (shipName() ?: "")) {
                 HelmNames.clientShipSender(helmPos, typed)
+                // Ask the server what it made of that, rather than trusting the optimistic echo below to be
+                // the last word: the name is slugged and length-capped on the way in, so what was typed and
+                // what the ship ends up called are not always the same string.
+                askedRollFor = null
                 // Shown until vs-core's own value comes back, so the box does not flicker to the old name for
                 // the round trip.
                 pendingNames[s.id] = typed
@@ -414,22 +418,19 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // loaded -- VS2 does not push later renames -- so a ship named by anything the player did not just
         // type here (Keep Name, another captain's rename) reads stale from it forever. The helm block entity
         // syncs, so its copy is the current one. Falls back to the ship for a wheel that has not sampled yet.
-        val helm = pos?.let { Minecraft.getInstance().level?.getBlockEntity(it) } as? ShipHelmBlockEntity
-
-        // The WHEEL'S OWN NAME first, while Keep Name is on -- because under the current model the wheel is
-        // what names the hull, so the two agree by construction and `CustomName` is the fresher of the two.
-        // It is pushed to clients the instant it changes (see setHelmName); `shipSlug` converges on a slow
-        // stagger and pushes only when the SERVER's copy changes, so once server and client disagree there is
-        // nothing left to trigger a correction. That is exactly what went wrong: three wheels on one hull
-        // showed three different names -- the ship's real name, its previous one, and, on the wheel that had
-        // never received an update at all, the generated name the ship happened to be carrying when the chunk
-        // loaded, because `Ship.slug` on the client is frozen at load time and VS2 never pushes renames.
+        // What the SERVER said this wheel calls the hull, which is the only answer that cannot be behind.
         //
-        // Keep Name OFF means the wheel is deliberately NOT naming the hull, so its name would be the wrong
-        // answer and the ship's own is asked for instead.
-        if (helm != null && helm.keepName) {
-            helm.helmName?.string?.takeIf { it.isNotBlank() }?.let { return it }
-        }
+        // Every other source here is a client copy that goes stale and stays stale. `Ship.slug` is frozen at
+        // chunk-load time -- VS2 never pushes a rename -- and the wheel's own block-entity fields push only
+        // when the SERVER's value changes, so a client that misses one update has nothing left to correct it.
+        // On a hull with eight helms that showed as eight wheels disagreeing about the ship's name until the
+        // world was reloaded, with the same wheel even answering differently on two visits.
+        //
+        // The roll is asked for as the menu opens and re-asked after a rename, which is exactly when the name
+        // matters, so this is fresh whenever anybody is looking at it.
+        crewRoll?.takeIf { it.helm == pos?.asLong() }?.shipName?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val helm = pos?.let { Minecraft.getInstance().level?.getBlockEntity(it) } as? ShipHelmBlockEntity
         return (helm?.shipSlug ?: s.slug)?.replace('-', ' ')
     }
 
@@ -523,6 +524,10 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         if (kept == null || roll.entries.none { it.id == kept }) {
             crewList.selected = roll.entries.firstOrNull { it.aboard }?.id
         }
+        // The optimistic echo has done its job the moment the server answers. It used to be cleared by
+        // comparing against `Ship.slug`, which on the client is frozen at load -- so for a ship renamed this
+        // session the comparison never came true and the echo masked every later answer, this roll included.
+        if (roll.shipName.isNotBlank()) ship?.let { pendingNames.remove(it.id) }
         rolledFor = roll.helm
     }
 
@@ -1173,19 +1178,21 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val BOOK_W = 48
         private const val BOOK_H = 56
 
-        // Summon sits under the book it belongs with, half a button-height below where the list used to hang.
-        private const val SUMMON_W = 65
-        private const val SUMMON_X = BOOK_X + (BOOK_W - SUMMON_W) / 2   // 123
+        // Summon sits under the book it belongs with, centred on its spine.
+        private const val SUMMON_W = 58
+        private const val SUMMON_X = BOOK_X + (BOOK_W - SUMMON_W) / 2   // 126
         private const val SUMMON_H = 12
-        private const val SUMMON_Y = BOOK_Y + BOOK_H + 2 + SUMMON_H / 2 // 110
+        private const val SUMMON_Y = BOOK_Y + BOOK_H + 12               // 114
 
         // The crew list takes the wide right-hand slot the ship's weight used to hold, because a crew's name
         // is the longest string on this panel -- "Motley Crew Barnacle" needs the room, and a 76px box spent
         // most of its life marqueeing. Its left edge runs flush against Summon's right, so the pair reads as
-        // one block of crew controls rather than two things that happen to be near each other.
-        private const val CREW_LIST_X = SUMMON_X + SUMMON_W                             // 188
-        private const val CREW_LIST_W = PANEL_WIDTH - PANEL_RIGHT_MARGIN - CREW_LIST_X  // 126
+        // one block of crew controls rather than two things that happen to be near each other -- so it shares
+        // Summon's row as well as its edge.
+        private const val CREW_LIST_X = SUMMON_X + SUMMON_W                             // 184
+        private const val CREW_LIST_W = PANEL_WIDTH - PANEL_RIGHT_MARGIN - CREW_LIST_X  // 130
         private const val CREW_LIST_H = 12
+        private const val CREW_LIST_Y = SUMMON_Y
 
         // The weight readout, stacked rather than side by side: a laden first-rate runs to seven digits and a
         // label beside it left nowhere near enough room, so the label sits centred ABOVE the box. The box is

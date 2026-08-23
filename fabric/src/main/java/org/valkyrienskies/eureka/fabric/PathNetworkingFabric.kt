@@ -961,6 +961,7 @@ object PathNetworkingFabric {
         if (!ServerPlayNetworking.canSend(captain, CREW_LIST_TYPE)) return
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeLong(roll.helm)
+        buf.writeUtf(roll.shipName)
         buf.writeVarInt(roll.entries.size)
         for (entry in roll.entries) {
             buf.writeUUID(entry.id)
@@ -1027,6 +1028,7 @@ object PathNetworkingFabric {
     private fun decodeCrewList(data: ByteArray): CrewRoll.Roll {
         val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
         val helm = buf.readLong()
+        val shipName = buf.readUtf()
         val entries = List(buf.readVarInt()) {
             CrewRoll.Entry(
                 id = buf.readUUID(),
@@ -1036,7 +1038,7 @@ object PathNetworkingFabric {
                 fare = buf.readVarInt()
             )
         }
-        return CrewRoll.Roll(helm, entries)
+        return CrewRoll.Roll(helm, shipName, entries)
     }
 
     /** Client: give or lift the Fire at Will order -- the gun crews lay their own guns. */
