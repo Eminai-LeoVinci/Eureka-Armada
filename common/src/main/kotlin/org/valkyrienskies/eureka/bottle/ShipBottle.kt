@@ -22,7 +22,6 @@ import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewMuster
 import org.valkyrienskies.eureka.crew.CrewStations
-import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.template.PlacementCheck
@@ -263,21 +262,21 @@ object ShipBottle {
         // Their villagers are world-space entities standing (or seated) on a hull that is about to stop
         // existing; standing them down snapshots each one into the CrewLedger rather than leaving them to fall.
         //
-        // The crew's name is read off the CREW STATION, not the marked wheel. The bottle is thrown at
-        // whichever helm it was marked on, and on a hull with several wheels that is usually NOT the one
-        // holding the articles -- the old gate read the marked wheel's name and skipped the entire stand-down
-        // whenever it was blank or wrong, which is how a whole crew once went over the side. The marked
-        // wheel's own name stays as the fallback for a ship with no recorded station.
+        // The crews are read off the CREW STATION, not the marked wheel. The bottle is thrown at whichever
+        // helm it was marked on, and on a hull with several wheels that is usually NOT the one holding the
+        // articles -- the old gate read the marked wheel's NAME and skipped the entire stand-down whenever it
+        // was blank or wrong, which is how a whole crew once went over the side. The marked wheel's own
+        // bindings are unioned in as the fallback for a ship with no recorded station.
         val station = CrewStations.stationOf(level, ship)
-        val bottleCrewName = station?.helmName?.string ?: helmEntity.customName?.string
-        val bottleCrewVariant =
-            if (station != null) HelmNames.variantOf(station.blockState)
-            else HelmNames.variantOf(level.getBlockState(helm))
+        val bottleCrewIds = LinkedHashSet<UUID>().apply {
+            station?.let { addAll(it.crewBindings().values) }
+            (level.getBlockEntity(helm) as? ShipHelmBlockEntity)?.let { addAll(it.crewBindings().values) }
+        }
         // Where everybody is standing, taken before they are taken off: a bottled crew comes back out of the
         // bottle onto the same spots, so a ship that was a shop is still a shop when it is poured out.
         val posts = CrewMuster.postsOf(level, ship, station?.blockPos ?: helm)
         val crewReport =
-            CrewMuster.standDownShip(level, ship.id, ship.worldAABB, bottleCrewName, bottleCrewVariant, posts)
+            CrewMuster.standDownShip(level, ship.id, ship.worldAABB, bottleCrewIds, posts)
 
         // Only now that the ship exists in writing does the original stop existing -- and it must actually stop.
         // disassemble() hands the hull back to the WORLD, which would leave the ship standing there as well as

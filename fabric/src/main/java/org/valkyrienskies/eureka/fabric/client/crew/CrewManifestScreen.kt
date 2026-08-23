@@ -20,6 +20,7 @@ import org.lwjgl.glfw.GLFW
 import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
+import org.valkyrienskies.eureka.crew.CrewRoll
 import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.ShipStores
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
@@ -116,8 +117,43 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      */
     private var dismissArmed = false
 
-    /** The book's two faces. */
-    private enum class Tab { OPERATIONS, ROSTER }
+    /** The book's three faces. */
+    private enum class Tab { OPERATIONS, ROSTER, CREWS }
+
+    // region Crews state
+
+    /**
+     * Every crew this captain keeps, or null before the list has landed. The Crews tab's own contents.
+     *
+     * The same roll the helm menu's dropdown reads, asked for again when the tab comes up: it is a snapshot,
+     * and a crew disbanded or renamed since the book was opened must not still be on the list.
+     */
+    private var crewRoll: CrewRoll.Roll? = null
+
+    /** Which crew's articles are open, or null while the list itself is showing. */
+    private var openCrew: UUID? = null
+
+    /** Those articles, once they arrive. Read-only -- see [viewingCrew]. */
+    private var crewRoster: CrewRoll.Roster? = null
+
+    /** How far the crews list is scrolled. Its own, because it is a different list from the roster's. */
+    private var crewsScroll = 0
+
+    /**
+     * Which crew's Delete is armed and reading "Really?", or null.
+     *
+     * One at a time, and cleared by anything else the captain does. Deleting a crew destroys every villager
+     * on it and cannot be undone, so it takes two deliberate presses -- the same guard the card's Dismiss
+     * uses, for a far heavier action.
+     */
+    private var disbandArmed: UUID? = null
+
+    /** Whether the open crew's name is being edited, and what has been typed into it. */
+    private var renamingOwnedCrew = false
+    private var ownedCrewNameValue = ""
+    private var ownedCrewNameBox: EditBox? = null
+
+    // endregion
 
     /** Which face is showing. Operations first: fleet-scale orders are what a captain opens this FOR. */
     private var activeTab = Tab.OPERATIONS
@@ -207,6 +243,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             // open -- nothing under a card invites leaving it mid-edit, and Back keeps its meaning.
             addTab(0, TAB_OPERATIONS_TEXT, Tab.OPERATIONS)
             addTab(1, TAB_ROSTER_TEXT, Tab.ROSTER)
+            addTab(2, TAB_CREWS_TEXT, Tab.CREWS)
 
             // Pinned to the corner, outside the scrolling body, on both tabs. Sends the player back to the
             // helm menu whose book brought them here (the server re-opens it; reach-guarded there).
@@ -219,6 +256,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
             if (activeTab == Tab.OPERATIONS) {
                 initOperations()
+                return
+            }
+
+            if (activeTab == Tab.CREWS) {
+                initCrews()
                 return
             }
 
@@ -244,6 +286,18 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 ShipHelmButton(
                     left + 6, top + PANEL_H - 16, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
                 ) { beginCrewRename() }
+            )
+            return
+        }
+
+        // The Crews tab's card is a reading, not an editing screen: the name box, its Rename and Dismiss are
+        // not built at all. Back is, because leaving has to work from everywhere.
+        if (activeTab == Tab.CREWS) {
+            cardBackButton = addRenderableWidget(
+                ShipHelmButton(
+                    cardX() + CARD_W - CARD_PAD - BACK_BTN_W, cardY() + CARD_H - CARD_PAD - BACK_BTN_H,
+                    BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
+                ) { closeCard() }
             )
             return
         }
@@ -288,6 +342,48 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     // region the tab strip and the Operations tab's widgets
 
+    /**
+     * The Crews tab's widgets: none at all on the list, three while a crew's articles are open.
+     *
+     * Summon, Rename and Back are the whole of what this tab can DO -- everything else it shows is read-only,
+     * which is why the roster it draws has no assignment controls built for it at all. Not painted out: not
+     * built. A control that exists and refuses is a control a captain will keep pressing.
+     */
+    private fun initCrews() {
+        if (openCrew == null) return
+
+        if (renamingOwnedCrew) {
+            ownedCrewNameBox = addRenderableWidget(
+                EditBox(font, left + 6, top + 3, PANEL_W - 12 - BERTHS_GUTTER, NAME_BOX_H, RENAME_TEXT)
+            ).also {
+                it.setMaxLength(CrewManifest.MAX_NAME_LENGTH)
+                it.value = ownedCrewNameValue
+                it.setResponder { typed -> ownedCrewNameValue = typed }
+                it.isFocused = true
+                this.focused = it
+            }
+            return
+        }
+
+        val rowY = top + PANEL_H - 4 - BACK_BTN_H
+        addRenderableWidget(
+            ShipHelmButton(left + 6, rowY, CREW_SUMMON_BTN_W, BACK_BTN_H, CREW_SUMMON_TEXT, font) {
+                openCrew?.let { CrewRoll.clientSummon(snapshot.helm, it) }
+            }
+        )
+        addRenderableWidget(
+            ShipHelmButton(
+                left + 6 + CREW_SUMMON_BTN_W + 4, rowY, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
+            ) { beginOwnedCrewRename() }
+        )
+        // Back to the LIST of crews, not out to the helm -- the corner Back still does that.
+        addRenderableWidget(
+            ShipHelmButton(
+                left + PANEL_W - 8 - BACK_BTN_W - BACK_BTN_W - 4, rowY, BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
+            ) { closeCrew() }
+        )
+    }
+
     private fun addTab(index: Int, text: Component, tab: Tab) {
         addRenderableWidget(
             ShipHelmTab(
@@ -303,9 +399,19 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         closeOpsMenus()
         if (renamingCrew) commitCrewRename(send = false)
         padSel = -1
+        // A crew's articles do not survive leaving the tab: the list is a snapshot, and coming back to a
+        // stale roster is how a captain reads a crew that has since been disbanded.
+        openCrew = null
+        crewRoster = null
+        disbandArmed = null
+        crewsScroll = 0
+        scroll = 0
+        if (renamingOwnedCrew) commitOwnedCrewRename(send = false)
         rebuildWidgets()
         // Fresh counts every time the tab comes up: the holds change while the book is shut.
         if (next == Tab.OPERATIONS) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
+        // Same reasoning for the crews: one may have been disbanded, renamed or called elsewhere since.
+        if (next == Tab.CREWS) CrewRoll.clientAsk(snapshot.helm)
     }
 
     /** Every transient Operations overlay, folded at once -- a tab switch or card must not leave one up. */
@@ -428,9 +534,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         closeCard()
     }
 
-    /** Start editing the crew's name, seeded with what it is now. */
+    /**
+     * Start editing the crew's name, seeded with what it is now.
+     *
+     * Seeded from [CrewManifest.Snapshot.crew], NOT from `ship`. It used to read `ship`, which meant an unnamed
+     * wheel pre-filled the box with the HULL's name -- and since the commit below only sends when the value has
+     * changed, pressing Save on that pre-filled text did nothing whatsoever. The crew looked named and was not.
+     */
     private fun beginCrewRename() {
-        crewNameValue = snapshot.ship
+        crewNameValue = snapshot.crew
         renamingCrew = true
         rebuildWidgets()
     }
@@ -438,14 +550,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /**
      * Send the crew's new name, or abandon the edit.
      *
-     * Goes through the same `helm_name` path the anvil and the block share, so there is one server-side place
-     * that decides what a wheel is called -- including the refusals for clearing a crewed name and for
-     * colliding with a crew you already have.
+     * Goes through the `helm_name` path, which is now purely a crew rename: a field write on the ledger, with
+     * nothing to refuse. The wheel's own name is the SHIP's name and is typed in the helm menu instead.
      */
     private fun commitCrewRename(send: Boolean) {
         if (send) {
             val typed = crewNameValue.trim()
-            if (typed.isNotEmpty() && typed != snapshot.ship) {
+            if (typed.isNotEmpty() && typed != snapshot.crew) {
                 PathNetworkingFabric.sendHelmName(BlockPos.of(snapshot.helm), typed)
             }
         }
@@ -515,6 +626,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                     return true
                 }
 
+                // Nothing on a Crews-tab card is clickable. The controls are not drawn there, and a hit test
+                // that still fired would be an invisible button -- the worst of both.
+                if (activeTab == Tab.CREWS) return false
+
                 // The Lock answers FIRST, and answers even locked -- it is the one way back out.
                 if (mx >= lockButtonX() && mx < lockButtonX() + LOCK_BTN_W &&
                     my >= lockButtonY() && my < lockButtonY() + BACK_BTN_H
@@ -558,6 +673,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         if (activeTab == Tab.OPERATIONS) return handleOpsClick(mx, my)
+        if (activeTab == Tab.CREWS && openCrew == null) return handleCrewsClick(mx, my)
+        // Clicking off the box while renaming a crew commits it, exactly as the ship's own name field does.
+        if (renamingOwnedCrew) {
+            commitOwnedCrewRename(send = true)
+            return true
+        }
 
         // Clicking anywhere off the box while renaming commits it, the way a name field is expected to behave.
         if (renamingCrew) {
@@ -565,10 +686,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             return true
         }
 
-        // The heading is the crew's name, and clicking it edits it. Bounded to the left of the berth counter
-        // and above the tab strip, so aiming at the count or a tab never starts a rename.
+        // The heading is a name, and clicking it edits it -- the ship's crew on the Roster tab, the OPEN crew
+        // on the Crews tab. Bounded to the left of the berth counter and above the tab strip, so aiming at
+        // the count or a tab never starts a rename.
         if (mx >= left && mx <= left + PANEL_W - BERTHS_GUTTER && my >= top + 2 && my < top + HEADER_BOTTOM) {
-            beginCrewRename()
+            if (activeTab == Tab.CREWS) beginOwnedCrewRename() else beginCrewRename()
             return true
         }
 
@@ -576,8 +698,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (my < top + LIST_TOP || my >= top + LIST_BOTTOM) return false
 
         val berth = scroll + (my - (top + LIST_TOP)) / ROW_H
-        val row = snapshot.rows.firstOrNull { it.slot == berth } ?: return false
-        openCard(row)
+        // A crew's own articles are indexed by position, the ship's by berth number -- see drawRow.
+        val crewView = viewingCrew()
+        val row = if (crewView != null) crewView.rows.getOrNull(berth)
+        else snapshot.rows.firstOrNull { it.slot == berth }
+        openCard(row ?: return false)
         return true
     }
 
@@ -595,6 +720,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 return true
             }
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
+        }
+        if (activeTab == Tab.CREWS && openCrew == null) {
+            val count = crewRoll?.entries?.size ?: 0
+            crewsScroll = (crewsScroll - scrollY.toInt()).coerceIn(0, (count - VISIBLE_ROWS).coerceAtLeast(0))
+            return true
         }
         if (activeTab == Tab.OPERATIONS) {
             val holds = stores
@@ -915,6 +1045,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 commitCrewRename(send = true)
                 return true
             }
+            if (renamingOwnedCrew) {
+                commitOwnedCrewRename(send = true)
+                return true
+            }
         }
         // Escape steps back out of whatever is innermost: a popup, then a rename, then a card, then out.
         if (keyEvent.key() == GLFW.GLFW_KEY_ESCAPE) {
@@ -930,20 +1064,52 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 commitCrewRename(send = false)
                 return true
             }
+            if (renamingOwnedCrew) {
+                commitOwnedCrewRename(send = false)
+                return true
+            }
             if (openCard != null) {
                 closeCard()
+                return true
+            }
+            // Then out of a crew's articles to the list of them, before the screen itself closes.
+            if (openCrew != null) {
+                closeCrew()
                 return true
             }
         }
         return super.keyPressed(keyEvent)
     }
 
+    /**
+     * The crew whose articles the list is currently showing, or null for this ship's own.
+     *
+     * The Crews tab reuses the roster's whole renderer rather than growing a second one that looks nearly
+     * like it -- so the row drawing, the scrollbar and the card all read through [rowsInView] and friends,
+     * and the only thing that differs between "this ship's crew" and "a crew I keep" is where the rows came
+     * from. Guarded on the tab as well as on the id, so a roster left loaded cannot leak into the ship's own
+     * list when the captain switches back.
+     */
+    private fun viewingCrew(): CrewRoll.Roster? =
+        if (activeTab == Tab.CREWS && openCrew != null) crewRoster?.takeIf { it.id == openCrew } else null
+
+    private fun rowsInView(): List<CrewManifest.Row> = viewingCrew()?.rows ?: snapshot.rows
+
+    /**
+     * How many berth slots the list draws. A crew's own articles have no EMPTY berths to show -- berths are a
+     * property of the captain and the ship they are standing on, not of the crew -- so it draws exactly the
+     * hands it has.
+     */
+    private fun berthsInView(): Int = viewingCrew()?.rows?.size ?: snapshot.berths
+
+    private fun maxBerthsInView(): Int = viewingCrew()?.rows?.size ?: snapshot.maxBerths
+
     private fun clampScroll() {
-        val overflow = snapshot.maxBerths - VISIBLE_ROWS
+        val overflow = maxBerthsInView() - VISIBLE_ROWS
         scroll = scroll.coerceIn(0, if (overflow < 0) 0 else overflow)
     }
 
-    private fun rowOf(villager: UUID): CrewManifest.Row? = snapshot.rows.firstOrNull { it.villager == villager }
+    private fun rowOf(villager: UUID): CrewManifest.Row? = rowsInView().firstOrNull { it.villager == villager }
 
     // endregion
 
@@ -955,6 +1121,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         drawHeader(guiGraphics)
         if (activeTab == Tab.OPERATIONS && openCard == null) {
             drawOperations(guiGraphics, mouseX, mouseY)
+        } else if (activeTab == Tab.CREWS && openCrew == null && openCard == null) {
+            drawCrews(guiGraphics, mouseX, mouseY)
         } else {
             drawList(guiGraphics, mouseX, mouseY)
         }
@@ -968,6 +1136,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // The card's widgets step aside for the card's own dropdowns, for both halves of the same reason:
         // super paints them over the list, and answers their clicks before the list is ever asked.
         val cardWidgetsVisible = !cardMenuOpen()
+        ownedCrewNameBox?.visible = !opsMenuOpen()
         nameBox?.visible = cardWidgetsVisible
         cardRenameButton?.visible = cardWidgetsVisible
         cardDismissButton?.visible = cardWidgetsVisible
@@ -991,14 +1160,26 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     private fun drawHeader(guiGraphics: GuiGraphics) {
         // While renaming, the box occupies these pixels -- drawing the heading underneath would show through.
-        if (!renamingCrew) {
-            val heading = if (snapshot.ship.isEmpty()) TITLE else Component.literal(snapshot.ship)
+        val crewView = viewingCrew()
+        if (!renamingCrew && !renamingOwnedCrew) {
+            val heading = when {
+                // A crew's own articles are headed by the CREW, not by the hull the book was opened on --
+                // the crew may have nothing to do with this ship at all.
+                crewView != null -> Component.literal(crewView.name)
+                activeTab == Tab.CREWS -> TAB_CREWS_TEXT
+                snapshot.ship.isEmpty() -> TITLE
+                else -> Component.literal(snapshot.ship)
+            }
             guiGraphics.drawString(font, heading, left + 8, top + 6, TEXT, false)
         }
 
-        val berths = Component.translatable(
-            "gui.vs_eureka.crew_berths", snapshot.rows.size, snapshot.berths
-        )
+        val berths = when {
+            crewView != null -> Component.translatable("gui.vs_eureka.crew_hands", crewView.rows.size)
+            activeTab == Tab.CREWS -> Component.translatable(
+                "gui.vs_eureka.crew_hands", crewRoll?.entries?.size ?: 0
+            )
+            else -> Component.translatable("gui.vs_eureka.crew_berths", snapshot.rows.size, snapshot.berths)
+        }
         guiGraphics.drawString(font, berths, left + PANEL_W - 8 - font.width(berths), top + 6, ACCENT, false)
 
         // The tab baseline: the strip's ACTIVE tab opens onto this line, exactly as the helm menu's does.
@@ -1009,7 +1190,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         guiGraphics.enableScissor(left, top + LIST_TOP, left + PANEL_W, top + LIST_BOTTOM)
         for (i in 0 until VISIBLE_ROWS) {
             val berth = scroll + i
-            if (berth >= snapshot.maxBerths) break
+            if (berth >= maxBerthsInView()) break
             drawRow(guiGraphics, berth, top + LIST_TOP + i * ROW_H, mouseX, mouseY)
         }
         guiGraphics.disableScissor()
@@ -1017,8 +1198,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun drawRow(guiGraphics: GuiGraphics, berth: Int, y: Int, mouseX: Int, mouseY: Int) {
-        val locked = berth >= snapshot.berths
-        val row = if (locked) null else snapshot.rows.firstOrNull { it.slot == berth }
+        // A crew's own articles are drawn by POSITION rather than by berth number: a crew that has been
+        // moved between ships has whatever slots it happens to hold, and gaps drawn as empty berths would
+        // read as room this crew does not own.
+        val crewView = viewingCrew()
+        val locked = crewView == null && berth >= snapshot.berths
+        val row = when {
+            crewView != null -> crewView.rows.getOrNull(berth)
+            locked -> null
+            else -> snapshot.rows.firstOrNull { it.slot == berth }
+        }
         val hovered = openCard == null && row != null &&
             (
                 (mouseX >= left && mouseX <= left + PANEL_W && mouseY >= y && mouseY < y + ROW_H) ||
@@ -1081,16 +1270,167 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         small(guiGraphics, INFO_GLYPH, bx + 5, y + 9, if (hovered) 0xFFFFFFFF.toInt() else TEXT)
     }
 
+    // region the Crews tab
+
+    /**
+     * The captain's crews, one per row, with the fare to call them and a Delete that asks twice.
+     *
+     * A list of things that exist somewhere else, which is what makes it different from the ship's roster: a
+     * crew on this list may be standing on this deck, on a hull across the world, or nowhere at all with its
+     * hands written down in the articles. All the row can honestly say is who they are, how many, and what
+     * moving them would cost.
+     */
+    private fun drawCrews(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
+        val roll = crewRoll
+        if (roll == null) {
+            guiGraphics.drawString(font, LOADING_TEXT, left + 10, top + LIST_TOP + 6, DIM, false)
+            return
+        }
+        if (roll.entries.isEmpty()) {
+            guiGraphics.drawString(font, CREWS_NONE_TEXT, left + 10, top + LIST_TOP + 6, DIM, false)
+            return
+        }
+        guiGraphics.enableScissor(left, top + LIST_TOP, left + PANEL_W, top + LIST_BOTTOM)
+        for (i in 0 until VISIBLE_ROWS) {
+            val entry = roll.entries.getOrNull(crewsScroll + i) ?: break
+            drawCrewRow(guiGraphics, entry, top + LIST_TOP + i * ROW_H, mouseX, mouseY)
+        }
+        guiGraphics.disableScissor()
+        drawCrewsScrollbar(guiGraphics, roll.entries.size)
+    }
+
+    private fun drawCrewRow(
+        guiGraphics: GuiGraphics,
+        entry: CrewRoll.Entry,
+        y: Int,
+        mouseX: Int,
+        mouseY: Int
+    ) {
+        val delX = left + PANEL_W - 8 - CREW_DEL_W
+        val overDelete = mouseX >= delX && mouseX < delX + CREW_DEL_W &&
+            mouseY >= y + CREW_DEL_INSET && mouseY < y + CREW_DEL_INSET + CREW_DEL_H
+        val hovered = !overDelete &&
+            mouseX >= left && mouseX <= left + PANEL_W && mouseY >= y && mouseY < y + ROW_H
+
+        guiGraphics.fill(left + 4, y + 1, left + PANEL_W - 4, y + ROW_H - 1, if (hovered) ROW_HOVER else ROW_BG)
+        guiGraphics.drawString(font, entry.name, left + 10, y + 4, TEXT, false)
+
+        // What it would cost, said plainly. The crew already aboard reads "aboard" instead of "0", because a
+        // price of nothing and no price at all are different things to a captain deciding where to spend.
+        val note = if (entry.aboard) {
+            Component.translatable("gui.vs_eureka.crew_fare_free")
+        } else {
+            Component.translatable("gui.vs_eureka.crew_fare", entry.fare)
+        }
+        small(guiGraphics, Component.translatable("gui.vs_eureka.crew_hands", entry.heads), left + 10, y + 15, DIM)
+        small(
+            guiGraphics, note,
+            delX - 6 - (font.width(note) * SMALL).toInt(), y + 9,
+            if (entry.aboard) ACCENT else DIM
+        )
+
+        val armed = disbandArmed == entry.id
+        val label = if (armed) CREW_DELETE_CONFIRM_TEXT else CREW_DELETE_TEXT
+        guiGraphics.fill(
+            delX, y + CREW_DEL_INSET, delX + CREW_DEL_W, y + CREW_DEL_INSET + CREW_DEL_H,
+            when {
+                armed -> DANGER
+                overDelete -> ACCENT
+                else -> ROW_LOCKED
+            }
+        )
+        small(
+            guiGraphics, label,
+            delX + (CREW_DEL_W - (font.width(label) * SMALL).toInt()) / 2, y + CREW_DEL_INSET + 4,
+            if (armed || overDelete) 0xFFFFFFFF.toInt() else TEXT
+        )
+    }
+
+    private fun drawCrewsScrollbar(guiGraphics: GuiGraphics, count: Int) {
+        if (count <= VISIBLE_ROWS) return
+        val trackTop = top + LIST_TOP
+        val trackH = LIST_BOTTOM - LIST_TOP
+        val x = left + PANEL_W - 7
+        guiGraphics.fill(x, trackTop, x + 3, trackTop + trackH, ROW_LOCKED)
+        val thumbH = (trackH * VISIBLE_ROWS / count).coerceAtLeast(12)
+        val thumbY = trackTop + (trackH - thumbH) * crewsScroll / (count - VISIBLE_ROWS)
+        guiGraphics.fill(x, thumbY, x + 3, thumbY + thumbH, ACCENT)
+    }
+
+    /** A click on the crews list: the Delete box, or the row itself to read that crew's articles. */
+    private fun handleCrewsClick(mx: Int, my: Int): Boolean {
+        val roll = crewRoll ?: return false
+        if (mx < left || mx > left + PANEL_W) return false
+        if (my < top + LIST_TOP || my >= top + LIST_BOTTOM) return false
+
+        val index = crewsScroll + (my - (top + LIST_TOP)) / ROW_H
+        val entry = roll.entries.getOrNull(index) ?: return false
+        val rowY = top + LIST_TOP + (index - crewsScroll) * ROW_H
+        val delX = left + PANEL_W - 8 - CREW_DEL_W
+        val onDelete = mx >= delX && mx < delX + CREW_DEL_W &&
+            my >= rowY + CREW_DEL_INSET && my < rowY + CREW_DEL_INSET + CREW_DEL_H
+
+        if (onDelete) {
+            // Two presses, and the arming is per crew: aiming at one Delete must never fire another's.
+            if (disbandArmed == entry.id) {
+                disbandArmed = null
+                CrewRoll.clientDisband(snapshot.helm, entry.id)
+            } else {
+                disbandArmed = entry.id
+            }
+            return true
+        }
+
+        disbandArmed = null
+        openCrew = entry.id
+        crewRoster = null
+        scroll = 0
+        CrewRoll.clientRosterAsk(snapshot.helm, entry.id)
+        rebuildWidgets()
+        return true
+    }
+
+    /** Back out of one crew's articles to the list of them. */
+    private fun closeCrew() {
+        openCrew = null
+        crewRoster = null
+        scroll = 0
+        if (renamingOwnedCrew) commitOwnedCrewRename(send = false)
+        rebuildWidgets()
+    }
+
+    private fun beginOwnedCrewRename() {
+        ownedCrewNameValue = crewRoster?.name ?: return
+        renamingOwnedCrew = true
+        rebuildWidgets()
+    }
+
+    private fun commitOwnedCrewRename(send: Boolean) {
+        val crew = openCrew
+        if (send && crew != null) {
+            val typed = ownedCrewNameValue.trim()
+            if (typed.isNotEmpty() && typed != crewRoster?.name) {
+                CrewRoll.clientRenameCrew(snapshot.helm, crew, typed)
+            }
+        }
+        renamingOwnedCrew = false
+        ownedCrewNameBox = null
+        rebuildWidgets()
+    }
+
+    // endregion
+
     private fun drawScrollbar(guiGraphics: GuiGraphics) {
-        if (snapshot.maxBerths <= VISIBLE_ROWS) return
+        if (maxBerthsInView() <= VISIBLE_ROWS) return
         val trackTop = top + LIST_TOP
         val trackH = LIST_BOTTOM - LIST_TOP
         val x = left + PANEL_W - 7
         guiGraphics.fill(x, trackTop, x + 3, trackTop + trackH, ROW_LOCKED)
 
-        val thumbH = (trackH * VISIBLE_ROWS / snapshot.maxBerths).coerceAtLeast(12)
+        val rows = maxBerthsInView()
+        val thumbH = (trackH * VISIBLE_ROWS / rows).coerceAtLeast(12)
         val travel = trackH - thumbH
-        val thumbY = trackTop + travel * scroll / (snapshot.maxBerths - VISIBLE_ROWS)
+        val thumbY = trackTop + travel * scroll / (rows - VISIBLE_ROWS)
         guiGraphics.fill(x, thumbY, x + 3, thumbY + thumbH, ACCENT)
     }
 
@@ -1847,7 +2187,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             }
         }
 
-        drawDuties(guiGraphics, card, mouseX, mouseY)
+        // Read-only on the Crews tab: the duty control, the station dropdown and the gun's own settings are
+        // orders given to somebody serving on THIS ship, and the crew being read may be nowhere near it. Not
+        // drawn at all rather than drawn dead -- see initCrews.
+        if (activeTab == Tab.CREWS) {
+            small(guiGraphics, CREW_READONLY_TEXT, cardX() + CARD_PAD, dutyRowY() + 4, DIM)
+        } else {
+            drawDuties(guiGraphics, card, mouseX, mouseY)
+        }
         drawLockButton(guiGraphics, card, mouseX, mouseY)
         if (stationMenuOpen) drawStationMenu(guiGraphics, card, mouseX, mouseY)
         if (cardAmmoMenuOpen) drawCardAmmoMenu(guiGraphics, mouseX, mouseY)
@@ -1958,6 +2305,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * maybe station" walk.
      */
     private fun cardStops(card: CrewManifest.Detail): List<Int> {
+        // A read-only card has no stops, so a controller walking it finds nothing to press either.
+        if (activeTab == Tab.CREWS) return emptyList()
         if (card.locked) return listOf(CARD_STOP_LOCK)
         val stops = mutableListOf(CARD_STOP_DUTY)
         if (card.duty == CrewDuty.GUNNER && card.gunOptions.isNotEmpty()) stops.add(CARD_STOP_STATION)
@@ -2350,6 +2699,29 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             (Minecraft.getInstance().screen as? CrewManifestScreen)?.applyDetail(detail)
         }
 
+        /** The captain's crews arriving, for the Crews tab. Ignored unless it is about this wheel. */
+        fun acceptCrewRoll(roll: CrewRoll.Roll) {
+            val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
+            if (screen.snapshot.helm != roll.helm) return
+            screen.crewRoll = roll
+            // A crew that has just been deleted cannot go on being open behind the list.
+            if (roll.entries.none { it.id == screen.openCrew }) {
+                screen.openCrew = null
+                screen.crewRoster = null
+            }
+            screen.disbandArmed = null
+            screen.rebuildWidgets()
+        }
+
+        /** One crew's articles arriving. Ignored unless it is the crew the tab is showing. */
+        fun acceptCrewRoster(roster: CrewRoll.Roster) {
+            val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
+            if (screen.openCrew != roster.id) return
+            screen.crewRoster = roster
+            screen.scroll = 0
+            screen.rebuildWidgets()
+        }
+
         /** A stores tally arriving, decks census riding along. Ignored unless it is about this wheel. */
         fun acceptStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
             val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
@@ -2381,6 +2753,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private val MORE_BELOW: Component = Component.literal("▼")
         private val TAB_OPERATIONS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_operations")
         private val TAB_ROSTER_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_roster")
+        private val TAB_CREWS_TEXT: Component = Component.translatable("gui.vs_eureka.crew_tab_crews")
+        private val CREWS_NONE_TEXT: Component = Component.translatable("gui.vs_eureka.crews_none")
+        private val CREW_DELETE_TEXT: Component = Component.translatable("gui.vs_eureka.crew_delete")
+        private val CREW_DELETE_CONFIRM_TEXT: Component = Component.translatable("gui.vs_eureka.crew_dismiss_confirm")
+        private val CREW_SUMMON_TEXT: Component = Component.translatable("gui.vs_eureka.crew_summon")
+        private val CREW_READONLY_TEXT: Component = Component.translatable("gui.vs_eureka.crew_readonly")
         private val OPS_CREW_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_crew")
         private val OPS_CTRL_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_cannon_controls")
         private val OPS_RESTOCK_TEXT: Component = Component.translatable("gui.vs_eureka.crew_ops_restock")
@@ -2467,7 +2845,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val TAB_BASELINE_Y = TAB_Y + TAB_H
         private const val TAB_MARGIN = 8
         private const val TAB_GAP = 4
-        private const val TAB_W = (PANEL_W - 2 * TAB_MARGIN - TAB_GAP) / 2
+        private const val TAB_W = (PANEL_W - 2 * TAB_MARGIN - 2 * TAB_GAP) / 3
 
         // region Operations geometry (virtual body rows; every control 14px tall)
         //
@@ -2691,5 +3069,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         /** The same dark cyan the crew nameplates wear, so the two halves of the feature look related. */
         private const val ACCENT = 0xFF2A8FA6.toInt()
+
+        /** An armed Delete. Red because the next press destroys villagers and there is no way back. */
+        private const val DANGER = 0xFFA03030.toInt()
+        private const val CREW_DEL_W = 42
+        private const val CREW_DEL_H = 14
+        private const val CREW_DEL_INSET = 4
+        private const val CREW_SUMMON_BTN_W = 60
     }
 }

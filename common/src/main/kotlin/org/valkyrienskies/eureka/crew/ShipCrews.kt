@@ -1,5 +1,7 @@
 package org.valkyrienskies.eureka.crew
 
+import net.minecraft.core.BlockPos
+import net.minecraft.util.StringUtil
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
@@ -41,6 +43,8 @@ import java.util.UUID
  * later, and building them on a roster that already works beats guessing at both at once.
  */
 object ShipCrews {
+
+    private val logger by org.valkyrienskies.mod.util.logger()
 
     /**
      * One key, three meanings, arbitrated here rather than on the client.
@@ -118,7 +122,7 @@ object ShipCrews {
         // A wheel that still carries a pre-ledger roster hands it over before anything is read off the ledger,
         // so crew signed on under the old scheme are already present when the checks below run.
         ledger.adoptLegacy(level.server, station)
-        val existing = ledger.crewOf(villager.uuid)
+        val existing = ledger.crewOf(villager.uuid)?.let { ledger.crew(it) }
 
         // Discharging works from ANY wheel, not just the one they signed at. Their own wheel may be at the
         // bottom of the sea, and a villager who could never be released would be a villager nobody could ever
@@ -170,49 +174,45 @@ object ShipCrews {
         // NOTE: nothing below touches the villager's profession, and that is the rule now. See the note above
         // nameTheCrew for why signing the articles and taking a job are two different things.
         //
-        // A crew cannot be filed without a name, so a blank wheel names itself here rather than refusing. This
-        // is the first moment a name is actually needed -- naming every wheel at placement would burn a name on
-        // every throwaway test helm, and would give a three-wheeled ship three separate crews.
-        val crewName = station.helmName ?: nameTheCrew(level, player, station)
-        val key = CrewLedger.Key(
-            player.uuid,
-            HelmNames.keyOf(crewName),
-            HelmNames.variantOf(station.blockState)
-        )
+        // A wheel with no crew of this captain's on it raises one here rather than refusing. This is the first
+        // moment a crew is actually needed -- minting one at placement would burn a name on every throwaway
+        // test helm, and would give a three-wheeled ship three separate crews.
+        val crew = crewAt(level, player, station)
+        val crewName = crew.name
 
         val slots = CrewData.slots(player)
-        val signed = ledger.crew(key).size
+        val signed = ledger.berths(crew.id).size
         if (signed >= slots) {
             PathMessages.send(
                 player,
-                "No berth for them -- ${crewName.string} already musters $signed of your $slots.",
+                "No berth for them -- $crewName already musters $signed of your $slots.",
                 PathMessages.Kind.ERROR
             )
             return
         }
 
-        val name = signOn(ledger, key, villager)
+        val name = signOn(ledger, crew.id, villager)
         PathMessages.send(
             player,
             "Signed on $name, a ${professionName(villager)}, " +
-                "to ${crewName.string}. Crew: ${signed + 1}/$slots.",
+                "to $crewName. Crew: ${signed + 1}/$slots.",
             PathMessages.Kind.GOOD
         )
     }
 
     /**
-     * Write one villager onto [key]'s articles, and return the name they now answer to.
+     * Write one villager onto crew [crewId]'s articles, and return the name they now answer to.
      *
      * The berth number is an identity, not a reservation: it names them and fixes their row in the manifest,
      * and it is deliberately NOT what the crew limit is counted from -- so the caller checks for room before
      * calling, and this never refuses.
      */
-    private fun signOn(ledger: CrewLedger, key: CrewLedger.Key, villager: Villager): String {
-        val berth = ledger.freeSlot(key, EurekaConfig.SERVER.crewSlotsMax)
+    private fun signOn(ledger: CrewLedger, crewId: UUID, villager: Villager): String {
+        val berth = ledger.freeSlot(crewId, EurekaConfig.SERVER.crewSlotsMax)
         CrewNames.applyDefault(villager, berth)
         // Written down from the moment they sign on, so a crew member is recoverable even if the very next
         // thing that happens is their chunk unloading. The copy is refreshed whenever they are next in hand.
-        ledger.sign(key, villager.uuid, berth, CrewNames.displayName(villager), CrewSnapshot.capture(villager))
+        ledger.sign(crewId, villager.uuid, berth, CrewNames.displayName(villager), CrewSnapshot.capture(villager))
         return CrewNames.displayName(villager)
     }
 
@@ -260,15 +260,11 @@ object ShipCrews {
         val ledger = CrewLedger.get(level.server)
         ledger.adoptLegacy(level.server, station)
 
-        val crewName = station.helmName ?: nameTheCrew(level, player, station)
-        val key = CrewLedger.Key(
-            player.uuid,
-            HelmNames.keyOf(crewName),
-            HelmNames.variantOf(station.blockState)
-        )
+        val crew = crewAt(level, player, station)
+        val crewName = crew.name
 
         val slots = CrewData.slots(player)
-        var signed = ledger.crew(key).size
+        var signed = ledger.berths(crew.id).size
 
         var hired = 0
         var alreadyOurs = 0
@@ -280,7 +276,7 @@ object ShipCrews {
         for (villager in CrewMuster.villagersIn(level, ship.worldAABB)) {
             val existing = ledger.crewOf(villager.uuid)
             if (existing != null) {
-                if (existing.captain == player.uuid) alreadyOurs++ else spokenFor++
+                if (ledger.crew(existing)?.captain == player.uuid) alreadyOurs++ else spokenFor++
                 continue
             }
             if (villager.isBaby) {
@@ -299,7 +295,7 @@ object ShipCrews {
                 noBerth++
                 continue
             }
-            signOn(ledger, key, villager)
+            signOn(ledger, crew.id, villager)
             signed++
             hired++
         }
@@ -316,7 +312,7 @@ object ShipCrews {
         when {
             hired > 0 -> PathMessages.send(
                 player,
-                "Signed on $hired ${if (hired == 1) "hand" else "hands"} to ${crewName.string}. " +
+                "Signed on $hired ${if (hired == 1) "hand" else "hands"} to $crewName. " +
                     "Crew: $signed/$slots.$tail",
                 PathMessages.Kind.GOOD
             )
@@ -355,30 +351,39 @@ object ShipCrews {
      * `crewmanHelmPoiTickets` / `crewmanHelmPoiRange` are the dials for that.
      */
     /**
-     * Give an unnamed wheel a crew name, and say so.
+     * The crew [player] keeps at this wheel, raising a fresh one if they have never kept any here.
      *
-     * Announced rather than done quietly, because the name that appears here is the one the captain will have
-     * to re-type to get this crew back if the wheel is ever destroyed. A name nobody was told about is a crew
-     * nobody can recover.
+     * The wheel holds a binding per captain (see `ShipHelmBlockEntity.crewBindings`), so this is a map read in
+     * the ordinary case. A binding pointing at a crew that no longer exists -- everyone aboard was paid off,
+     * and the ledger dropped the empty crew -- is treated as no binding at all and replaced, rather than
+     * leaving the captain unable to recruit at a wheel that looks perfectly normal.
+     *
+     * A new crew is ANNOUNCED rather than raised quietly. The name is not load-bearing any more -- the wheel
+     * remembers which crew it calls, so nobody has to retype anything -- but it is what the captain will see
+     * in the helm menu's list, and a crew that appeared in that list unannounced is a puzzle.
      */
-    private fun nameTheCrew(
+    private fun crewAt(
         level: ServerLevel,
         player: ServerPlayer,
         station: ShipHelmBlockEntity
-    ): Component {
+    ): CrewLedger.Crew {
         val ledger = CrewLedger.get(level.server)
-        val variant = HelmNames.variantOf(station.blockState)
+        // Through bindingFor, so a wheel from before crew ids adopts its name-keyed crew here rather than
+        // raising a second one beside it and leaving the first unreachable.
+        ledger.bindingFor(station, player.uuid)?.let { bound -> ledger.crew(bound)?.let { return it } }
+
         val generated = CrewNameGenerator.generate(level.random) { candidate ->
-            ledger.exists(player.uuid, candidate, variant)
+            ledger.nameTaken(player.uuid, candidate)
         }
-        val name = Component.literal(generated)
-        station.setHelmName(name)
+        val crew = ledger.create(player.uuid, generated)
+        station.bindCrew(player.uuid, crew.id)
         PathMessages.send(
             player,
-            "This wheel had no crew, so they are now $generated. Rename them from the crew menu or an anvil.",
+            "This wheel kept no crew of yours, so they are now $generated. " +
+                "Rename them from the crew menu, and pick them from the helm's crew list.",
             PathMessages.Kind.WARN
         )
-        return name
+        return crew
     }
 
     // endregion
@@ -417,6 +422,125 @@ object ShipCrews {
      * container behind it to vouch for anything.
      */
     @JvmStatic
+    /**
+     * Call a crew to the ship the wheel at [helm] steers, charging passage. The helm menu's Summon button.
+     *
+     * Everything that decides whether they come lives in [CrewSummon.bring]; this is the gate in front of it.
+     * Reach is the same test the crew book uses, because it is the same gesture -- a captain standing at their
+     * own wheel -- and a summon arriving from anywhere else is a packet nobody typed.
+     *
+     * The ship has to EXIST. Calling a crew to a hull that has not been assembled has nowhere to put them: the
+     * wheel is a block on the ground, there is no deck to stand on and no holds to pay out of. That case is
+     * covered instead by picking the crew and pressing Assemble, which brings them aboard as the ship is made.
+     */
+    fun summonCrew(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        if (!withinBookReach(level, player, wheel)) return
+        if (PirateHelm.gated(wheel.blockState)) {
+            PirateHelm.deny(player)
+            return
+        }
+        // The articles hang from ONE wheel per ship, and that is the wheel a crew is bound to. Summoning at a
+        // spare helm would bind the crew to a block nothing else reads, and they would not be found again.
+        val ship = CrewStations.shipOf(level, wheel)
+        if (ship == null) {
+            PathMessages.send(
+                player,
+                "Assemble her first -- a crew needs a deck to stand on.",
+                PathMessages.Kind.ERROR
+            )
+            return
+        }
+        // An assembled wheel is filed at SHIPYARD coordinates, so its own blockPos is exactly the address the
+        // muster needs to place people around. No conversion, and nothing to get one block wrong.
+        val station = CrewStations.stationOf(level, ship) ?: wheel
+
+        val refused = CrewSummon.bring(level, player, ship, station, crewId, station.blockPos.asLong())
+        if (refused != null) {
+            PathMessages.send(player, refused, PathMessages.Kind.ERROR)
+            return
+        }
+        // The list is a snapshot and does not poll, so the row that just became "aboard" has to be re-sent or
+        // the menu goes on offering to charge for a crew already standing on the deck.
+        // Built against the wheel the captain is ACTUALLY looking at, not the articles wheel -- the roll is
+        // keyed on it, and a roll keyed on a different helm is one the menu quietly ignores.
+        CrewRoll.sender(player, CrewRoll.build(player, wheel))
+    }
+
+    /**
+     * Send [player] one crew's articles for the Crews tab, whether or not that crew is on this ship.
+     *
+     * Reach-guarded on the WHEEL the book was opened at, not on the crew: the crew may be anywhere, and the
+     * thing being authorised is a captain reading their own papers at their own wheel.
+     */
+    fun requestCrewRoster(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        if (!withinBookReach(level, player, wheel)) return
+        CrewRoll.roster(level, player, crewId)?.let { CrewRoll.rosterSender(player, it) }
+    }
+
+    /** Rename a crew by id, from the Crews tab. Works on a crew that is nowhere near this ship. */
+    fun renameCrew(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID, raw: String) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        if (!withinBookReach(level, player, wheel)) return
+        val ledger = CrewLedger.get(level.server)
+        val crew = ledger.crew(crewId) ?: return
+        if (crew.captain != player.uuid) return
+        val cleaned = StringUtil.filterText(raw).trim().take(HelmNames.MAX_NAME_LENGTH)
+        if (cleaned.isEmpty()) return
+        ledger.rename(crewId, cleaned)
+        CrewRoll.sender(player, CrewRoll.build(player, wheel))
+        CrewRoll.roster(level, player, crewId)?.let { CrewRoll.rosterSender(player, it) }
+    }
+
+    /**
+     * Strike a crew off and destroy every member, wherever they are. There is no way back from this.
+     *
+     * The captain's "pay them off", applied to a whole crew at once, and it is deliberately final: the
+     * articles go, the entities go, and anybody who cannot be reached right now is TOMBSTONED so they are
+     * removed the moment their chunk loads. A crew half-deleted -- struck off the books but still walking a
+     * deck somewhere with nobody's name on them -- would be worse than either outcome.
+     *
+     * Seated gunners are unseated first, while they still exist to be dismounted, so no orphan seat is left
+     * for the reconcile sweep to find. The books are settled BEFORE the entities are touched, so no berth can
+     * be left pointing at a villager that has already gone.
+     */
+    fun disbandCrew(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        if (!withinBookReach(level, player, wheel)) return
+        val ledger = CrewLedger.get(level.server)
+        val crew = ledger.crew(crewId) ?: return
+        if (crew.captain != player.uuid) return
+
+        val name = crew.name
+        val berths = ledger.disband(crewId)
+        var destroyed = 0
+        var unreachable = 0
+        for (berth in berths) {
+            GunStations.unseat(level, berth.villager)
+            val villager = CrewMuster.findAnywhere(level.server, berth.villager)
+            if (villager == null) {
+                ledger.tombstone(berth.villager)
+                unreachable++
+                continue
+            }
+            // `discard`, not `kill`: nobody died. There is nothing to drop and no experience to award -- the
+            // crew simply stops existing, which is what deleting a crew was asked to mean.
+            villager.discard()
+            destroyed++
+        }
+        // Any wheel still pointing at them now points at nothing, which resolves to "no crew" everywhere and
+        // needs no sweep of its own -- see CrewLedger.bindingFor.
+        logger.info("[crew] disband crew='$name' berths=${berths.size} destroyed=$destroyed away=$unreachable")
+        PathMessages.send(
+            player,
+            if (unreachable == 0) "$name are gone -- $destroyed struck off the articles."
+            else "$name are gone -- $destroyed struck off, $unreachable will be when their chunks load.",
+            PathMessages.Kind.WARN
+        )
+        CrewRoll.sender(player, CrewRoll.build(player, wheel))
+    }
+
     fun openHelm(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity) {
         if (!withinBookReach(level, player, helm)) return
         // Pirate gate, door 10 of 14: the manifest's Back button is its own road to the menu.
@@ -603,10 +727,9 @@ object ShipCrews {
         station: ShipHelmBlockEntity,
         owner: UUID
     ): List<Villager> {
-        val name = station.helmName ?: return emptyList()
-        val key = CrewLedger.Key(owner, HelmNames.keyOf(name), HelmNames.variantOf(station.blockState))
+        val crewId = station.boundCrew(owner) ?: return emptyList()
         val ledger = CrewLedger.get(level.server)
-        return ShipCrew.villagersAboard(level, ship).filter { ledger.crewOf(it.uuid) == key }
+        return ShipCrew.villagersAboard(level, ship).filter { ledger.crewOf(it.uuid) == crewId }
     }
 
     /**

@@ -60,14 +60,18 @@ object CrewMuster {
         level: ServerLevel,
         captain: ServerPlayer,
         ship: LoadedServerShip,
-        crewName: String,
-        variant: String,
+        crewId: UUID,
         berthLimit: Int,
         station: Long
     ) {
         val ledger = CrewLedger.get(level.server)
-        val key = CrewLedger.Key(captain.uuid, HelmNames.keyOf(crewName), variant)
-        val berths = ledger.crew(key)
+        val crew = ledger.crew(crewId) ?: return
+        // A crew belongs to somebody. Anyone else holding the wheel assembles the ship and musters nobody --
+        // which is the whole answer to a stolen helm, and the reason the captain is checked here rather than
+        // trusted to have been checked by whatever set the binding.
+        if (crew.captain != captain.uuid) return
+        val crewName = crew.name
+        val berths = ledger.berths(crewId)
         if (berths.isEmpty()) return
 
         // Anybody already inside the hull is aboard and needs no moving. Deliberately NOT
@@ -153,6 +157,7 @@ object CrewMuster {
         logger.info(
             "[crew] muster ship=${ship.id} crew='$crewName' berths=${berths.size} " +
                 "withPost=${berths.count { it.post != null }} posted=${berthing.posted} " +
+                "strayPosts=${berthing.strays} " +
                 "scattered=${berthing.scattered} labels=${GunLabels.labeled(level, ship).size} " +
                 "moved=$moved returned=$returned rebuilt=$rebuilt lost=$lost overflow=$overflow"
         )
@@ -250,11 +255,14 @@ object CrewMuster {
      * The first version swept the hull box for villagers and matched them against ONE crew name -- the name of
      * whichever wheel the caller happened to be holding. An entire eighty-gunner crew went over the side that
      * way: on a hull with several wheels the held one need not be the named one, and a gate that reads the
-     * wrong wheel stands down nobody at all. So the search now starts from the LEDGER and works outward --
-     * every berth under the crew's name (all captains at once, the wheel is being taken apart for all of
-     * them), plus every berthed villager the hull box turns up regardless of whose articles they are on, so a
-     * renamed wheel or a guest crew still gets everyone off the deck. A berthed villager who is genuinely
+     * wrong wheel stands down nobody at all. So the search starts from the LEDGER and works outward -- every
+     * berth on every crew [crewIds] names (all captains at once, since the wheel is being taken apart for all
+     * of them), plus every berthed villager the hull box turns up regardless of whose articles they are on, so
+     * an unbound wheel or a guest crew still gets everyone off the deck. A berthed villager who is genuinely
      * somewhere else is left there: being on the books does not mean being aboard.
+     *
+     * [crewIds] being empty is not an error -- it means no wheel aboard claimed anybody, and the box sweep is
+     * then the only source. That is exactly the case the sweep exists for.
      *
      * **Nobody is destroyed without a written copy in hand.** A snapshot that cannot be taken means the crew
      * member is left exactly where they are, still on the articles and still in the world, because a crew
@@ -268,35 +276,39 @@ object CrewMuster {
         level: ServerLevel,
         shipId: Long,
         hull: AABBdc,
-        crewName: String?,
-        variant: String?,
-        posts: Map<UUID, Vec3> = emptyMap()
+        crewIds: Collection<UUID>,
+        posts: Map<UUID, Vec3> = emptyMap(),
+        sweepHull: Boolean = true
     ): StandDownReport {
         val ledger = CrewLedger.get(level.server)
-        logger.info("[crew] stand-down ship=$shipId crew='${crewName ?: "(unnamed)"}' variant=${variant ?: "?"}")
+        logger.info("[crew] stand-down ship=$shipId crews=${crewIds.size} sweep=$sweepHull")
 
-        // Two independent ways onto the list, union'd by villager id. The name lookup is the intended path;
-        // the box sweep is the safety net that holds when the name is wrong, and the reason a mismatch can
-        // never again cost a whole crew.
+        // Two independent ways onto the list, union'd by villager id. The bindings are the intended path; the
+        // box sweep is the safety net that holds when a wheel points at the wrong crew or at none, and the
+        // reason a mismatch can never again cost a whole crew.
         val berths = LinkedHashMap<UUID, CrewLedger.Berth>()
-        var berthsByName = 0
-        if (crewName != null && variant != null) {
-            for (key in ledger.keysUnder(crewName, variant)) {
-                for (berth in ledger.crew(key)) {
-                    berths[berth.villager] = berth
-                    berthsByName++
-                }
+        var berthsByCrew = 0
+        for (crewId in crewIds) {
+            for (berth in ledger.berths(crewId)) {
+                berths[berth.villager] = berth
+                berthsByCrew++
             }
         }
         val inBox = villagersIn(level, hull).associateBy { it.uuid }
         var berthedInBox = 0
-        for (villager in inBox.values) {
-            val berth = ledger.berthOf(villager.uuid) ?: continue
-            berthedInBox++
-            berths.putIfAbsent(berth.villager, berth)
+        // The sweep is off for a crew SWAP, and only for that. Everywhere else -- disassembly, the bottle,
+        // salvage, foundering -- the hull is going away and everyone on it has to come off, so casting the
+        // wider net is the whole safety property. A swap is the opposite: it takes one named crew off a ship
+        // that carries on existing, and sweeping would take a guest crew and another captain's hands with it.
+        if (sweepHull) {
+            for (villager in inBox.values) {
+                val berth = ledger.berthOf(villager.uuid) ?: continue
+                berthedInBox++
+                berths.putIfAbsent(berth.villager, berth)
+            }
         }
         logger.info(
-            "[crew] sources: berthsByName=$berthsByName villagersInBox=${inBox.size} " +
+            "[crew] sources: berthsByCrew=$berthsByCrew villagersInBox=${inBox.size} " +
                 "berthedInBox=$berthedInBox candidates=${berths.size}"
         )
 
@@ -423,10 +435,22 @@ object CrewMuster {
         private val helm = BlockPos.of(station)
         private val taken = HashMap<BlockPos, Int>()
 
+        /**
+         * This hull's own bounds, in shipyard blocks, or null while vs-core has yet to fill them in.
+         *
+         * Null is trusted rather than refused: at ASSEMBLY the bounds arrive a beat after the ship does, and
+         * every post in hand there was measured on this same hull moments earlier. There is nothing to catch.
+         */
+        private val hull = ship.shipAABB
+
         /** How many were put back exactly where they were standing, and how many had to be found room. */
         var posted = 0
             private set
         var scattered = 0
+            private set
+
+        /** Posts thrown away for belonging to another hull. Logged, because it is never zero by accident. */
+        var strays = 0
             private set
 
         /**
@@ -440,7 +464,19 @@ object CrewMuster {
 
         /** Where this berth should land, in WORLD coordinates. */
         fun claim(berth: CrewLedger.Berth): Vec3 {
-            val post = berth.post
+            // A post is an offset from the wheel in the ship's own block frame, so it means something only on
+            // the hull it was measured on. A crew CALLED to a different ship carries posts that point into the
+            // open air beside the new hull -- and open air passes `roomy` cheerfully, so the post was honoured
+            // exactly and the hand was placed off the deck with no search at all. On an airship at altitude
+            // that is a crew falling to its death, one by one, which is exactly what it did.
+            //
+            // This could not happen while a crew only ever came back to the hull they left: assembly, the
+            // bottle and salvage all put people back where they were. Summoning is the first thing that moves
+            // a crew BETWEEN ships, and it is what made a stale post reachable.
+            val post = berth.post?.takeIf { p ->
+                aboard(BlockPos.containing(helm.x + p.x, helm.y + p.y + FOOT_LIFT, helm.z + p.z))
+                    .also { if (!it) strays++ }
+            }
             val wanted = if (post != null) {
                 Vec3(helm.x + post.x, helm.y + post.y, helm.z + post.z)
             } else {
@@ -506,6 +542,17 @@ object CrewMuster {
             // somebody else's block -- which the cramming cap keeps survivable. `first` is the last resort
             // for a hull so full that nothing within reach is even standable.
             return airborne ?: crowded ?: first
+        }
+
+        /**
+         * Whether a shipyard block is on THIS hull -- grown by one, so a post on the gunwale or a step off
+         * the stern still counts as aboard rather than being thrown away as somebody else's.
+         */
+        private fun aboard(pos: BlockPos): Boolean {
+            val box = hull ?: return true
+            return pos.x >= box.minX() - 1 && pos.x <= box.maxX() + 1 &&
+                pos.y >= box.minY() - 1 && pos.y <= box.maxY() + 1 &&
+                pos.z >= box.minZ() - 1 && pos.z <= box.maxZ() + 1
         }
 
         /** Two blocks of clear air here: enough for a villager to be put down without suffocating. */

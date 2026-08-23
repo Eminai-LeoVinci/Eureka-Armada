@@ -2,10 +2,10 @@ package org.valkyrienskies.eureka.gui.shiphelm
 
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
+import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.client.input.KeyEvent
-import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.phys.BlockHitResult
@@ -15,9 +15,11 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.crew.CrewRoll
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.mod.common.getShipManagingPos
+import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
@@ -67,6 +69,27 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     private lateinit var cruiseVerticalBox: EditBox
 
     private lateinit var crewBookButton: CrewBookButton
+
+    /**
+     * The crew list, and the button that calls whoever it is showing.
+     *
+     * The list is NOT a widget -- see [CrewDropdown] for why an open dropdown cannot be one -- so it is held
+     * here and driven by hand from render, mouseClicked and mouseScrolled.
+     */
+    private lateinit var crewList: CrewDropdown
+    private lateinit var summonButton: ShipHelmIconButton
+
+    /** The wheel the roll on screen was drawn up for, so a stale one is not shown against another helm. */
+    private var rolledFor: Long? = null
+
+    /**
+     * The wheel a roll has already been asked for, so the ask happens once rather than every frame.
+     *
+     * Asked from the per-frame update rather than from `init` because [pos] comes off the crosshair, and the
+     * crosshair need not have resolved the wheel by the time the screen is built. Asking on the first frame
+     * that knows which wheel this is costs one packet and cannot miss.
+     */
+    private var askedRollFor: Long? = null
     private lateinit var hudCheckbox: ShipHelmCheckbox
 
     private lateinit var assemblerMasterCheckbox: ShipHelmCheckbox
@@ -170,6 +193,24 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
                 minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, ShipHelmScreenMenu.BUTTON_CREW_BOOK)
             }
         )
+
+        // The crew list hangs under the book, because both are about the same thing: who is aboard. Picking
+        // from it costs nothing and moves nobody -- it tells the wheel which crew Assemble should bring, and
+        // which crew the Summon button opposite would call.
+        crewList = CrewDropdown(font, CREW_LIST_X, cruiseRowY(3), CREW_LIST_W, CREW_LIST_H).also {
+            it.placeholder = CREW_LIST_EMPTY_TEXT
+            it.onPick = { key -> pos?.let { p -> CrewRoll.clientSelect(p.asLong(), key as? UUID) } }
+        }
+
+        summonButton = addRenderableWidget(
+            ShipHelmIconButton(x + SUMMON_X, y + SUMMON_Y, SUMMON_W, SUMMON_H, SUMMON_TEXT, font) {
+                val picked = crewList.selected as? UUID
+                val helm = pos
+                if (picked != null && helm != null) CrewRoll.clientSummon(helm.asLong(), picked)
+            }
+        )
+
+
         // endregion
 
         // region Column 3: Eureka Auto-Shipwright (per-player, server-friendly)
@@ -203,12 +244,16 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // Per-assembly "+ N%" bonus boxes, right of each sub-toggle (committed on Enter, reset to 0% after assemble).
         assemblerFloaterBox = addPctBox(x + PCT_BOX_X, y + cruiseRowY(0))
         assemblerBalloonBox = addPctBox(x + PCT_BOX_X, y + cruiseRowY(1))
-        // Read-only "Ship's Weight" readout, styled like the % boxes (black bg, grey border, white text) but wider
-        // for heavy ships. Placed after its label, spanning to the panel's right edge (>= 30-50% longer than a % box).
-        weightBoxX = x + COL3_SUB_X + Math.round(font.width(SHIP_WEIGHT_TEXT) * ShipHelmCheckbox.LABEL_SCALE) + 5
-        weightBoxW = (x + PANEL_WIDTH - PANEL_RIGHT_MARGIN) - weightBoxX
+        // Read-only "Ship's Weight" readout, styled like the % boxes (black bg, grey border, white text).
+        //
+        // Column ONE now, on the row under the three cruise boxes, and sharing their exact geometry -- it is a
+        // reading about the ship, which is what that column is, and it was only ever in the Auto-Shipwright
+        // column because that is where there happened to be a gap. Moving it freed the right-hand slot for the
+        // Summon button below.
+        weightBoxX = x + WEIGHT_BOX_X
+        weightBoxW = WEIGHT_BOX_W
         shipWeightBox = addRenderableWidget(
-            EditBox(font, weightBoxX, y + cruiseRowY(3), weightBoxW, PCT_BOX_H, Component.empty())
+            EditBox(font, weightBoxX, y + cruiseRowY(3) + WEIGHT_LABEL_H, weightBoxW, PCT_BOX_H, Component.empty())
         ).also {
             it.setBordered(true)
             it.setEditable(false)
@@ -370,6 +415,21 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // type here (Keep Name, another captain's rename) reads stale from it forever. The helm block entity
         // syncs, so its copy is the current one. Falls back to the ship for a wheel that has not sampled yet.
         val helm = pos?.let { Minecraft.getInstance().level?.getBlockEntity(it) } as? ShipHelmBlockEntity
+
+        // The WHEEL'S OWN NAME first, while Keep Name is on -- because under the current model the wheel is
+        // what names the hull, so the two agree by construction and `CustomName` is the fresher of the two.
+        // It is pushed to clients the instant it changes (see setHelmName); `shipSlug` converges on a slow
+        // stagger and pushes only when the SERVER's copy changes, so once server and client disagree there is
+        // nothing left to trigger a correction. That is exactly what went wrong: three wheels on one hull
+        // showed three different names -- the ship's real name, its previous one, and, on the wheel that had
+        // never received an update at all, the generated name the ship happened to be carrying when the chunk
+        // loaded, because `Ship.slug` on the client is frozen at load time and VS2 never pushes renames.
+        //
+        // Keep Name OFF means the wheel is deliberately NOT naming the hull, so its name would be the wrong
+        // answer and the ship's own is asked for instead.
+        if (helm != null && helm.keepName) {
+            helm.helmName?.string?.takeIf { it.isNotBlank() }?.let { return it }
+        }
         return (helm?.shipSlug ?: s.slug)?.replace('-', ' ')
     }
 
@@ -438,6 +498,32 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         if (submarineTab.active) tabs.add(ControlProfile.SUBMARINE)
         val index = tabs.indexOf(viewedTab).coerceAtLeast(0)
         viewedTab = tabs[(index + step + tabs.size) % tabs.size]
+    }
+
+    /**
+     * Lay a fresh roll into the list, keeping the pick where it can be kept.
+     *
+     * A roll arrives after anything that changes it, and re-selecting the crew now aboard would quietly undo
+     * a captain's pick between opening the menu and pressing Assemble. So an existing pick survives if it is
+     * still on the list, and only a list with nothing picked falls back to whoever is aboard.
+     */
+    private fun applyRoll(roll: CrewRoll.Roll) {
+        crewList.rows = roll.entries.map { entry ->
+            CrewDropdown.Row(
+                key = entry.id,
+                label = entry.name,
+                trailing = when {
+                    entry.aboard -> CREW_LIST_ABOARD_TEXT.string
+                    entry.fare > 0 -> "${entry.fare}◆"
+                    else -> "${entry.heads}"
+                }
+            )
+        }
+        val kept = crewList.selected
+        if (kept == null || roll.entries.none { it.id == kept }) {
+            crewList.selected = roll.entries.firstOrNull { it.aboard }?.id
+        }
+        rolledFor = roll.helm
     }
 
     private fun updateButtons() {
@@ -516,6 +602,29 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // The book opens the articles, and articles hang off an assembled ship's wheel: unassembled, the
         // server would only answer "assemble the ship first", so the cover says it first by greying.
         crewBookButton.active = assembled
+
+        // The crew list, from the last roll the server sent for THIS wheel. Kept statically because the
+        // payload arrives with no screen in hand; matched on the wheel so a roll drawn up at another helm
+        // is never shown against this one.
+        val helmKey = pos?.asLong()
+        if (helmKey != null && askedRollFor != helmKey) {
+            askedRollFor = helmKey
+            // A snapshot, never a poll -- the same rule the crew manifest follows. Asked once per wheel; the
+            // server sends a fresh one unprompted after anything that changes it.
+            CrewRoll.clientAsk(helmKey)
+        }
+        val roll = crewRoll
+        if (helmKey != null && roll != null && roll.helm == helmKey && rolledFor != helmKey) {
+            applyRoll(roll)
+        }
+        // Always usable: the list feeds Assemble as well as Summon, so an unassembled wheel still needs it.
+        crewList.enabled = true
+
+        // Summon needs a deck to put people on, and something to change. Calling the crew already aboard would
+        // be free and do nothing, so the button says so by going grey rather than by refusing afterwards.
+        val picked = crewList.selected as? UUID
+        val aboard = roll?.entries?.firstOrNull { it.aboard }?.id
+        summonButton.active = assembled && picked != null && picked != aboard
 
         // The section's name tells the truth about what the system is doing. Holding a SPEED is cruise
         // control -- that is the whole of what the words mean. The moment it is also holding a heading or
@@ -610,7 +719,38 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         g.fill(bx + 1, by + 1, bx + w - 1, by + h - 1, BOX_BG)
     }
 
+    /**
+     * Everything the container screen draws, and then the open crew list on top of it.
+     *
+     * The list has to be painted after `super.render` or the widgets it hangs over would cover it: the
+     * container screen paints background, then widgets, then labels, and an open dropdown belongs above all
+     * three. Absolute coordinates here, unlike [renderLabels], because this pose is not translated.
+     */
+    override fun render(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int, partialTicks: Float) {
+        super.render(guiGraphics, mouseX, mouseY, partialTicks)
+        crewList.renderOpen(guiGraphics, leftPos, topPos, mouseX, mouseY)
+    }
+
+    /**
+     * An open crew list takes the click before any widget does, and folds on a click outside itself.
+     *
+     * Before `super`, because the widget list would otherwise answer first for anything the open list is
+     * drawn over -- the click would land on a checkbox under the menu while the menu visibly sat on top of it.
+     */
+    override fun mouseClicked(mouseButtonEvent: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (crewList.clicked(leftPos, topPos, mouseButtonEvent.x, mouseButtonEvent.y)) return true
+        return super.mouseClicked(mouseButtonEvent, doubled)
+    }
+
+    override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
+        if (crewList.scrolled(leftPos, topPos, mouseX, mouseY, scrollY)) return true
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
+    }
+
     override fun renderLabels(guiGraphics: GuiGraphics, i: Int, j: Int) {
+        // Panel-relative, because renderLabels runs with the pose already translated to the panel's corner.
+        // Drawn here rather than in renderBg so the closed row sits OVER the widgets around it.
+        crewList.renderClosed(guiGraphics, 0, 0, i, j)
         if (this.menu.aligning) {
             alignButton.message = ALIGNING_TEXT
             alignButton.active = false
@@ -622,7 +762,13 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // and shown with or without a ship: a "+" between each sub-toggle and its % box, and the weight label.
         drawScaledLabel(guiGraphics, PLUS_TEXT, PLUS_X, cruiseRowY(0), PCT_BOX_H, INFO_TEXT)
         drawScaledLabel(guiGraphics, PLUS_TEXT, PLUS_X, cruiseRowY(1), PCT_BOX_H, INFO_TEXT)
-        drawScaledLabel(guiGraphics, SHIP_WEIGHT_TEXT, COL3_SUB_X, cruiseRowY(3), PCT_BOX_H, INFO_TEXT)
+        // Centred over its box rather than left-aligned beside it -- the pair reads as one readout that way,
+        // and the box below is free to take the whole column.
+        val weightLabelW = Math.round(font.width(SHIP_WEIGHT_TEXT) * ShipHelmCheckbox.LABEL_SCALE)
+        drawScaledLabel(
+            guiGraphics, SHIP_WEIGHT_TEXT,
+            WEIGHT_BOX_X + (WEIGHT_BOX_W - weightLabelW) / 2, cruiseRowY(3), WEIGHT_LABEL_H, INFO_TEXT
+        )
 
         // "now +N%": how far the assembled ship's fitted counts already sit over what its mass calls for.
         // Right-aligned into the gap between each row's label and its "+", small and grey so it reads as an
@@ -859,7 +1005,27 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // three-across without clipping; 222 tall since the Auto-Shipwright column grew a fourth row for
         // Replace All. init() centres it, so it stays on-screen at normal GUI scales.
         private const val PANEL_WIDTH = 320
-        private const val PANEL_HEIGHT = 222
+        // Grown by 14 from 222 to make the band under the Crew & Operations book, where the crew list sits.
+        // Every constant below DIVIDER2_Y is absolute from the panel top, so each one moved by the same 14 --
+        // nothing in this layout reflows on its own.
+        private const val PANEL_HEIGHT = 250
+        /**
+         * The last crew list the server sent, held statically.
+         *
+         * The payload arrives at the networking layer with no screen in hand, and the screen may not even be
+         * open yet when it does. Static is the same answer the crew manifest reached for, and the wheel
+         * position on the roll is what keeps it from being shown against the wrong helm.
+         */
+        @JvmStatic
+        private var crewRoll: CrewRoll.Roll? = null
+
+        /** Client: a roll has arrived. Called on the client thread. */
+        @JvmStatic
+        fun acceptCrewRoll(roll: CrewRoll.Roll) {
+            crewRoll = roll
+            (Minecraft.getInstance().screen as? ShipHelmScreen)?.applyRoll(roll)
+        }
+
         private const val PANEL_BORDER = 0xFF000000.toInt()
         private const val PANEL_BG = 0xFFC6C6C6.toInt()
         private const val SEPARATOR = 0xFF8B8B8B.toInt()
@@ -897,7 +1063,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val RENAME_BOX_H = 12
 
         private const val DIVIDER1_Y = 18
-        private const val DIVIDER2_Y = 110
+        private const val DIVIDER2_Y = 138
 
         // Ship-category tab strip, in exactly the band the Advanced / Vanilla radio used to occupy: below the
         // title separator at 18, above the column headers at 40. TAB_BASELINE_Y is the rule the strip sits
@@ -947,13 +1113,13 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // Miscellaneous stack. Two columns: Keep Active / Water Lock on the left, the armada role markers on
         // the right. MISC2_X clears the widest left label ("Keep Active?" is ~78px wide including its box).
         private const val MISC_X = 14
-        private const val MISC_Y = 116
+        private const val MISC_Y = 144
         private const val MISC_DY = 13
         private const val MISC2_X = 120
 
         // Bottom row: info boxes (left), buttons (centre), engine boxes (right).
         private const val BOX_H = 15
-        private const val INFO_Y0 = 162
+        private const val INFO_Y0 = 190
         private const val BOX_ROW_DY = 17
         private fun boxRelY(y0: Int, row: Int) = y0 + BOX_ROW_DY * row
         private fun boxRowY(y0: Int, row: Int) = boxRelY(y0, row) // same offset; separated for readability at call sites
@@ -1007,11 +1173,36 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val BOOK_W = 48
         private const val BOOK_H = 56
 
+        // Summon sits under the book it belongs with, half a button-height below where the list used to hang.
+        private const val SUMMON_W = 65
+        private const val SUMMON_X = BOOK_X + (BOOK_W - SUMMON_W) / 2   // 123
+        private const val SUMMON_H = 12
+        private const val SUMMON_Y = BOOK_Y + BOOK_H + 2 + SUMMON_H / 2 // 110
+
+        // The crew list takes the wide right-hand slot the ship's weight used to hold, because a crew's name
+        // is the longest string on this panel -- "Motley Crew Barnacle" needs the room, and a 76px box spent
+        // most of its life marqueeing. Its left edge runs flush against Summon's right, so the pair reads as
+        // one block of crew controls rather than two things that happen to be near each other.
+        private const val CREW_LIST_X = SUMMON_X + SUMMON_W                             // 188
+        private const val CREW_LIST_W = PANEL_WIDTH - PANEL_RIGHT_MARGIN - CREW_LIST_X  // 126
+        private const val CREW_LIST_H = 12
+
+        // The weight readout, stacked rather than side by side: a laden first-rate runs to seven digits and a
+        // label beside it left nowhere near enough room, so the label sits centred ABOVE the box. The box is
+        // sized to the number rather than to the column -- it only ever holds a figure, and a box far wider
+        // than anything it can contain reads as a field waiting to be filled in.
+        private const val WEIGHT_BOX_X = 12
+        private const val WEIGHT_BOX_W = 84
+        private const val WEIGHT_LABEL_H = 11
+
         private val ASSEMBLER_TEXT = Component.translatable("gui.vs_eureka.assembler")
         private val ASSEMBLER_FLOATER_TEXT = Component.translatable("gui.vs_eureka.assembler_floater")
         private val ASSEMBLER_BALLOON_TEXT = Component.translatable("gui.vs_eureka.assembler_balloon")
         private val ASSEMBLER_REPLACE_ALL_TEXT = Component.translatable("gui.vs_eureka.assembler_replace_all")
         private val SHIP_WEIGHT_TEXT = Component.translatable("gui.vs_eureka.ship_weight")
+        private val SUMMON_TEXT = Component.translatable("gui.vs_eureka.crew_summon")
+        private val CREW_LIST_EMPTY_TEXT = Component.translatable("gui.vs_eureka.crew_list_empty")
+        private val CREW_LIST_ABOARD_TEXT = Component.translatable("gui.vs_eureka.crew_list_aboard")
         private val PLUS_TEXT = Component.literal("+")
 
         private val RENAME_TEXT = Component.translatable("gui.vs_eureka.rename")

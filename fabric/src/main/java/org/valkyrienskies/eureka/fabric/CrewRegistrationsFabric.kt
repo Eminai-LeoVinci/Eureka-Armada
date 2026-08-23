@@ -138,12 +138,12 @@ object CrewRegistrationsFabric {
         // Read the name BEFORE striking them out: the berth is what the name is filed against, and the message
         // is the only place it is ever said out loud.
         val name = CrewNames.displayName(villager)
-        val key = ledger.payOff(villager.uuid) ?: return
+        // Read the crew BEFORE paying off: the last berth going takes the crew record with it, and the
+        // captain to tell is on that record.
+        val crew = ledger.crewOf(villager.uuid)?.let { ledger.crew(it) }
+        ledger.payOff(villager.uuid)
         ledger.clearTombstone(villager.uuid)
-        // The crew is deliberately not named here. A ledger key holds the FOLDED name -- lowercased, so that a
-        // captain retyping it does not have to match their own capitals -- and printing that back at them would
-        // look like the mod had mangled it.
-        server.playerList.getPlayer(key.captain)?.let {
+        server.playerList.getPlayer(crew?.captain ?: return)?.let {
             PathMessages.send(it, "$name is lost. Their berth is free again.", PathMessages.Kind.WARN)
         }
     }

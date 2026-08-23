@@ -12,6 +12,8 @@ import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
 import com.mojang.serialization.Codec
 import net.minecraft.nbt.CompoundTag
+import net.minecraft.nbt.ListTag
+import net.minecraft.nbt.StringTag
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.ComponentSerialization
 import net.minecraft.network.protocol.Packet
@@ -63,10 +65,13 @@ import org.valkyrienskies.eureka.bottle.BottleBindings
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.crew.CrewData
+import org.valkyrienskies.eureka.crew.CrewLedger
+import org.valkyrienskies.eureka.crew.CrewSummon
 import org.valkyrienskies.eureka.crew.CrewMuster
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.follow.ShipCrew
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.crew.CrewNameGenerator
 import org.valkyrienskies.eureka.crew.CrewRoster
@@ -129,6 +134,31 @@ private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
 private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
 private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
 private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
+
+// Which crew this wheel calls, per captain. Namespaced for the same reason as the Keep Name pair: it rides in
+// `custom_data` on the item, and that bag belongs to everybody.
+//
+// A list of "captain=crew" strings rather than a list of compounds, so the same encoding serves the block
+// entity's codec-driven save AND the raw-NBT tag the item carries, and so a rescue by hand needs no more than
+// a text editor. Both halves are plain UUID strings, like the bottle binding and the pirate papers below.
+private const val CREW_BINDINGS_KEY = "vs_eureka:crew_bindings"
+
+/** "captain=crew" for every binding on a wheel. */
+private fun encodeCrewBindings(bindings: Map<UUID, UUID>): List<String> =
+    bindings.map { (captain, crew) -> "$captain=$crew" }
+
+/** The inverse. A malformed entry is dropped rather than taking the wheel's other bindings with it. */
+private fun decodeCrewBindings(raw: List<String>): Map<UUID, UUID> {
+    val out = LinkedHashMap<UUID, UUID>()
+    for (entry in raw) {
+        val split = entry.indexOf('=')
+        if (split <= 0) continue
+        val captain = runCatching { UUID.fromString(entry.substring(0, split)) }.getOrNull() ?: continue
+        val crew = runCatching { UUID.fromString(entry.substring(split + 1)) }.getOrNull() ?: continue
+        out[captain] = crew
+    }
+    return out
+}
 
 // The pirate wheel's papers. The first two are DESIGN facts -- written by the authoring command, baked into
 // the template a pirate hull ships as, identical on every copy. The second two are INSTANCE facts -- written
@@ -370,6 +400,63 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     val crew = CrewRoster()
 
     /**
+     * Which crew this wheel calls, one per captain.
+     *
+     * The durable half of the crew feature, and what replaced the old name key. A crew is a minted id now (see
+     * [CrewLedger]) and this is where a wheel says which one it wants -- so renaming the wheel, on an anvil or
+     * anywhere else, no longer moves anybody. The name became a label; this is the address.
+     *
+     * PER CAPTAIN, because a wheel is not one player's. Two captains can crew the same ship from the same
+     * articles, each against their own berths, and each has to be able to say which of THEIR crews answers
+     * here. It is also what makes a stolen wheel harmless: it arrives carrying its old owner's binding and
+     * nothing at all under the new holder's name, so it assembles a ship and musters nobody.
+     *
+     * Rides the item in `custom_data`, so mining a wheel and re-placing it keeps every binding on it.
+     */
+    private val crewBindings = LinkedHashMap<UUID, UUID>()
+
+    /** The crew [captain] has bound to this wheel, or null if they have never chosen one here. */
+    fun boundCrew(captain: UUID): UUID? = crewBindings[captain]
+
+    /** Every binding on this wheel. A COPY: assembly rewrites the original while callers are reading it. */
+    fun crewBindings(): Map<UUID, UUID> = LinkedHashMap(crewBindings)
+
+    /** Point [captain]'s berth at crew [crew] on this wheel, or clear it with null. */
+    fun bindCrew(captain: UUID, crew: UUID?) {
+        if (crewBindings[captain] == crew) return
+        if (crew == null) crewBindings.remove(captain) else crewBindings[captain] = crew
+        setChanged()
+        level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
+    }
+
+    /** Replace every binding at once, for the paths that rebuild a wheel rather than edit one. */
+    private fun loadCrewBindings(bindings: Map<UUID, UUID>) {
+        crewBindings.clear()
+        crewBindings.putAll(bindings)
+    }
+
+    /**
+     * The crew each captain has PICKED in the helm menu but has not yet called.
+     *
+     * Neither persisted nor carried on the item, and both on purpose: a selection is a half-finished thought,
+     * and the durable answer is [crewBindings], written only when the crew actually comes aboard. What makes
+     * the difference matter is the fare -- picking a crew costs nothing, calling one that is not already
+     * yours costs a pearl a head, and the two fields are how that question is asked.
+     *
+     * Kept on the BLOCK rather than in the menu because Assemble is a container button, not a payload, and
+     * has no room to carry a crew id of its own -- so the dropdown writes here and the button reads it.
+     */
+    private val crewSelection = HashMap<UUID, UUID>()
+
+    /** What [captain] has picked at this wheel, or null if they have picked nothing. */
+    fun selectedCrew(captain: UUID): UUID? = crewSelection[captain]
+
+    /** Pick a crew at this wheel for [captain], or clear the pick with null. Nothing is called or charged. */
+    fun selectCrew(captain: UUID, crew: UUID?) {
+        if (crew == null) crewSelection.remove(captain) else crewSelection[captain] = crew
+    }
+
+    /**
      * Whether this is the wheel a ship's articles are kept at.
      *
      * A ship can carry any number of helms and all of them steer, but exactly one holds the crew, so adding
@@ -576,6 +663,15 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             val tag = custom.copyTag()
             rememberedShipName = tag.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
             keepName = tag.getBooleanOr(KEEP_NAME_KEY, true)
+            // The crew bindings ride here too, and this is the line that makes an ANVIL rename harmless: the
+            // anvil rewrites `custom_name` and touches nothing else, so a wheel renamed from White Pearl to
+            // Black Pearl comes back pointing at exactly the crew it left with.
+            loadCrewBindings(
+                decodeCrewBindings(
+                    tag.getList(CREW_BINDINGS_KEY).orElse(ListTag())
+                        .mapNotNull { (it as? StringTag)?.asString()?.orElse(null) }
+                )
+            )
         }
     }
 
@@ -586,10 +682,15 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Only written when there is something to say. A wheel that has never named a ship and is switched on
         // -- which is most of them -- puts no custom_data on the item at all, so an ordinary helm stacks with
         // every other ordinary helm instead of splitting into singletons.
-        if (rememberedShipName != null || !keepName) {
+        if (rememberedShipName != null || !keepName || crewBindings.isNotEmpty()) {
             val tag = CompoundTag()
             rememberedShipName?.let { tag.putString(REMEMBERED_SHIP_KEY, it) }
             if (!keepName) tag.putBoolean(KEEP_NAME_KEY, false)
+            if (crewBindings.isNotEmpty()) {
+                val list = ListTag()
+                for (entry in encodeCrewBindings(crewBindings)) list.add(StringTag.valueOf(entry))
+                tag.put(CREW_BINDINGS_KEY, list)
+            }
             components.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
         }
     }
@@ -635,6 +736,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // As a string rather than an int array: ShipTemplate.stripShipName edits this tag as raw NBT in a
         // template palette, and a string key can be removed there without agreeing on an encoding.
         bottleBinding?.let { output.putString(BOTTLE_BINDING_KEY, it.toString()) }
+        // Written only when there is a binding, so an ordinary wheel leaves no trace -- which is also what
+        // keeps unbound helms stacking with each other on the item side.
+        if (crewBindings.isNotEmpty()) {
+            output.store(CREW_BINDINGS_KEY, Codec.STRING.listOf(), encodeCrewBindings(crewBindings))
+        }
         // The pirate papers. UUIDs as strings for the same strip-as-raw-NBT reason as the binding above.
         pirateTemplate?.let { output.putString(PIRATE_TEMPLATE_KEY, it) }
         if (pirateCrew.isNotEmpty()) output.store(PIRATE_CREW_KEY, CompoundTag.CODEC.listOf(), pirateCrew)
@@ -654,6 +760,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         shipSlug = input.getString(SHIP_SLUG_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
         bottleBinding = input.getString(BOTTLE_BINDING_KEY).orElse(null)
             ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        loadCrewBindings(decodeCrewBindings(input.read(CREW_BINDINGS_KEY, Codec.STRING.listOf()).orElse(emptyList())))
         pirateTemplate = input.getString(PIRATE_TEMPLATE_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
         pirateCrew = input.read(PIRATE_CREW_KEY, CompoundTag.CODEC.listOf()).orElse(emptyList())
         pirateCrewUuids = input.read(PIRATE_CREW_UUIDS_KEY, Codec.STRING.listOf()).orElse(emptyList())
@@ -1098,11 +1205,27 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // name inside applyControl and wrote a null every time.
         val keepNameAtAssembly = keepName
         val rememberedAtAssembly = rememberedShipName
+        // The wheel's own name, which is what the hull is called from here on. Falls back to the remembered
+        // ship name for a wheel saved before the two were joined -- those carry a remembered slug and no
+        // CustomName, and reading only the wheel would silently drop the name they had been keeping.
+        val wheelNameAtAssembly = helmName?.string?.let { HelmNames.slugOf(Component.literal(it)) }
+            ?: rememberedAtAssembly
+        // The same name as a captain would read it, spaces and all -- the slug above is for vs-core, which
+        // cannot hold a space. This is what every other wheel on the hull is renamed to.
+        val helmDisplayAtAssembly = helmName?.string
 
-        // The crew's name and the wheel's wood, read here for exactly the same reason: mustering runs in the
-        // deferred branch below, by which point this block entity has been blanked by its own relocation.
-        val crewNameAtAssembly = helmName?.string
-        val variantAtAssembly = HelmNames.variantOf(blockState)
+        // The wheel's crew bindings, read here for exactly the same reason: mustering runs in the deferred
+        // branch below, by which point this block entity has been blanked by its own relocation.
+        // Adopted before it is read: a wheel from before crew ids carries a name and no binding, and assembly
+        // is the one path that reads the bindings and then destroys the block it read them from. Left to the
+        // helm menu to trigger, a captain who assembled without opening it would find nobody aboard.
+        val assemblingCaptain = player as? ServerPlayer
+        val serverLevelForCrew = level as? ServerLevel
+        if (assemblingCaptain != null && serverLevelForCrew != null) {
+            CrewLedger.get(serverLevelForCrew.server).bindingFor(this, assemblingCaptain.uuid)
+        }
+        val bindingsAtAssembly = crewBindings()
+        val selectionAtAssembly = (player as? ServerPlayer)?.let { crewSelection[it.uuid] }
 
         // Assembly places blocks straight into the shipyard without firing onPlace, so the
         // counters BalloonBlock/FloaterBlock/AnchorBlock/ShipHelmBlock maintain via onPlace
@@ -1340,18 +1463,81 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // was tuned to an ordinary assembly; a bottle-released ship sometimes came up under its
             // generated name with this wheel remembering the right one and nothing left to apply it. The
             // helper writes both stores and checks its own work until the name sticks.
-            if (keepNameAtAssembly && rememberedAtAssembly != null) {
-                HelmNames.applyShipName(level, loadedShip.id, rememberedAtAssembly)
+            //
+            // The name is the WHEEL's now, not a separate remembered slug: a captain types one name, the wheel
+            // wears it, the item carries it and the hull answers to it. Keep Name is the switch for the whole
+            // arrangement -- turn it off and the hull keeps whatever vs-core called it.
+            if (keepNameAtAssembly && wheelNameAtAssembly != null) {
+                HelmNames.applyShipName(level, loadedShip.id, wheelNameAtAssembly)
             }
 
-            // Bring the crew filed under this wheel aboard. Deferred with everything else here because the
-            // deck has to exist to stand on, and fed entirely from values read before the assembly, because
-            // the wheel this ran from no longer holds them.
-            if (crewNameAtAssembly != null && player is ServerPlayer) {
-                CrewMuster.muster(
-                    level, player, loadedShip,
-                    crewNameAtAssembly, variantAtAssembly, CrewData.slots(player), crewStation
-                )
+            // The wheel that ordered the assembly is the MASTER: the hull takes its name, and so does every
+            // other wheel aboard. A ship carrying three helms under three different names was a ship with
+            // three answers to "what is she called" -- the menu showed whichever wheel you happened to be
+            // standing at, and assembling from the wrong one quietly renamed the ship to something else.
+            // One wheel decides, and the rest fall in behind it.
+            //
+            // A wheel that has never been named takes the name vs-core made up, and keeps it. That is the one
+            // moment a blank wheel stops being blank: from here it has a name on the item, a name for the hull
+            // and a row in the helm's crew list that reads as something.
+            //
+            // Deferred like the settle above, and for the same two reasons -- the generated slug is not final
+            // until vs-core has finished building the ship, and the wheels cannot be found until it has filled
+            // in the hull's bounds.
+            if (keepNameAtAssembly) {
+                val namedId = loadedShip.id
+                val server = level.server
+                val nameAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
+                server.executeIf({ server.overworld().gameTime >= nameAt }) {
+                    val built = level.shipObjectWorld.loadedShips.getById(namedId) ?: return@executeIf
+                    val master = helmDisplayAtAssembly
+                        ?: wheelNameAtAssembly?.replace('-', ' ')
+                        ?: built.slug?.replace('-', ' ')
+                        ?: return@executeIf
+                    val name = Component.literal(master)
+                    for (wheel in CrewStations.helmsAboard(level, built).orEmpty()) {
+                        // Pirate wheels keep their own papers. Renaming one would rewrite a design fact that
+                        // every copy of that hull shares.
+                        if (PirateHelm.gated(wheel.blockState)) continue
+                        if (wheel.helmName?.string != master) wheel.setHelmName(name)
+                        // The menu's readout is pushed in the same breath. Left to converge on its own slow
+                        // stagger it pushes only when the SERVER's value changes -- so a wheel whose client
+                        // copy was already behind had nothing to correct it, and went on showing whatever the
+                        // ship was called when its chunk loaded.
+                        val slug = built.slug
+                        if (slug != null && wheel.shipSlug != slug) {
+                            wheel.shipSlug = slug
+                            wheel.setChanged()
+                            level.sendBlockUpdated(
+                                wheel.blockPos, wheel.blockState, wheel.blockState, Block.UPDATE_ALL
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Bring the crew this wheel calls aboard. Deferred with everything else here because the deck has
+            // to exist to stand on, and fed entirely from values read before the assembly, because the wheel
+            // this ran from no longer holds them.
+            //
+            // Only the ASSEMBLING captain's binding is mustered, and `CrewMuster.muster` checks the ownership
+            // again for itself. A wheel taken off another player carries its old owner's binding and nothing
+            // under the new holder's name, so it builds the ship and musters nobody -- which is the whole of
+            // the stolen-helm rule.
+            //
+            // The PICKED crew wins over the bound one, which is how choosing from the helm's list and pressing
+            // Assemble in one breath brings a different crew aboard. Both go through the same call, so the
+            // fare is decided in one place: asking for the crew this wheel already keeps is free, asking for
+            // any other is a pearl a head. See CrewSummon.
+            val assembling = player as? ServerPlayer
+            val crewAtAssembly = assembling?.let { selectionAtAssembly ?: bindingsAtAssembly[it.uuid] }
+            val settledHelm = level.getBlockEntity(BlockPos.of(crewStation)) as? ShipHelmBlockEntity
+            if (assembling != null && crewAtAssembly != null && settledHelm != null) {
+                // A refusal does NOT undo the assembly. The ship is built and named either way; only the crew
+                // stayed behind, and the captain is told why so they can call them with the button once they
+                // have the fare. Refusing the whole assembly over a crew would be a far worse trade.
+                CrewSummon.bring(level, assembling, loadedShip, settledHelm, crewAtAssembly, crewStation)
+                    ?.let { PathMessages.send(assembling, it, PathMessages.Kind.ERROR) }
             }
         }
 
@@ -1427,14 +1613,18 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // entity is still the one holding the articles. The unfill relocates the wheel back into the world,
         // which resets THIS object exactly as an assembly does -- see the top of `assemble`.
         //
-        // The crew's name is the CREW STATION's, not necessarily this wheel's: any helm can order the
-        // teardown, and on a hull with several wheels the pressed one need not be the named one. This wheel's
-        // own name stays as the fallback for a ship that never recorded a station.
+        // The crews to stand down are the CREW STATION's, not necessarily this wheel's: any helm can order the
+        // teardown, and on a hull with several wheels the pressed one need not be the one keeping articles.
+        // This wheel's own bindings are unioned in as the fallback for a ship that never recorded a station.
+        //
+        // EVERY captain's binding, not just one. Disassembly is nobody's action in particular -- the ship
+        // comes apart for all of them at once.
         val crewStation = CrewStations.stationOf(level as ServerLevel, ship)
-        val crewName = crewStation?.helmName?.string ?: helmName?.string
-        val crewVariant =
-            if (crewStation != null) HelmNames.variantOf(crewStation.blockState)
-            else HelmNames.variantOf(blockState)
+        val shipName = crewStation?.helmName?.string ?: helmName?.string
+        val crewIdsAtTeardown = LinkedHashSet<UUID>().apply {
+            crewStation?.let { addAll(it.crewBindings().values) }
+            addAll(crewBindings().values)
+        }
         val shipIdAtTeardown = ship.id
         val sailors = ShipCrew.aboard(level as ServerLevel, ship)
 
@@ -1504,10 +1694,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // every berthed villager on the hull is stood down, whoever signed them on and whichever wheel their
         // articles hang from. The ship comes apart for everybody at once.
         val report =
-            CrewMuster.standDownShip(serverLevel, shipIdAtTeardown, holdAABB, crewName, crewVariant, crewPosts)
+            CrewMuster.standDownShip(serverLevel, shipIdAtTeardown, holdAABB, crewIdsAtTeardown, crewPosts)
         if (report.stood > 0) {
             val who = if (report.stood == 1) "crew member is" else "crew are"
-            val shipTitle = crewName ?: "she"
+            val shipTitle = shipName ?: "she"
             for (sailor in sailors) {
                 PathMessages.send(
                     sailor,

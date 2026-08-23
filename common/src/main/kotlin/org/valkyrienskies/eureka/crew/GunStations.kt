@@ -358,7 +358,7 @@ object GunStations {
     }
 
     private fun relieve(level: ServerLevel, ledger: CrewLedger, villagerId: UUID, name: String, label: String?) {
-        val captain = ledger.crewOf(villagerId)?.captain
+        val captain = ledger.crewOf(villagerId)?.let { ledger.crew(it)?.captain }
         ledger.clearStation(villagerId)
         unseat(level, villagerId)
         val gunName = label ?: "their gun"

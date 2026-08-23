@@ -1,12 +1,10 @@
 package org.valkyrienskies.eureka.crew
 
 import net.minecraft.core.BlockPos
-import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.util.StringUtil
-import net.minecraft.world.level.block.state.BlockState
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.path.PathMessages
@@ -72,15 +70,6 @@ object HelmNames {
     /** The same normalisation for a name already in string form -- one already read back out of the ledger. */
     fun keyOf(name: String): String = name.trim().lowercase().replace(WHITESPACE_RUN, " ")
 
-    /**
-     * The wood variant of a helm, as the block's registry id.
-     *
-     * The variant is half of what identifies a berth -- an oak wheel named Black Pearl is not the pale oak one
-     * -- and the block id is the variant said exactly, with no enum of our own to keep in step with
-     * `EurekaBlocks` every time a wood type is added.
-     */
-    fun variantOf(state: BlockState): String = BuiltInRegistries.BLOCK.getKey(state.block).toString()
-
     // region Naming a wheel
 
     /**
@@ -106,18 +95,20 @@ object HelmNames {
     var clientShipSender: (BlockPos, String) -> Unit = { _, _ -> }
 
     /**
-     * Write [raw] onto the wheel at [pos], if [player] is close enough to have typed it.
+     * Rename the CREW [player] keeps at the wheel at [pos]. Nothing to do with the wheel's own name.
      *
      * The reach test is the point of this function. A name arrives as a packet, and a packet can say anything;
-     * without it, any client could name any wheel in the world -- including one on someone else's ship, whose
-     * crew are filed under its name. Distance is measured to where the wheel ACTUALLY is: an assembled helm is
-     * filed at shipyard coordinates, so its address and its position are different places.
+     * without it, any client could rename any crew in the world. Distance is measured to where the wheel
+     * ACTUALLY is: an assembled helm is filed at shipyard coordinates, so its address and its position are
+     * different places.
      *
-     * Blank clears the name. That is the one way back to an unnamed wheel, and it is deliberate -- a captain
-     * who wants to retire a name should not have to break the block to do it.
+     * A field write and nothing more. This used to move every crew on the wheel to a new key and REFUSE when
+     * the destination was occupied or when clearing a name would strand somebody, because the name WAS the
+     * address -- a crew was found by what it was called. A crew is a minted id now, so a name is a label:
+     * nothing can collide, nothing can be orphaned, and there is nothing left to refuse.
      *
-     * Returns false when the wheel is gone or out of reach, so the caller can decline silently rather than
-     * report a failure the player cannot act on.
+     * Returns false when the wheel is gone, out of reach, or keeps no crew of this captain's -- so the caller
+     * can decline silently rather than report a failure the player cannot act on.
      */
     fun rename(level: ServerLevel, player: ServerPlayer, pos: BlockPos, raw: String): Boolean {
         val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: return false
@@ -127,44 +118,16 @@ object HelmNames {
 
         val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
         val ledger = CrewLedger.get(level.server)
-        val previous = helm.helmName
 
-        // A wheel carrying a roster from before the ledger existed hands it over the moment it has a name to
-        // file it under. Done first, so a rename immediately after naming moves the adopted crew too.
+        // A wheel carrying a roster from before the ledger existed hands it over the moment somebody asks
+        // about its crew. Done first, so renaming immediately after adopting renames the adopted crew too.
         ledger.adoptLegacy(level.server, helm)
 
-        if (cleaned.isEmpty()) {
-            // Clearing a name would leave any crew filed under it unreachable -- there would be no key to look
-            // them up by, and no way to type the old name back except from memory. Refuse while anyone is
-            // signed on; paying the crew off is the deliberate way to retire a name.
-            if (previous != null && ledger.anyUnder(keyOf(previous), variantOf(helm.blockState))) {
-                PathMessages.send(
-                    player,
-                    "${previous.string} still has crew signed on. Pay them off before clearing the name.",
-                    PathMessages.Kind.ERROR
-                )
-                return false
-            }
-            helm.setHelmName(null)
-            return true
-        }
-
-        // Typing the name it already has is not a rename -- nothing to move, nothing to write.
-        if (previous?.string == cleaned) return true
-
-        // Move the crew with the name. Refused rather than merged when the captain already has a crew of the
-        // new name on this wood -- see CrewLedger.renameAll.
-        if (previous != null && !ledger.renameAll(previous.string, cleaned, variantOf(helm.blockState))) {
-            PathMessages.send(
-                player,
-                "You already have a crew called $cleaned on this wood. Pick another name.",
-                PathMessages.Kind.ERROR
-            )
-            return false
-        }
-
-        helm.setHelmName(Component.literal(cleaned))
-        return true
+        val crewId = helm.boundCrew(player.uuid) ?: return false
+        // Blank is not a rename. A crew with no name would be a blank row in the helm's list with no way to
+        // pick it out from any other, so the old name stands.
+        if (cleaned.isEmpty()) return false
+        return ledger.rename(crewId, cleaned)
     }
 
     /**
@@ -186,9 +149,18 @@ object HelmNames {
         if (!withinReach(level, player, helm)) return false
         // Pirate gate, door 11 of 14 (second half).
         if (PirateHelm.gated(helm.blockState)) return false
-        val ship = CrewStations.shipOf(level, helm) ?: return false
-        val slug = slugOf(Component.literal(StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)))
-            ?: return false
+        val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
+        val slug = slugOf(Component.literal(cleaned)) ?: return false
+
+        // The wheel takes the name too, and this is the half that survives being mined. A wheel's name is
+        // vanilla `CustomName`, so it rides the item through the loot table, the anvil and the placement --
+        // whereas the ship's slug dies with the hull and the remembered copy is invisible on the stack. A
+        // captain who typed a name here and found a blank helm in their hand had hit exactly that gap.
+        helm.setHelmName(Component.literal(cleaned))
+
+        // Named the wheel even if there is no hull to name: renaming at a wheel on the ground has to stick,
+        // or the name would have to be typed again after assembling.
+        val ship = CrewStations.shipOf(level, helm) ?: return true
         // The loaded object this tick, so every menu and readout answers immediately -- and then BOTH
         // stores through applyShipName, because a slug written onto the loaded ship alone never reaches
         // disk: it read back correctly all session and reverted to the generated name on the next login,

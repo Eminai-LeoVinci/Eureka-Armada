@@ -20,16 +20,20 @@ import java.util.UUID
  * loses a wheel to lava has not dismissed anybody, and re-naming a replacement wheel is supposed to get them
  * back.
  *
- * So the helm became a KEY rather than a container. What a wheel carries is one string -- its name -- and the
- * crew are looked up by [Key]. That is also what makes the rest of the feature cheap: nothing has to be
- * serialised onto the item, no block-entity payload rides the drop, and two wheels of the same name and wood
- * are the same crew without anything having to synchronise them.
+ * So the crew left the block. What a wheel carries is one id -- see `ShipHelmBlockEntity.crewBindings` -- and
+ * the crew are looked up by it. That is what keeps the rest of the feature cheap: the binding is one string in
+ * the item's `custom_data`, and two wheels holding the same id are the same crew without anything having to
+ * synchronise them.
  *
- * ## The key
- * All three parts earn their place. The CAPTAIN is what stops one player recovering another's crew by
- * guessing a name. The NAME is what a captain retypes from memory, so it is matched forgivingly (see
- * [HelmNames.keyOf]). The VARIANT -- the wheel's wood -- is a second secret that costs nothing to remember
- * and makes a guessed name useless on its own.
+ * ## The id
+ * A crew is identified by a minted [UUID] and nothing else. It used to be identified by what it was CALLED, on
+ * the wood it was called that on, which made the name load-bearing in three unhappy ways: renaming a wheel had
+ * to re-file every crew on it, an ANVIL rename orphaned them in silence because no server code of ours ever
+ * ran, and a crew could never board a ship whose wheel was cut from a different tree. An id has none of those
+ * problems -- the name became a label a captain can change anywhere, and the wood stopped mattering at all.
+ *
+ * The CAPTAIN is still recorded, because a crew belongs to somebody. It is what stops a stolen wheel mustering
+ * its old owner's crew, and what the helm menu filters its list by.
  *
  * ## Global, not per-dimension
  * Unlike [org.valkyrienskies.eureka.path.PathStore], which is deliberately one store per level because a
@@ -39,8 +43,21 @@ import java.util.UUID
  */
 class CrewLedger : SavedData() {
 
-    /** Who a crew belongs to, what they are called, and what their wheel is made of. */
-    data class Key(val captain: UUID, val name: String, val variant: String)
+    /**
+     * One crew: who owns them, what they are called, and who is signed on.
+     *
+     * [id] is minted once and never changes. [name] is a label and nothing more -- renaming is a field write,
+     * so it cannot orphan anybody, cannot collide with another crew, and can happen on an anvil where no
+     * server code of ours runs at all.
+     *
+     * [berths] is the live list and is held by reference through [copy], so renaming does not disturb the crew.
+     */
+    data class Crew(
+        val id: UUID,
+        val captain: UUID,
+        val name: String,
+        val berths: MutableList<Berth> = mutableListOf()
+    )
 
     /**
      * One signed-on crew member. [slot] is their berth number, which names them and fixes their row.
@@ -124,7 +141,7 @@ class CrewLedger : SavedData() {
         val post: Vec3? = null
     )
 
-    private val crews = LinkedHashMap<Key, MutableList<Berth>>()
+    private val crews = LinkedHashMap<UUID, Crew>()
 
     /**
      * Villagers that have been rebuilt from a snapshot, and whose ORIGINAL must be destroyed on sight.
@@ -145,48 +162,53 @@ class CrewLedger : SavedData() {
      * This index is the whole of the one-crew-at-a-time rule. Without it the question "is this villager
      * already signed on somewhere?" would be a scan of every crew in the world on every recruit.
      */
-    private val byVillager = HashMap<UUID, Key>()
+    private val byVillager = HashMap<UUID, UUID>()
 
     // region reading
 
     /**
-     * The berths of the crew filed under [key], oldest first. Empty for a crew that does not exist.
+     * The berths of crew [id], oldest first. Empty for a crew that does not exist.
      *
      * A COPY, deliberately. Callers walk this list and pay people off as they go -- mustering does exactly that
      * when a crew has outgrown its berths -- and handing out the live list would turn that into a concurrent
      * modification of the thing being iterated.
      */
-    fun crew(key: Key): List<Berth> = crews[key]?.toList() ?: emptyList()
+    fun berths(id: UUID): List<Berth> = crews[id]?.berths?.toList() ?: emptyList()
+
+    /** Crew [id] in full -- owner, name and berths -- or null if there is no such crew. */
+    fun crew(id: UUID): Crew? = crews[id]
 
     /** The crew [villager] already serves on, or null if they are nobody's. */
-    fun crewOf(villager: UUID): Key? = byVillager[villager]
+    fun crewOf(villager: UUID): UUID? = byVillager[villager]
 
-    /** Whether [captain] already has a crew of this name and wood. Used to keep generated names distinct. */
-    fun exists(captain: UUID, name: String, variant: String): Boolean =
-        crews.containsKey(Key(captain, HelmNames.keyOf(name), variant))
-
-    /** Whether ANY captain has crew filed under this name and wood -- the question a wheel asks about itself. */
-    fun anyUnder(name: String, variant: String): Boolean {
-        val nameKey = HelmNames.keyOf(name)
-        return crews.any { (key, berths) -> key.name == nameKey && key.variant == variant && berths.isNotEmpty() }
-    }
+    /** What crew [id] is called, or null if there is no such crew. */
+    fun nameOf(id: UUID): String? = crews[id]?.name
 
     /**
-     * Every crew filed under this name and wood, whoever captains them.
+     * Every crew [captain] owns, oldest first. This is what the helm menu's dropdown lists.
      *
-     * A wheel is one name and one wood but not one captain: two players can crew the same ship from the same
-     * articles, each against their own berths. Anything that happens to the WHEEL -- it is renamed, its ship is
-     * taken apart -- happens to all of them, so the question has to be asked without a captain in it.
+     * Crews with nobody on them are left out. [payOff] drops a crew as its last berth goes, so anything still
+     * here has somebody signed on -- and a captain has no use for an empty name in a list of who they can call.
      */
-    fun keysUnder(name: String, variant: String): List<Key> {
-        val nameKey = HelmNames.keyOf(name)
-        return crews.keys.filter { it.name == nameKey && it.variant == variant }
+    fun crewsOf(captain: UUID): List<Crew> =
+        crews.values.filter { it.captain == captain && it.berths.isNotEmpty() }
+
+    /**
+     * Whether [captain] already has a crew of this name. Used to keep generated names distinct.
+     *
+     * Folded through [HelmNames.keyOf], so "Motley Crew Anchor" and "motley crew  anchor" count as the same
+     * name being taken. Nothing REFUSES a duplicate any more -- names are labels now -- but a generator that
+     * hands out the same name twice makes a dropdown nobody can read.
+     */
+    fun nameTaken(captain: UUID, name: String): Boolean {
+        val folded = HelmNames.keyOf(name)
+        return crews.values.any { it.captain == captain && HelmNames.keyOf(it.name) == folded }
     }
 
     /** The berth [villager] holds, or [CrewRoster.NO_SLOT]. */
     fun slotOf(villager: UUID): Int {
-        val key = byVillager[villager] ?: return CrewRoster.NO_SLOT
-        return crews[key]?.firstOrNull { it.villager == villager }?.slot ?: CrewRoster.NO_SLOT
+        val id = byVillager[villager] ?: return CrewRoster.NO_SLOT
+        return crews[id]?.berths?.firstOrNull { it.villager == villager }?.slot ?: CrewRoster.NO_SLOT
     }
 
     /**
@@ -195,8 +217,8 @@ class CrewLedger : SavedData() {
      * Lowest-free rather than next-highest so that paying somebody off and signing somebody else on reuses the
      * empty berth, instead of marching the numbers up and leaving gaps in the manifest.
      */
-    fun freeSlot(key: Key, max: Int): Int {
-        val taken = crews[key]?.mapTo(HashSet()) { it.slot } ?: return 0
+    fun freeSlot(id: UUID, max: Int): Int {
+        val taken = crews[id]?.berths?.mapTo(HashSet()) { it.slot } ?: return 0
         for (slot in 0 until max) if (slot !in taken) return slot
         return CrewRoster.NO_SLOT
     }
@@ -205,10 +227,39 @@ class CrewLedger : SavedData() {
 
     // region writing
 
-    /** Sign [villager] onto [key] at [slot]. Caller has already established they are nobody else's. */
-    fun sign(key: Key, villager: UUID, slot: Int, name: String, snapshot: CompoundTag? = null) {
-        crews.getOrPut(key) { mutableListOf() }.add(Berth(villager, slot, name, snapshot))
-        byVillager[villager] = key
+    /**
+     * Mint a new crew for [captain] called [name], and return it.
+     *
+     * The id is the crew from here on. Nothing else about a crew is fixed -- the name can change, every berth
+     * on it can change -- so this is the one moment a crew comes into existence.
+     */
+    fun create(captain: UUID, name: String): Crew {
+        val crew = Crew(UUID.randomUUID(), captain, name)
+        crews[crew.id] = crew
+        setDirty()
+        return crew
+    }
+
+    /**
+     * Put crew [id] under a new [name]. Returns whether there was a crew to rename.
+     *
+     * A field write, and that is the whole point of keying on an id. This used to be `renameAll`, which had to
+     * move every crew on a wheel to a new key and REFUSE when the destination was occupied, because the name
+     * was the address. Nothing can collide now, so nothing has to be refused.
+     */
+    fun rename(id: UUID, name: String): Boolean {
+        val crew = crews[id] ?: return false
+        if (crew.name == name) return true
+        crews[id] = crew.copy(name = name)
+        setDirty()
+        return true
+    }
+
+    /** Sign [villager] onto crew [id] at [slot]. Caller has already established they are nobody else's. */
+    fun sign(id: UUID, villager: UUID, slot: Int, name: String, snapshot: CompoundTag? = null) {
+        val crew = crews[id] ?: return
+        crew.berths.add(Berth(villager, slot, name, snapshot))
+        byVillager[villager] = id
         setDirty()
     }
 
@@ -239,8 +290,8 @@ class CrewLedger : SavedData() {
 
     /** What [villager] has been told to do, or [CrewDuty.NONE] if they are nobody's crew. */
     fun dutyOf(villager: UUID): CrewDuty {
-        val key = byVillager[villager] ?: return CrewDuty.NONE
-        return crews[key]?.firstOrNull { it.villager == villager }?.duty ?: CrewDuty.NONE
+        val id = byVillager[villager] ?: return CrewDuty.NONE
+        return crews[id]?.berths?.firstOrNull { it.villager == villager }?.duty ?: CrewDuty.NONE
     }
 
     /**
@@ -255,8 +306,8 @@ class CrewLedger : SavedData() {
 
     /** The berth [villager] holds, in full, or null. The station machinery reads bindings through this. */
     fun berthOf(villager: UUID): Berth? {
-        val key = byVillager[villager] ?: return null
-        return crews[key]?.firstOrNull { it.villager == villager }
+        val id = byVillager[villager] ?: return null
+        return crews[id]?.berths?.firstOrNull { it.villager == villager }
     }
 
     /** Seat [villager] at a gun: the live shipyard address and the label that outlives it. */
@@ -285,8 +336,8 @@ class CrewLedger : SavedData() {
      */
     fun stationedBerths(): List<Berth> {
         val out = ArrayList<Berth>()
-        for (berths in crews.values) {
-            for (berth in berths) {
+        for (crew in crews.values) {
+            for (berth in crew.berths) {
                 if (berth.station != null || berth.stationLabel != null) out.add(berth)
             }
         }
@@ -295,13 +346,13 @@ class CrewLedger : SavedData() {
 
     /** Whether [villager]'s berth is waiting for them to be rebuilt rather than found. */
     fun isAshore(villager: UUID): Boolean {
-        val key = byVillager[villager] ?: return false
-        return crews[key]?.firstOrNull { it.villager == villager }?.ashore == true
+        val id = byVillager[villager] ?: return false
+        return crews[id]?.berths?.firstOrNull { it.villager == villager }?.ashore == true
     }
 
     private inline fun edit(villager: UUID, change: (Berth) -> Berth) {
-        val key = byVillager[villager] ?: return
-        val list = crews[key] ?: return
+        val id = byVillager[villager] ?: return
+        val list = crews[id]?.berths ?: return
         val index = list.indexOfFirst { it.villager == villager }
         if (index < 0) return
         list[index] = change(list[index])
@@ -332,13 +383,13 @@ class CrewLedger : SavedData() {
      * Returns whether there was a berth to move.
      */
     fun rekey(old: UUID, new: UUID): Boolean {
-        val key = byVillager.remove(old) ?: return false
-        val list = crews[key] ?: return false
+        val id = byVillager.remove(old) ?: return false
+        val list = crews[id]?.berths ?: return false
         val index = list.indexOfFirst { it.villager == old }
         // Whatever they are now, they are here: a berth that is standing in front of somebody is not waiting
         // for them to be rebuilt.
         if (index >= 0) list[index] = list[index].copy(villager = new, ashore = false)
-        byVillager[new] = key
+        byVillager[new] = id
         setDirty()
         return true
     }
@@ -352,6 +403,30 @@ class CrewLedger : SavedData() {
     /** Whether [villager] is a stale copy that mustering has already replaced. */
     fun isTombstoned(villager: UUID): Boolean = tombstoned.contains(villager)
 
+    /**
+     * Mark [villager] for destruction on sight, without there being a berth to move.
+     *
+     * For disbanding: a crew member in an unloaded chunk cannot be discarded now, and a crew deleted "from
+     * existence" must not walk back out of the ground a week later when somebody flies over. The tombstone
+     * sweep removes them as their chunk loads.
+     */
+    fun tombstone(villager: UUID) {
+        if (tombstoned.add(villager)) setDirty()
+    }
+
+    /**
+     * Strike a whole crew off, and hand back the berths that were on it.
+     *
+     * The caller destroys the entities -- this is the paperwork, and it goes first so that a berth cannot be
+     * left pointing at a villager that no longer exists. Returns empty for a crew that is already gone.
+     */
+    fun disband(id: UUID): List<Berth> {
+        val crew = crews.remove(id) ?: return emptyList()
+        for (berth in crew.berths) byVillager.remove(berth.villager)
+        setDirty()
+        return crew.berths.toList()
+    }
+
     /** Forget a tombstone once the stale copy has actually been destroyed. */
     fun clearTombstone(villager: UUID) {
         if (tombstoned.remove(villager)) setDirty()
@@ -359,8 +434,8 @@ class CrewLedger : SavedData() {
 
     /** Record that [villager] is now called [name], so the manifest can list them while they are away. */
     fun renameMember(villager: UUID, name: String) {
-        val key = byVillager[villager] ?: return
-        val list = crews[key] ?: return
+        val id = byVillager[villager] ?: return
+        val list = crews[id]?.berths ?: return
         val index = list.indexOfFirst { it.villager == villager }
         if (index < 0 || list[index].name == name) return
         list[index] = list[index].copy(name = name)
@@ -368,70 +443,101 @@ class CrewLedger : SavedData() {
     }
 
     /** Discharge [villager] from whatever crew they are on. Returns the crew they left, or null. */
-    fun payOff(villager: UUID): Key? {
-        val key = byVillager.remove(villager) ?: return null
-        val list = crews[key]
-        list?.removeIf { it.villager == villager }
-        // A crew with nobody in it is not a crew, but the KEY is kept alive by the wheel that carries the
-        // name, so dropping the empty list costs nothing and keeps the file from filling with husks.
-        if (list != null && list.isEmpty()) crews.remove(key)
+    fun payOff(villager: UUID): UUID? {
+        val id = byVillager.remove(villager) ?: return null
+        val crew = crews[id]
+        crew?.berths?.removeIf { it.villager == villager }
+        // A crew with nobody on it is not a crew, and the id goes with the last berth. Under the old name key
+        // an empty crew was worth keeping, because a captain could retype the name and find it again; nobody
+        // retypes a UUID. A wheel still carrying a dead binding simply finds no crew, and says so.
+        if (crew != null && crew.berths.isEmpty()) crews.remove(id)
         setDirty()
-        return key
+        return id
+    }
+
+    /** [captain]'s crew called [name], matched forgivingly through [HelmNames.keyOf], or null. */
+    fun findByName(captain: UUID, name: String): Crew? {
+        val folded = HelmNames.keyOf(name)
+        return crews.values.firstOrNull { it.captain == captain && HelmNames.keyOf(it.name) == folded }
     }
 
     /**
-     * Re-file every crew on a wheel that has just been renamed, whatever captain they belong to.
+     * Find [captain]'s crew called [name], or mint one. Folded through [HelmNames.keyOf] when matching.
      *
-     * A wheel's name changes for everybody at once, so moving only the renaming player's crew would orphan
-     * anyone else's under a name no wheel answers to any more.
-     *
-     * Refuses rather than merges when a destination already has a crew, and moves NOTHING if any single crew
-     * would collide: merging would be irreversible and silent -- two crews walk in, one walks out, and no
-     * message could put them back -- whereas refusing costs the captain one rename they have to think about,
-     * and a rename that half-happened is worse than one that did not.
+     * The bridge from the old world to the new. Every wheel already out there carries a NAME and nothing else,
+     * so the only way to work out which crew it means is to look one up by what it is called -- exactly once,
+     * after which the wheel holds the id and the name is free to change.
      */
-    fun renameAll(oldName: String, newName: String, variant: String): Boolean {
-        val from = HelmNames.keyOf(oldName)
-        val to = HelmNames.keyOf(newName)
-        if (from == to) return true
+    fun findOrCreate(captain: UUID, name: String): Crew = findByName(captain, name) ?: create(captain, name)
 
-        val moving = crews.keys.filter { it.name == from && it.variant == variant }
-        if (moving.isEmpty()) return true
-        if (moving.any { crews[Key(it.captain, to, variant)]?.isNotEmpty() == true }) return false
+    /**
+     * The crew [station] means for [captain] -- adopting a name-keyed one if this wheel has no binding yet.
+     *
+     * **This is the whole migration for wheels already standing in a world.** Crews used to be found by what
+     * the wheel was CALLED, so every wheel out there carries a name and no id at all. The first time anybody
+     * asks this wheel about its crew, the name is used once to find them, the id is written onto the wheel,
+     * and the name is never load-bearing again.
+     *
+     * The wheel also hands back the real CASING while it is here: the old ledger only ever stored the folded
+     * lookup key, so a migrated crew is called "Black Pearl" rather than "black pearl" from this moment on.
+     * See [refreshName], which will not do anything else.
+     *
+     * Returns null for a wheel with no name and no binding -- a blank wheel nobody has crewed -- and for a
+     * binding pointing at a crew that no longer exists, which is treated as no binding rather than as an
+     * error: everyone was paid off, the empty crew was dropped, and the wheel simply keeps nobody now.
+     */
+    fun bindingFor(station: org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity, captain: UUID): UUID? {
+        station.boundCrew(captain)?.let { if (crews.containsKey(it)) return it }
+        val name = station.helmName?.string ?: return null
+        val found = findByName(captain, name) ?: return null
+        station.bindCrew(captain, found.id)
+        refreshName(found.id, name)
+        return found.id
+    }
 
-        for (key in moving) {
-            val berths = crews.remove(key) ?: continue
-            val target = Key(key.captain, to, variant)
-            crews[target] = berths
-            for (berth in berths) byVillager[berth.villager] = target
-        }
+    /**
+     * Correct crew [id]'s recorded name to [name] if the two differ only in case or spacing.
+     *
+     * Migration repair, and nothing else. The ledger used to store the FOLDED name -- lower-cased, whitespace
+     * collapsed -- because that was the lookup key and no display name was ever needed. Now that the name is a
+     * label a captain reads off a dropdown, "black pearl" is the wrong answer where the wheel plainly says
+     * "Black Pearl". A wheel meeting its crew is the moment the real casing is in hand.
+     *
+     * Guarded on the folded forms matching, so this can only ever repair a name, never replace one.
+     */
+    fun refreshName(id: UUID, name: String) {
+        val crew = crews[id] ?: return
+        if (crew.name == name) return
+        if (HelmNames.keyOf(crew.name) != HelmNames.keyOf(name)) return
+        crews[id] = crew.copy(name = name)
         setDirty()
-        return true
     }
 
     /**
      * Take over a wheel's old block-entity roster, so crew signed on before the ledger existed are not lost.
      *
-     * Runs the first time a wheel with a legacy roster gets a name -- which is the first moment there IS a key
+     * Runs the first time a wheel with a legacy roster gets a name -- which is the first moment there IS a crew
      * to file them under. The roster is cleared afterwards so this can only happen once and the two can never
      * disagree.
      */
     fun adoptLegacy(server: MinecraftServer, station: org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity) {
         val name = station.helmName ?: return
         if (station.crew.isEmpty) return
-        val nameKey = HelmNames.keyOf(name)
-        val variant = HelmNames.variantOf(station.blockState)
         for (entry in station.crew.entries()) {
             // Anyone the ledger already knows keeps the crew they are on; the old roster is the stale copy.
             if (byVillager.containsKey(entry.villager)) continue
-            val key = Key(entry.owner, nameKey, variant)
+            // The old roster recorded an OWNER per member, so each one joins that player's crew of this
+            // wheel's name -- minting it if this is the first of them. The wheel is bound to it in the same
+            // breath, which is what stops the next adoption having to look it up by name all over again.
+            val crew = findOrCreate(entry.owner, name.string)
+            station.bindCrew(entry.owner, crew.id)
             // The old roster recorded who and which berth, never what they were called, so the name has to come
             // off the villager -- and it MUST be tried, because the ledger's name is authoritative from here
             // on: mustering writes it back onto the entity. Filing everyone under the berth default would
             // rename somebody's hand-named crew the first time their ship assembled. They are almost always
             // right there when this runs, since it takes a captain at the wheel to trigger it.
             val live = CrewMuster.findAnywhere(server, entry.villager)
-            crews.getOrPut(key) { mutableListOf() }.add(
+            crew.berths.add(
                 Berth(
                     entry.villager,
                     entry.slot,
@@ -439,27 +545,48 @@ class CrewLedger : SavedData() {
                     live?.let { CrewSnapshot.capture(it) }
                 )
             )
-            byVillager[entry.villager] = key
+            byVillager[entry.villager] = crew.id
         }
         station.crew.replaceAll(emptyList())
         station.setChanged()
         setDirty()
     }
 
+    /**
+     * Give a captain's same-named crews distinct names, once, at load.
+     *
+     * Only migration can produce two: dropping the wood from the key turned "Salty Dogs on oak" and "Salty
+     * Dogs on spruce" into two crews of one name. They are NOT merged -- that would double-berth a hull and
+     * could not be undone -- so the later one is suffixed instead, and the captain can rename it to whatever
+     * they meant. Ordering is the file's, so the same file always suffixes the same crew.
+     */
+    private fun disambiguate() {
+        val seen = HashSet<Pair<UUID, String>>()
+        for (crew in crews.values.toList()) {
+            var candidate = crew.name
+            var n = 1
+            while (!seen.add(crew.captain to HelmNames.keyOf(candidate))) {
+                n++
+                candidate = "${crew.name} ($n)"
+            }
+            if (candidate != crew.name) crews[crew.id] = crew.copy(name = candidate)
+        }
+    }
+
     // endregion
 
     fun saveToTag(tag: CompoundTag): CompoundTag {
         val list = ListTag()
-        for ((key, berths) in crews) {
-            if (berths.isEmpty()) continue
+        for (crew in crews.values) {
+            if (crew.berths.isEmpty()) continue
             val entry = CompoundTag()
             // UUIDs as strings rather than through a codec: this file is a few dozen entries at most, so the
             // handful of extra bytes buys a save anyone can read and hand-edit when a crew needs rescuing.
-            entry.putString(CAPTAIN_KEY, key.captain.toString())
-            entry.putString(NAME_KEY, key.name)
-            entry.putString(VARIANT_KEY, key.variant)
+            entry.putString(ID_KEY, crew.id.toString())
+            entry.putString(CAPTAIN_KEY, crew.captain.toString())
+            entry.putString(NAME_KEY, crew.name)
             val members = ListTag()
-            for (berth in berths) {
+            for (berth in crew.berths) {
                 val member = CompoundTag()
                 member.putString(VILLAGER_KEY, berth.villager.toString())
                 member.putInt(SLOT_KEY, berth.slot)
@@ -500,8 +627,10 @@ class CrewLedger : SavedData() {
         const val SAVED_DATA_ID = "${EurekaMod.MOD_ID}_crews"
 
         private const val CREWS_KEY = "crews"
+        private const val ID_KEY = "id"
         private const val CAPTAIN_KEY = "captain"
         private const val NAME_KEY = "name"
+        /** Read, never written. The wood a crew's wheel was cut from, back when that was part of the key. */
         private const val VARIANT_KEY = "variant"
         private const val BERTHS_KEY = "berths"
         private const val VILLAGER_KEY = "villager"
@@ -540,6 +669,24 @@ class CrewLedger : SavedData() {
         private fun parseUuid(raw: String): UUID? =
             if (raw.isEmpty()) null else try { UUID.fromString(raw) } catch (ex: IllegalArgumentException) { null }
 
+        /**
+         * The id an old wood-keyed crew migrates to. Deterministic, and that is the whole requirement.
+         *
+         * A random id would be fine for one load and wrong for every other: restore a world from backup, or
+         * load the same save on another copy of the server, and every wheel in the world would point at ids
+         * that no longer exist. Deriving it from the old key means the migration always lands in the same
+         * place, however many times it runs.
+         */
+        private fun legacyId(captain: UUID, foldedName: String, variant: String): UUID =
+            UUID.nameUUIDFromBytes("vs_eureka:crew|$captain|$foldedName|$variant".toByteArray(Charsets.UTF_8))
+
+        /** "black pearl" -> "Black Pearl". Best-effort repair of a name the old ledger only kept folded. */
+        private fun titleCase(folded: String): String =
+            folded.split(' ')
+                .joinToString(" ") { word ->
+                    if (word.isEmpty()) word else word[0].uppercaseChar() + word.substring(1)
+                }
+
         fun load(tag: CompoundTag): CrewLedger {
             val ledger = CrewLedger()
             val list = tag.getList(CREWS_KEY).orElse(ListTag())
@@ -547,10 +694,18 @@ class CrewLedger : SavedData() {
                 val entry = element as? CompoundTag ?: continue
                 val captain = parseUuid(entry.getString(CAPTAIN_KEY).orElse("")) ?: continue
                 val name = entry.getString(NAME_KEY).orElse("")
-                val variant = entry.getString(VARIANT_KEY).orElse("")
-                if (name.isEmpty() || variant.isEmpty()) continue
+                if (name.isEmpty()) continue
 
-                val key = Key(captain, name, variant)
+                // Migration. A file written before crews had ids carries a wood VARIANT instead, and its NAME
+                // is the folded lookup key rather than anything a captain ever typed. The id is minted from
+                // all three so the same old file always migrates to the same ids -- reloading a backup has to
+                // land on the crews the world already knows, or every wheel out there points at nothing. The
+                // name is title-cased so a dropdown is legible until a wheel meets its crew and hands the real
+                // casing back; see [refreshName].
+                val stored = parseUuid(entry.getString(ID_KEY).orElse(""))
+                val id = stored ?: legacyId(captain, name, entry.getString(VARIANT_KEY).orElse(""))
+                val display = if (stored != null) name else titleCase(name)
+
                 val berths = mutableListOf<Berth>()
                 for (memberTag in entry.getList(BERTHS_KEY).orElse(ListTag())) {
                     val member = memberTag as? CompoundTag ?: continue
@@ -577,12 +732,24 @@ class CrewLedger : SavedData() {
                 }
                 if (berths.isEmpty()) continue
 
-                ledger.crews[key] = berths
+                // Two entries under one id -- a hand-edited file, or two old wood-variant crews that migrated
+                // onto the same id -- are folded together rather than one silently replacing the other, and a
+                // villager already berthed keeps the berth that was read first.
+                val existing = ledger.crews[id]
+                if (existing == null) {
+                    ledger.crews[id] = Crew(id, captain, display, berths)
+                } else {
+                    for (berth in berths) {
+                        if (existing.berths.none { it.villager == berth.villager }) existing.berths.add(berth)
+                    }
+                }
                 // The reverse index is rebuilt here rather than stored, so it cannot disagree with the crews
                 // it indexes. A villager listed under two crews in a hand-edited file resolves to the last
                 // one read, which is a definite answer rather than a corrupt one.
-                for (berth in berths) ledger.byVillager[berth.villager] = key
+                for (berth in ledger.crews.getValue(id).berths) ledger.byVillager[berth.villager] = id
             }
+
+            ledger.disambiguate()
 
             for (element in tag.getList(TOMBSTONES_KEY).orElse(ListTag())) {
                 val stone = element as? CompoundTag ?: continue

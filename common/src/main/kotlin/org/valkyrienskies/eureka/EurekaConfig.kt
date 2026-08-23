@@ -1094,6 +1094,15 @@ object EurekaConfig {
         )
         var crewSlotsMax = 80
 
+        @JsonSchema(
+            description = "Ender pearls charged per head when a crew is called to a ship they were not already " +
+                "serving on. Calling the crew a wheel ALREADY keeps is free, however often -- so ordinary " +
+                "sailing, reassembling a ship and letting a bottled ship out never cost anything. Paid out of " +
+                "the ship's chests and barrels first, and only then out of the captain's own pockets. Set to 0 " +
+                "to make swapping crews free. Default 1."
+        )
+        var crewPassagePearls = 1
+
         // region Cannons
         // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
         // the three carries its OWN four numbers, repeated below rather than scaled off one base arc.

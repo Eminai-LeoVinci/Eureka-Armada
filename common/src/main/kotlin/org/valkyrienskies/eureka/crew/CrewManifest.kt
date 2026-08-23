@@ -66,7 +66,16 @@ object CrewManifest {
     )
 
     data class Snapshot(
+        /** The hull's name, for the heading. Blank on a wheel that is not part of a ship. */
         val ship: String,
+        /**
+         * The CREW's name, for the rename box. Blank when this captain keeps no crew at this wheel.
+         *
+         * Separate from [ship] because they are separate things, and because conflating them was a bug: the
+         * box was pre-filled with the SHIP's name and the commit only sent when the typed value had changed,
+         * so pressing Save on the pre-filled text did nothing at all. The wheel looked named and was not.
+         */
+        val crew: String,
         val helm: Long,
         val berths: Int,
         val maxBerths: Int,
@@ -190,8 +199,8 @@ object CrewManifest {
      */
     fun build(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity): Snapshot {
         val ship = CrewStations.shipOf(level, station)
-        val key = crewKey(player, station)
-        val berths = if (key == null) emptyList() else CrewLedger.get(level.server).crew(key)
+        val crewId = crewIdFor(player, station)
+        val berths = if (crewId == null) emptyList() else CrewLedger.get(level.server).berths(crewId)
 
         // Anyone this crew member could be read off, wherever they are standing. Deliberately not limited to
         // the ship: a crew member on the quay is as readable as one on the deck, and looking only at the deck
@@ -209,7 +218,7 @@ object CrewManifest {
         // Opening the manifest is the most reliable moment a whole crew is in hand at once, so it is where the
         // written copies are brought up to date. A snapshot that is one look-at-the-articles old is close
         // enough to be worth rebuilding from, and this costs nothing anybody can feel.
-        if (key != null) {
+        if (crewId != null) {
             val ledger = CrewLedger.get(level.server)
             for (berth in berths) {
                 present[berth.villager]?.let { ledger.updateSnapshot(berth.villager, CrewSnapshot.capture(it)) }
@@ -222,6 +231,7 @@ object CrewManifest {
 
         return Snapshot(
             ship = station.helmName?.string ?: (if (ship == null) "" else ShipCrew.name(ship)),
+            crew = crewId?.let { CrewLedger.get(level.server).nameOf(it) } ?: "",
             helm = station.blockPos.asLong(),
             berths = CrewData.slots(player),
             maxBerths = EurekaConfig.SERVER.crewSlotsMax,
@@ -229,10 +239,34 @@ object CrewManifest {
         )
     }
 
-    /** The ledger key this wheel makes for this captain, or null while the wheel is unnamed. */
-    fun crewKey(player: ServerPlayer, station: ShipHelmBlockEntity): CrewLedger.Key? {
-        val name = station.helmName ?: return null
-        return CrewLedger.Key(player.uuid, HelmNames.keyOf(name), HelmNames.variantOf(station.blockState))
+    /**
+     * The crew this wheel keeps for this captain, or null if they keep none here.
+     *
+     * Through [CrewLedger.bindingFor] rather than straight off the wheel, so a wheel that predates crew ids
+     * adopts its name-keyed crew the first time anything asks. Every reader goes through here for exactly
+     * that reason -- an adoption that only happened on some paths would be a crew that appeared and vanished
+     * depending on which screen you opened.
+     */
+    fun crewIdFor(player: ServerPlayer, station: ShipHelmBlockEntity): UUID? {
+        val server = player.level().server ?: return station.boundCrew(player.uuid)
+        return CrewLedger.get(server).bindingFor(station, player.uuid)
+    }
+
+    /**
+     * The rows of any crew this captain owns, for the Crews tab's read-only roster.
+     *
+     * The ship's own manifest is built against a WHEEL, because that is what names the crew standing on that
+     * deck. This one is built against a crew id and no ship at all: the Crews tab lists crews that may be
+     * ashore, bottled, or on a hull nobody is near. Live villagers are still matched in wherever they can be
+     * found, which is what fills in the profession, the rank and the head icon.
+     */
+    fun rowsOf(level: ServerLevel, captain: ServerPlayer, crewId: UUID): List<Row> {
+        val ledger = CrewLedger.get(level.server)
+        val crew = ledger.crew(crewId) ?: return emptyList()
+        if (crew.captain != captain.uuid) return emptyList()
+        return ledger.berths(crewId)
+            .map { berth -> rowFor(berth, CrewMuster.findAnywhere(level.server, berth.villager)) }
+            .sortedBy { it.slot }
     }
 
     private fun rowFor(berth: CrewLedger.Berth, villager: Villager?): Row {
@@ -280,8 +314,14 @@ object CrewManifest {
      * time. Note that reading `offers` builds the offer list if the villager has never been traded with -- the
      * same thing right-clicking them does, and harmless, but it is a side effect and worth knowing.
      */
-    fun detailFor(level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID): Detail? {
-        val berth = berthOf(level, player, station, villager) ?: return null
+    fun detailFor(
+        level: ServerLevel,
+        player: ServerPlayer,
+        station: ShipHelmBlockEntity,
+        villager: UUID,
+        anyOwnedCrew: Boolean = false
+    ): Detail? {
+        val berth = berthOf(level, player, station, villager, anyOwnedCrew) ?: return null
         val crew = CrewMuster.findAnywhere(level.server, villager)
         val muster = musterOf(level, station)
 
@@ -493,9 +533,18 @@ object CrewManifest {
      * wheel was mined, the crew member wandered off -- or a client asking about somebody who was never theirs.
      * The first resolves itself when they reopen; the second deserves nothing.
      */
-    fun requestDetail(level: ServerLevel, player: ServerPlayer, helm: Long, villager: UUID) {
+    fun requestDetail(
+        level: ServerLevel,
+        player: ServerPlayer,
+        helm: Long,
+        villager: UUID,
+        anyOwnedCrew: Boolean = false
+    ) {
         val station = stationAt(level, player, helm) ?: return
-        val detail = detailFor(level, player, station, villager) ?: return
+        // Reading always widens. The Crews tab opens cards for crews that have nothing to do with this hull,
+        // and there is no harm in it: every ACTION a card offers is gated separately on the narrow rule, so
+        // widening what can be READ cannot widen what can be changed.
+        val detail = detailFor(level, player, station, villager, anyOwnedCrew = true) ?: return
         detailSender(player, detail)
     }
 
@@ -736,12 +785,24 @@ object CrewManifest {
      * what was wanted was for each to do as much as it honestly can.
      */
     private fun berthOf(
-        level: ServerLevel, player: ServerPlayer, station: ShipHelmBlockEntity, villager: UUID
+        level: ServerLevel,
+        player: ServerPlayer,
+        station: ShipHelmBlockEntity,
+        villager: UUID,
+        anyOwnedCrew: Boolean = false
     ): CrewLedger.Berth? {
-        val key = crewKey(player, station) ?: return null
         val ledger = CrewLedger.get(level.server)
-        if (ledger.crewOf(villager) != key) return null
-        return ledger.crew(key).firstOrNull { it.villager == villager }
+        val on = ledger.crewOf(villager) ?: return null
+        // The Crews tab reads crews that have nothing to do with this ship -- ashore, bottled, or on a hull
+        // nobody is near -- so it asks by OWNERSHIP rather than by which crew this wheel keeps. Only reading
+        // ever widens: every ACTION still goes through the narrow gate, which is what stops the read-only
+        // roster being an editing screen with the buttons painted out.
+        if (anyOwnedCrew) {
+            if (ledger.crew(on)?.captain != player.uuid) return null
+            return ledger.berths(on).firstOrNull { it.villager == villager }
+        }
+        if (on != crewIdFor(player, station)) return null
+        return ledger.berths(on).firstOrNull { it.villager == villager }
     }
 
     private fun <T : Any> keyOf(holder: Holder<T>, fallback: String): String =

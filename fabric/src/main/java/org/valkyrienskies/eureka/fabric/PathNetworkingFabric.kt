@@ -26,9 +26,11 @@ import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
+import org.valkyrienskies.eureka.crew.CrewRoll
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.ShipCrews
+import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreen
 import org.valkyrienskies.eureka.crew.ShipStores
 import org.valkyrienskies.eureka.item.Cannonball
 import org.valkyrienskies.eureka.item.CannonCharge
@@ -82,6 +84,8 @@ object PathNetworkingFabric {
     private val CREW_STATION_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_station")
     private val CREW_OPS_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_ops")
     private val CREW_STORES_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_stores")
+    private val CREW_LIST_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_list")
+    private val CREW_ROSTER_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_roster")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
@@ -99,6 +103,8 @@ object PathNetworkingFabric {
     private val CREW_STATION_TYPE = CustomPacketPayload.Type<CrewStationPayload>(CREW_STATION_RL)
     private val CREW_OPS_TYPE = CustomPacketPayload.Type<CrewOpsPayload>(CREW_OPS_RL)
     private val CREW_STORES_TYPE = CustomPacketPayload.Type<CrewStoresPayload>(CREW_STORES_RL)
+    private val CREW_LIST_TYPE = CustomPacketPayload.Type<CrewListPayload>(CREW_LIST_RL)
+    private val CREW_ROSTER_TYPE = CustomPacketPayload.Type<CrewRosterPayload>(CREW_ROSTER_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
@@ -130,6 +136,10 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewOpsPayload::data) { CrewOpsPayload(it) }
     private val CREW_STORES_CODEC: StreamCodec<FriendlyByteBuf, CrewStoresPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewStoresPayload::data) { CrewStoresPayload(it) }
+    private val CREW_LIST_CODEC: StreamCodec<FriendlyByteBuf, CrewListPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewListPayload::data) { CrewListPayload(it) }
+    private val CREW_ROSTER_CODEC: StreamCodec<FriendlyByteBuf, CrewRosterPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, CrewRosterPayload::data) { CrewRosterPayload(it) }
 
     /** Upper bound on a gun label's wire length -- "L12 - D3" is eight characters; twelve leaves room for absurd fleets. */
     private const val MAX_GUN_LABEL = 12
@@ -210,6 +220,16 @@ object PathNetworkingFabric {
     /** What the holds hold, for the Operations tab's readouts: powder, shot by kind, fuel by burn. */
     class CrewStoresPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = CREW_STORES_TYPE
+    }
+
+    /** Every crew this captain owns, for the helm menu's list: which one is aboard, and what each would cost. */
+    class CrewListPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_LIST_TYPE
+    }
+
+    /** One crew's articles, read-only, for the Crews tab. */
+    class CrewRosterPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = CREW_ROSTER_TYPE
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
@@ -348,6 +368,8 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playC2S().register(CREW_STATION_TYPE, CREW_STATION_CODEC)
         PayloadTypeRegistry.playC2S().register(CREW_OPS_TYPE, CREW_OPS_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_STORES_TYPE, CREW_STORES_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_LIST_TYPE, CREW_LIST_CODEC)
+        PayloadTypeRegistry.playS2C().register(CREW_ROSTER_TYPE, CREW_ROSTER_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
@@ -371,6 +393,8 @@ object PathNetworkingFabric {
             }
         }
 
+        CrewRoll.sender = { player, roll -> sendCrewRoll(player, roll) }
+        CrewRoll.rosterSender = { player, roster -> sendCrewRoster(player, roster) }
         CrewOperations.storesSender = { player, helm, stores, decks, firing ->
             if (ServerPlayNetworking.canSend(player, CREW_STORES_TYPE)) {
                 ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks, firing)))
@@ -624,6 +648,39 @@ object PathNetworkingFabric {
                     val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity
                     if (wheel != null) ShipCrews.openHelm(level, player, wheel)
                 }
+                OPS_CREW_LIST_ASK -> { level: ServerLevel ->
+                    sendCrewList(player, level, helm)
+                }
+                OPS_CREW_SELECT -> {
+                    // Read on the netty thread with everything else, per this handler's rule. A cleared pick
+                    // travels as the nil UUID rather than a flag byte -- one shape on the wire either way.
+                    val picked: UUID = buf.readUUID()
+                    ({ level: ServerLevel ->
+                        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity
+                        // Picking is not calling: no reach test, no fare, nothing moves. It is a note of what
+                        // the dropdown says, so that Assemble -- a container button with no room for a crew id
+                        // -- can read it. The ownership check that matters happens when the crew is called.
+                        wheel?.selectCrew(player.uuid, picked.takeIf { it != NO_CREW })
+                        Unit
+                    })
+                }
+                OPS_CREW_SUMMON -> {
+                    val called: UUID = buf.readUUID()
+                    ({ level: ServerLevel -> ShipCrews.summonCrew(level, player, helm, called) })
+                }
+                OPS_CREW_ROSTER_ASK -> {
+                    val asked: UUID = buf.readUUID()
+                    ({ level: ServerLevel -> ShipCrews.requestCrewRoster(level, player, helm, asked) })
+                }
+                OPS_CREW_DISBAND -> {
+                    val doomed: UUID = buf.readUUID()
+                    ({ level: ServerLevel -> ShipCrews.disbandCrew(level, player, helm, doomed) })
+                }
+                OPS_CREW_RENAME -> {
+                    val renamed: UUID = buf.readUUID()
+                    val typed = buf.readUtf(HelmNames.MAX_NAME_LENGTH * 4)
+                    ({ level: ServerLevel -> ShipCrews.renameCrew(level, player, helm, renamed, typed) })
+                }
                 else -> null
             }
             if (order == null) return@registerGlobalReceiver
@@ -686,6 +743,40 @@ object PathNetworkingFabric {
             // field that may be mid-swap.
             val detail = decodeDetail(payload.data, context.client().connection!!.registryAccess())
             context.client().execute { CrewManifestScreen.acceptDetail(detail) }
+        }
+
+        CrewRoll.clientAsk = { helm -> sendCrewListAsk(helm) }
+        CrewRoll.clientSelect = { helm, crew -> sendCrewSelect(helm, crew) }
+        CrewRoll.clientSummon = { helm, crew -> sendCrewSummon(helm, crew) }
+        CrewRoll.clientRosterAsk = { helm, crew -> sendCrewRosterAsk(helm, crew) }
+        CrewRoll.clientDisband = { helm, crew -> sendCrewDisband(helm, crew) }
+        CrewRoll.clientRenameCrew = { helm, crew, name -> sendCrewRenameById(helm, crew, name) }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_ROSTER_TYPE) { payload, context ->
+            val roster = try {
+                decodeCrewRoster(payload.data)
+            } catch (t: Throwable) {
+                org.slf4j.LoggerFactory.getLogger("vs_eureka")
+                    .error("[crew] client crew-roster DECODE failed on {} bytes", payload.data.size, t)
+                return@registerGlobalReceiver
+            }
+            context.client().execute { CrewManifestScreen.acceptCrewRoster(roster) }
+        }
+
+        ClientPlayNetworking.registerGlobalReceiver(CREW_LIST_TYPE) { payload, context ->
+            val roll = try {
+                decodeCrewList(payload.data)
+            } catch (t: Throwable) {
+                org.slf4j.LoggerFactory.getLogger("vs_eureka")
+                    .error("[crew] client crew-list DECODE failed on {} bytes", payload.data.size, t)
+                return@registerGlobalReceiver
+            }
+            context.client().execute {
+                // Both screens read the same roll: the helm menu's dropdown and the book's Crews tab. Each
+                // ignores it unless it is about the wheel they are open on.
+                ShipHelmScreen.acceptCrewRoll(roll)
+                CrewManifestScreen.acceptCrewRoll(roll)
+            }
         }
 
         ClientPlayNetworking.registerGlobalReceiver(CREW_STORES_TYPE) { payload, context ->
@@ -794,6 +885,12 @@ object PathNetworkingFabric {
     private const val OPS_SET_POWER: Byte = 11
     private const val OPS_OPEN_HELM: Byte = 12
     private const val OPS_FIRE_AT_WILL: Byte = 13
+    private const val OPS_CREW_LIST_ASK: Byte = 14
+    private const val OPS_CREW_SELECT: Byte = 15
+    private const val OPS_CREW_SUMMON: Byte = 16
+    private const val OPS_CREW_ROSTER_ASK: Byte = 17
+    private const val OPS_CREW_DISBAND: Byte = 18
+    private const val OPS_CREW_RENAME: Byte = 19
 
     /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
     private const val MAX_ITEM_ID = 256
@@ -811,6 +908,136 @@ object PathNetworkingFabric {
     /** Client: ask what the holds hold. Answered by a [CrewStoresPayload], or by silence. */
     @Environment(EnvType.CLIENT)
     fun sendCrewStoresAsk(helm: Long) = sendOps(helm, OPS_STORES) {}
+
+    /** Client: ask which crews this captain has. Answered by a [CrewListPayload], or by silence. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewListAsk(helm: Long) = sendOps(helm, OPS_CREW_LIST_ASK) {}
+
+    /**
+     * Client: note which crew the helm menu's list is showing. Costs nothing and moves nobody.
+     *
+     * [crew] is null to clear the pick, which travels as the nil UUID -- one shape on the wire either way.
+     */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewSelect(helm: Long, crew: UUID?) = sendOps(helm, OPS_CREW_SELECT) {
+        it.writeUUID(crew ?: NO_CREW)
+    }
+
+    /** Client: call [crew] to this ship, paying their passage. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewSummon(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_SUMMON) { it.writeUUID(crew) }
+
+    /** Client: ask for one crew's articles. Answered by a [CrewRosterPayload], or by silence. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRosterAsk(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_ROSTER_ASK) { it.writeUUID(crew) }
+
+    /** Client: strike [crew] off and destroy its members. Final. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewDisband(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_DISBAND) { it.writeUUID(crew) }
+
+    /** Client: rename [crew] by id, whether or not they are on this ship. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewRenameById(helm: Long, crew: UUID, name: String) = sendOps(helm, OPS_CREW_RENAME) {
+        it.writeUUID(crew)
+        it.writeUtf(name)
+    }
+
+    /**
+     * "No crew", on the wire.
+     *
+     * A nil UUID rather than a flag byte, so a cleared pick and a real one are the same eight-plus-eight
+     * bytes and the reader has one shape to parse. Nothing can ever be filed under it: [UUID.randomUUID]
+     * does not produce it, and the ledger only ever stores what it minted.
+     */
+    private val NO_CREW: UUID = UUID(0L, 0L)
+
+    /** Server: send [captain] the crews they can call at this wheel. */
+    private fun sendCrewList(captain: ServerPlayer, level: ServerLevel, helm: Long) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        sendCrewRoll(captain, CrewRoll.build(captain, wheel))
+    }
+
+    private fun sendCrewRoll(captain: ServerPlayer, roll: CrewRoll.Roll) {
+        if (!ServerPlayNetworking.canSend(captain, CREW_LIST_TYPE)) return
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeLong(roll.helm)
+        buf.writeVarInt(roll.entries.size)
+        for (entry in roll.entries) {
+            buf.writeUUID(entry.id)
+            buf.writeUtf(entry.name)
+            buf.writeVarInt(entry.heads)
+            buf.writeBoolean(entry.aboard)
+            buf.writeVarInt(entry.fare)
+        }
+        ServerPlayNetworking.send(captain, CrewListPayload(toArray(buf)))
+    }
+
+    /** Server: send [captain] one crew's articles. Rows travel in the same shape the manifest uses. */
+    private fun sendCrewRoster(captain: ServerPlayer, roster: CrewRoll.Roster) {
+        if (!ServerPlayNetworking.canSend(captain, CREW_ROSTER_TYPE)) return
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeUUID(roster.id)
+        buf.writeUtf(roster.name)
+        buf.writeVarInt(roster.fare)
+        writeCrewRows(buf, roster.rows)
+        ServerPlayNetworking.send(captain, CrewRosterPayload(toArray(buf)))
+    }
+
+    private fun decodeCrewRoster(data: ByteArray): CrewRoll.Roster {
+        val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
+        val id = buf.readUUID()
+        val name = buf.readUtf()
+        val fare = buf.readVarInt()
+        return CrewRoll.Roster(id, name, fare, readCrewRows(buf))
+    }
+
+    /**
+     * The manifest's row list, on the wire. One writer and one reader for both payloads that carry rows, so
+     * the ship's roster and a crew's own articles cannot drift into two nearly-identical encodings.
+     */
+    private fun writeCrewRows(buf: FriendlyByteBuf, rows: List<CrewManifest.Row>) {
+        buf.writeVarInt(rows.size)
+        for (row in rows) {
+            buf.writeVarInt(row.slot)
+            buf.writeUUID(row.villager)
+            buf.writeVarInt(row.entityId)
+            buf.writeUtf(row.profession)
+            buf.writeUtf(row.villagerType)
+            buf.writeVarInt(row.level)
+            buf.writeUtf(row.name)
+            buf.writeByte(row.duty.ordinal)
+            buf.writeBoolean(row.locked)
+        }
+    }
+
+    private fun readCrewRows(buf: FriendlyByteBuf): List<CrewManifest.Row> = List(buf.readVarInt()) {
+        CrewManifest.Row(
+            slot = buf.readVarInt(),
+            villager = buf.readUUID(),
+            entityId = buf.readVarInt(),
+            profession = buf.readUtf(),
+            villagerType = buf.readUtf(),
+            level = buf.readVarInt(),
+            name = buf.readUtf(),
+            duty = CrewDuty.byOrdinal(buf.readByte().toInt()),
+            locked = buf.readBoolean()
+        )
+    }
+
+    private fun decodeCrewList(data: ByteArray): CrewRoll.Roll {
+        val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
+        val helm = buf.readLong()
+        val entries = List(buf.readVarInt()) {
+            CrewRoll.Entry(
+                id = buf.readUUID(),
+                name = buf.readUtf(),
+                heads = buf.readVarInt(),
+                aboard = buf.readBoolean(),
+                fare = buf.readVarInt()
+            )
+        }
+        return CrewRoll.Roll(helm, entries)
+    }
 
     /** Client: give or lift the Fire at Will order -- the gun crews lay their own guns. */
     @Environment(EnvType.CLIENT)
@@ -1012,21 +1239,12 @@ object PathNetworkingFabric {
     private fun encodeManifest(snapshot: CrewManifest.Snapshot): ByteArray {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeUtf(snapshot.ship)
+        buf.writeUtf(snapshot.crew)
         buf.writeLong(snapshot.helm)
+        // NOTE: the rows themselves go through writeCrewRows below, shared with the Crews tab's roster.
         buf.writeVarInt(snapshot.berths)
         buf.writeVarInt(snapshot.maxBerths)
-        buf.writeVarInt(snapshot.rows.size)
-        for (row in snapshot.rows) {
-            buf.writeVarInt(row.slot)
-            buf.writeUUID(row.villager)
-            buf.writeVarInt(row.entityId)
-            buf.writeUtf(row.profession)
-            buf.writeUtf(row.villagerType)
-            buf.writeVarInt(row.level)
-            buf.writeUtf(row.name)
-            buf.writeByte(row.duty.ordinal)
-            buf.writeBoolean(row.locked)
-        }
+        writeCrewRows(buf, snapshot.rows)
         return toArray(buf)
     }
 
@@ -1034,23 +1252,11 @@ object PathNetworkingFabric {
     private fun decodeManifest(data: ByteArray): CrewManifest.Snapshot {
         val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
         val ship = buf.readUtf()
+        val crew = buf.readUtf()
         val helm = buf.readLong()
         val berths = buf.readVarInt()
         val maxBerths = buf.readVarInt()
-        val rows = List(buf.readVarInt()) {
-            CrewManifest.Row(
-                slot = buf.readVarInt(),
-                villager = buf.readUUID(),
-                entityId = buf.readVarInt(),
-                profession = buf.readUtf(),
-                villagerType = buf.readUtf(),
-                level = buf.readVarInt(),
-                name = buf.readUtf(),
-                duty = CrewDuty.byOrdinal(buf.readByte().toInt()),
-                locked = buf.readBoolean()
-            )
-        }
-        return CrewManifest.Snapshot(ship, helm, berths, maxBerths, rows)
+        return CrewManifest.Snapshot(ship, crew, helm, berths, maxBerths, readCrewRows(buf))
     }
 
     /**

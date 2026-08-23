@@ -158,7 +158,9 @@ object ShipFoundering {
             return false
         }
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
-        CrewMuster.standDownShip(level, shipId, holdAABB, crewName = null, variant = null)
+        // No crew ids: a foundering has no wheel in hand and no captain behind it, so the hull sweep is the
+        // only source -- which is exactly the case that sweep exists for.
+        CrewMuster.standDownShip(level, shipId, holdAABB, crewIds = emptyList())
         return true
     }
 

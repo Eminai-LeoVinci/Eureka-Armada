@@ -15,7 +15,6 @@ import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.crew.CrewMuster
 import org.valkyrienskies.eureka.crew.CrewStations
-import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.BillOfMaterials
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
@@ -174,14 +173,13 @@ object ShipSalvage {
             }
         }
 
-        // The crew's name comes off the CREW STATION rather than any wheel that happens to be nearby: on a
-        // hull with several wheels the marked one is usually not the one holding the articles, and reading
-        // the wrong one skips the whole stand-down. That mistake once cost an entire crew.
+        // The crews come off the CREW STATION rather than any wheel that happens to be nearby: on a hull with
+        // several wheels the marked one is usually not the one holding the articles, and reading the wrong one
+        // skips the whole stand-down. That mistake once cost an entire crew.
         val station = CrewStations.stationOf(level, ship)
-        val crewName = station?.helmName?.string
-        val variant = station?.let { HelmNames.variantOf(it.blockState) }
+        val crewIds = station?.crewBindings()?.values ?: emptyList()
         val posts = station?.let { CrewMuster.postsOf(level, ship, it.blockPos) } ?: emptyMap()
-        val crewReport = CrewMuster.standDownShip(level, ship.id, ship.worldAABB, crewName, variant, posts)
+        val crewReport = CrewMuster.standDownShip(level, ship.id, ship.worldAABB, crewIds, posts)
 
         val shipId = ship.id
         val deck = ship.worldAABB.let {

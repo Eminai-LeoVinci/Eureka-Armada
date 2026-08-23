@@ -232,7 +232,7 @@ object CrewOperations {
         // berth with only a LABEL is owed one -- both are spoken for, so neither is a free hand.
         val targets = ArrayDeque(scope.filter { it.gun.blockPos.asLong() !in held })
         val candidates = ArrayDeque(
-            ledger.crew(op.key).sortedBy { it.slot }
+            ledger.berths(op.crewId).sortedBy { it.slot }
                 .filter { !it.locked && it.station == null && it.stationLabel == null }
         )
 
@@ -317,7 +317,7 @@ object CrewOperations {
     ) {
         val op = gate(level, player, helm) ?: return
         val ledger = CrewLedger.get(level.server)
-        val berths = ledger.crew(op.key).sortedBy { it.slot }
+        val berths = ledger.berths(op.crewId).sortedBy { it.slot }
         val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
 
         if (mode == AssignMode.RELEASE) {
@@ -780,7 +780,7 @@ object CrewOperations {
         val level: ServerLevel,
         val player: ServerPlayer,
         val station: ShipHelmBlockEntity,
-        val key: CrewLedger.Key,
+        val crewId: UUID,
         val ship: LoadedServerShip
     )
 
@@ -790,9 +790,9 @@ object CrewOperations {
      */
     private fun gate(level: ServerLevel, player: ServerPlayer, helm: Long): Op? {
         val station = CrewManifest.stationAt(level, player, helm) ?: return null
-        val key = CrewManifest.crewKey(player, station) ?: return null
+        val crewId = CrewManifest.crewIdFor(player, station) ?: return null
         val ship = CrewStations.shipOf(level, station) ?: return null
-        return Op(level, player, station, key, ship)
+        return Op(level, player, station, crewId, ship)
     }
 
     // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
@@ -824,7 +824,7 @@ object CrewOperations {
     private fun storesManned(op: Op): Boolean {
         val ledger = CrewLedger.get(op.level.server)
         val manned = CrewMuster.villagersIn(op.level, op.ship.worldAABB).any { villager ->
-            ledger.crewOf(villager.uuid) == op.key &&
+            ledger.crewOf(villager.uuid) == op.crewId &&
                 ledger.berthOf(villager.uuid)?.duty == CrewDuty.NONE
         }
         if (!manned) {
@@ -871,7 +871,7 @@ object CrewOperations {
         val positions = scope?.mapTo(HashSet()) { it.gun.blockPos.asLong() }
         val labels = scope?.mapTo(HashSet()) { it.label }
         var released = 0
-        for (berth in ledger.crew(op.key)) {
+        for (berth in ledger.berths(op.crewId)) {
             if (berth.locked) continue
             val station = berth.station
             val label = berth.stationLabel
