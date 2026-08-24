@@ -79,6 +79,26 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     private var heat = 0f
+
+    /**
+     * Put this engine out, and leave it out. Called on every engine of a hull that SANK, once her blocks are
+     * back in the world.
+     *
+     * Zeroing the heat alone is not enough and looks like it should be. A block entity ticks wherever it is:
+     * a loose engine with coal still in it burns that coal, climbs back up the heat ladder, and relights --
+     * `EngineBlock` derives its light level straight from the HEAT property, so a wreck on the seabed would
+     * have glowed and hummed away as if nothing had happened. The fuel goes with the heat, which is also the
+     * honest reading: she went down with her bunkers.
+     */
+    fun douse() {
+        heat = 0f
+        heatLevel = 0
+        fuelLeft = 0
+        fuelTotal = 0
+        fuel = ItemStack.EMPTY
+        setChanged()
+    }
+
     fun tick() {
         if (this.level!!.isClientSide) return
 

@@ -5,9 +5,13 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet
 import it.unimi.dsi.fastutil.objects.ObjectArrayList
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
+import net.minecraft.core.registries.Registries
+import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.tags.TagKey
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.decoration.BlockAttachedEntity
+import net.minecraft.world.Clearable
 import net.minecraft.world.entity.decoration.HangingEntity
 import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.block.Block
@@ -22,6 +26,8 @@ import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.core.util.datastructures.DenseBlockPosSet
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.EurekaProperties.HEAT
+import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
 import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.mod.common.isTickingChunk
@@ -35,6 +41,25 @@ import org.valkyrienskies.mod.util.relocateBlock
 import org.valkyrienskies.mod.util.updateBlock
 import kotlin.collections.set
 import kotlin.math.*
+import org.valkyrienskies.eureka.EurekaMod
+
+// The two tags a WRECK is taken apart by. They exist only on that path -- a ship a captain disassembles at
+// her own wheel is rebuilt exactly as she always was -- and they are declared here, at their only point of
+// use, rather than beside the assembly tags they are nothing to do with.
+
+// Blocks a wreck does not bring down with her. A hull that came to rest on her side lays her blocks out
+// rolled while their STATES stay as they were, so anything that hung on a wall, sat on a floor or pointed
+// somewhere in particular arrives meaningless -- and vanilla then knocks most of it off, silently and
+// without drops. Losing it on purpose is the same outcome, minus the surprise.
+val WRECK_DISCARD: TagKey<Block> =
+    TagKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "wreck_discard"))
+
+// World blocks that beat a wreck's own. Everywhere else the ship wins and buries herself -- sand, gravel,
+// stone and water all give way, which is what makes her look part of the seabed rather than dropped onto
+// it. Coral is the exception: a reef the hull came down through should grow back out through her deck,
+// because a wreck erasing the reef it is lying in reads as damage rather than as time passing.
+val WRECK_PRESERVE: TagKey<Block> =
+    TagKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "wreck_preserve"))
 
 object ShipAssembler {
     // BFS-collect the connected block set (world coordinates) that would become a ship, or null if it
@@ -173,28 +198,124 @@ object ShipAssembler {
      * is about to be laid into: any other frame misses the snap, and a snap that actually turns shifts a
      * reconstruction by a whole block. [anchor] must be one of the ship's own blocks (the helm).
      */
-    fun unfillPlan(ship: ServerShip, anchor: BlockPos): Pair<Matrix4d, Vector3d> {
-        // ship's rotation rounded to nearest 90*
-        val shipToWorld = ship.transform.run {
-            Matrix4d()
-                .translate(positionInWorld)
-                .rotate(snapRotation(AxisAngle4d(shipToWorldRotation)))
-                .scale(shipToWorldScaling)
-                .translate(-positionInShip.x(), -positionInShip.y(), -positionInShip.z())
+    fun unfillPlan(ship: ServerShip, anchor: BlockPos): Pair<Matrix4d, Vector3d> =
+        unfillPlan(ship, anchor, 0, 0.0, 0)
+
+    /**
+     * As above, but able to lay a WRECK down: [rollDegrees] tips her onto her side about her own keel line,
+     * and [sink] puts her that many blocks under the ground she came to rest on.
+     *
+     * Both stay on the block lattice. The roll is a multiple of 90 so rotated block coordinates land back on
+     * whole blocks, and the drop that re-seats her works out integral for the same reason -- so a laid wreck
+     * reconstructs exactly as cleanly as an upright ship, just lower and on her side.
+     */
+    fun unfillPlan(
+        ship: ServerShip,
+        anchor: BlockPos,
+        rollDegrees: Int,
+        burialFraction: Double,
+        maxSink: Int
+    ): Pair<Matrix4d, Vector3d> {
+        val upright = layMatrix(ship, 0)
+        val laid = if (rollDegrees == 0 && burialFraction <= 0.0) {
+            upright
+        } else {
+            val rolled = layMatrix(ship, rollDegrees)
+            val (rolledLow, rolledHigh) = verticalSpan(ship, rolled)
+
+            // Measured against her height AFTER the roll, which is the whole point. A first-rate laid on
+            // her side is as tall as she is wide, and burying her by a fraction of the height she had while
+            // upright put her masts-deep in the seabed -- one test hull could not be found at all. Half of
+            // what you can actually see is what "half buried" means.
+            val sink = ((rolledHigh - rolledLow) * burialFraction.coerceIn(0.0, 1.0))
+                .toInt().coerceIn(0, maxSink)
+
+            // Re-seat her. A roll swings the hull about the SHIP's origin, which is nowhere near her keel,
+            // so without this she would come apart somewhere above or below where she actually lay. Put the
+            // lowest point of the rolled hull exactly where the lowest point of the upright one was, then
+            // take her under by `sink`.
+            val drop = lowestCorner(ship, upright) - rolledLow - sink
+            Matrix4d().translation(0.0, drop, 0.0).mul(rolled)
         }
-        val gridOffset = shipToWorld
+        val gridOffset = laid
             .transformPosition(Vector3d(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5))
             .let { Vector3d(floor(it.x) + 0.5 - it.x, floor(it.y) + 0.5 - it.y, floor(it.z) + 0.5 - it.z) }
-        return shipToWorld to gridOffset
+        return laid to gridOffset
     }
 
-    fun unfillShip(level: ServerLevel, ship: ServerShip, shipCenter: BlockPos, center: BlockPos): Boolean {
+    /** The ship-to-world matrix with her rotation snapped to 90*, optionally rolled onto her side first. */
+    private fun layMatrix(ship: ServerShip, rollDegrees: Int): Matrix4d = ship.transform.run {
+        val m = Matrix4d()
+            .translate(positionInWorld)
+            .rotate(snapRotation(AxisAngle4d(shipToWorldRotation)))
+        val snapped = snapRotation(AxisAngle4d(shipToWorldRotation))
+        // A hull that already came down at an angle has heeled over by herself, and laying her down again
+        // would stand her back up. The test is the one rotationFromAxisAngle uses to decide whether block
+        // states can be rotated at all: a rotation about anything but Y is a ship that is not upright.
+        val upright = snapped.angle < 1.0e-6 || abs(snapped.y) >= 0.9
+        if (rollDegrees != 0 && upright) {
+            // Applied in the SHIP's own frame, so she rolls about her keel line rather than about a world
+            // axis: the longer of her two horizontal spans, which for anything built like a ship is her
+            // length. The same rule sizes her wreck box, so the two always agree which way she is facing.
+            val hull = ship.shipAABB
+            val alongX = hull == null || (hull.maxX() - hull.minX()) >= (hull.maxZ() - hull.minZ())
+            m.rotate(
+                AxisAngle4d(
+                    Math.toRadians(rollDegrees.toDouble()),
+                    if (alongX) 1.0 else 0.0, 0.0, if (alongX) 0.0 else 1.0
+                )
+            )
+        }
+        m.scale(shipToWorldScaling)
+            .translate(-positionInShip.x(), -positionInShip.y(), -positionInShip.z())
+    }
+
+    /** The world Y of the lowest corner of the ship's block box through [m]. */
+    private fun lowestCorner(ship: ServerShip, m: Matrix4d): Double = verticalSpan(ship, m).first
+
+    /** The world Y of the lowest and highest corners of the ship's block box through [m]. */
+    private fun verticalSpan(ship: ServerShip, m: Matrix4d): Pair<Double, Double> {
+        val b = ship.shipAABB ?: return 0.0 to 0.0
+        val probe = Vector3d()
+        var lowest = Double.MAX_VALUE
+        var highest = -Double.MAX_VALUE
+        for (x in intArrayOf(b.minX(), b.maxX() + 1)) {
+            for (y in intArrayOf(b.minY(), b.maxY() + 1)) {
+                for (z in intArrayOf(b.minZ(), b.maxZ() + 1)) {
+                    val corner = m.transformPosition(probe.set(x.toDouble(), y.toDouble(), z.toDouble()))
+                    lowest = min(lowest, corner.y)
+                    highest = max(highest, corner.y)
+                }
+            }
+        }
+        if (lowest == Double.MAX_VALUE) return 0.0 to 0.0
+        return lowest to highest
+    }
+
+    /**
+     * Take [ship] apart into world blocks.
+     *
+     * [wreck] is the difference between a captain disassembling her at the wheel and a hull that was shot
+     * down coming apart where it fell. A wreck MERGES with the ground -- see [WRECK_DISCARD] and
+     * [WRECK_PRESERVE] -- rather than stamping a ship-shaped hole into it. It defaults false, so every
+     * existing caller keeps the exact behaviour it had.
+     */
+    fun unfillShip(
+        level: ServerLevel,
+        ship: ServerShip,
+        shipCenter: BlockPos,
+        center: BlockPos,
+        wreck: Boolean = false,
+        burialFraction: Double = 0.0,
+        maxSink: Int = 0,
+        rollDegrees: Int = 0
+    ): Boolean {
         val rotation: Rotation = ship.transform.shipToWorldRotation
             .let(::AxisAngle4d)
             .let(ShipAssembler::snapRotation)
             .let(::rotationFromAxisAngle)
 
-        val (shipToWorld, gridOffset) = unfillPlan(ship, shipCenter)
+        val (shipToWorld, gridOffset) = unfillPlan(ship, shipCenter, rollDegrees, burialFraction, maxSink)
 
         // Every block below is written to floor(its world centre), and nothing downstream checks that against the
         // world's height range: a hull straddling the build ceiling -- which a high-flying ship reaches easily --
@@ -294,6 +415,12 @@ object ShipAssembler {
 
         val toUpdate = Sets.newHashSet<Triple<BlockPos, BlockPos, BlockState>>()
 
+        // Blocks that are NOT coming with her: struck off by tag, torn away on the way down, or beaten by
+        // something the world would rather keep. Collected rather than cleared in place, because the walk
+        // below is reading the very chunk sections a clear would rewrite.
+        val discarded = ArrayList<BlockPos>()
+        val shatter = if (wreck) WreckDamage.rules() else emptyList()
+
         ship.activeChunksSet.forEach { chunkX, chunkZ ->
             val chunk = level.getChunk(chunkX, chunkZ)
             for (sectionIndex in 0 until chunk.sections.size) {
@@ -312,11 +439,25 @@ object ShipAssembler {
                             val realX = (chunkX shl 4) + x
                             val realY = bottomY + y + level.minY
                             val realZ = (chunkZ shl 4) + z
+                            val inShipPos = BlockPos(realX, realY, realZ)
+
+                            if (wreck &&
+                                (state.`is`(WRECK_DISCARD) || WreckDamage.shatters(state, shatter, level.random))
+                            ) {
+                                discarded.add(inShipPos)
+                                continue
+                            }
 
                             val inWorldPos = shipToWorld.transformPosition(alloc0.set(realX + 0.5, realY + 0.5, realZ + 0.5)).floor()
 
                             val inWorldBlockPos = BlockPos(inWorldPos.x.toInt(), inWorldPos.y.toInt(), inWorldPos.z.toInt())
-                            val inShipPos = BlockPos(realX, realY, realZ)
+
+                            // The one place the world ever beats the ship. Everything else it lands on --
+                            // sand, gravel, stone, water -- gives way, and that giving way is the burial.
+                            if (wreck && level.getBlockState(inWorldBlockPos).`is`(WRECK_PRESERVE)) {
+                                discarded.add(inShipPos)
+                                continue
+                            }
 
                             toUpdate.add(Triple(inShipPos, inWorldBlockPos, state))
                             level.relocateBlock(inShipPos, inWorldBlockPos, false, null, rotation)
@@ -325,9 +466,41 @@ object ShipAssembler {
                 }
             }
         }
+
+        // Taken out of the shipyard by hand, because NOTHING else will.
+        //
+        // unfillShip does not delete the ship -- it empties her and sets her static, and vs-core reaps a hull
+        // once there is nothing left in it. A block merely skipped above is a block still standing in the
+        // shipyard, so the ship never becomes empty and never goes: the first cut left every cannon on a
+        // sunk hull floating at the wreck's old angle, solid, clickable, and droppable for its gunpowder.
+        // A ghost ship made of exactly the parts that were supposed to be destroyed.
+        //
+        // Contents first and drops suppressed. A cannon holds its powder and shot, and a wreck's guns going
+        // down with her should not rain their ammunition into the sea on the way.
+        for (pos in discarded) {
+            (level.getBlockEntity(pos) as? Clearable)?.clearContent()
+            level.setBlock(
+                pos, Blocks.AIR.defaultBlockState(),
+                Block.UPDATE_KNOWN_SHAPE or Block.UPDATE_SUPPRESS_DROPS
+            )
+        }
         // We update the blocks after they're set to prevent blocks from breaking
         for (triple in toUpdate) {
             updateBlock(level, triple.first, triple.second, triple.third)
+        }
+
+        // A sunk ship's engines are cold ones. Done HERE, on the world copy, rather than in the shipyard
+        // before the move: relocateBlock rebuilds the block entity from a saved tag, so anything doused on
+        // the way out would simply be restored on the way in.
+        if (wreck) {
+            for ((_, worldPos, _) in toUpdate) {
+                val placed = level.getBlockState(worldPos)
+                if (!placed.hasProperty(HEAT)) continue
+                (level.getBlockEntity(worldPos) as? EngineBlockEntity)?.douse()
+                if (placed.getValue(HEAT) != 0) {
+                    level.setBlock(worldPos, placed.setValue(HEAT, 0), Block.UPDATE_ALL)
+                }
+            }
         }
 
         // The world blocks exist again, so the walls these hang on are back: move each fixture onto the world
@@ -337,6 +510,13 @@ object ShipAssembler {
         val alloc2 = Vector3d()
         for (entity in fixtures) {
             if (entity.isRemoved) continue
+            // A wreck loses hers. These hang on walls, and a hull that came to rest on her side puts those
+            // walls at an angle nothing was ever nailed to; carrying a frame across only for vanilla to
+            // knock it off a tick later is the same loss with an extra step. See WRECK_DISCARD.
+            if (wreck) {
+                entity.discard()
+                continue
+            }
             val anchor = fixtureAnchors[entity] ?: continue
             val moved = shipToWorld
                 .transformPosition(alloc2.set(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5))

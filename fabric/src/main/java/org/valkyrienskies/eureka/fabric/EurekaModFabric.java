@@ -46,6 +46,7 @@ import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
 import org.valkyrienskies.eureka.fabric.client.PirateZoneRenderer;
+import org.valkyrienskies.eureka.fabric.client.WreckBoxRenderer;
 import org.valkyrienskies.eureka.follow.ShipFollows;
 import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
@@ -56,6 +57,7 @@ import org.valkyrienskies.eureka.command.PirateCommand;
 import org.valkyrienskies.eureka.pirate.PirateGunnery;
 import org.valkyrienskies.eureka.pirate.PirateShips;
 import org.valkyrienskies.eureka.ship.ShipFoundering;
+import org.valkyrienskies.eureka.ship.ShipWreck;
 import org.valkyrienskies.eureka.command.MaterialCommand;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
@@ -159,6 +161,10 @@ public class EurekaModFabric implements ModInitializer {
             // Helm-less ships foundering -- every ship's, not just the pirates': the water probes physTick
             // cannot make, the settle watch, and the seabed/ground breakup.
             ShipFoundering.INSTANCE.tick(level);
+            // The wreck-box overlay's snapshot. Every tick rather than ShipFoundering's one-in-twenty,
+            // because the whole point of the overlay is watching the moment the box goes live. Costs one
+            // boolean read while "/vs wreck-box" is off, which is always, outside a debugging session.
+            ShipWreck.INSTANCE.publish(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -224,6 +230,9 @@ public class EurekaModFabric implements ModInitializer {
             PirateZoneRenderer.INSTANCE.register();
             // The cannon engage-range wireframe, its sibling in every respect.
             CannonRangeRenderer.INSTANCE.register();
+            // The wreck collision box: green while it is only a plan, red once it IS the ship's collision.
+            // Off until "/vs wreck-box true". DEV ONLY.
+            WreckBoxRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
@@ -328,6 +337,19 @@ public class EurekaModFabric implements ModInitializer {
                                     PirateShips.setPublishZones(enabled);
                                     ctx.getSource().sendFeedback(
                                         Component.literal("Pirate zones " + (enabled ? "shown" : "hidden")));
+                                    return 1;
+                                })))
+                        // "/vs wreck-box <bool>": draw the box that measures how deep a hull buries herself
+                        // when she comes apart. GREEN on a sound ship, RED once she is a wreck. Same
+                        // single-player static-flag shape as pirate-zones. DEV ONLY, strip-listed.
+                        .then(ClientCommandManager.literal("wreck-box")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
+                                    ShipWreck.INSTANCE.setPublishBoxes(enabled);
+                                    ctx.getSource().sendFeedback(Component.literal(enabled
+                                        ? "Wreck boxes shown -- green: sound hull, red: a wreck, and the depth she will bury to"
+                                        : "Wreck boxes hidden"));
                                     return 1;
                                 })))
                         // "/vs cannon-range <bool>": draw every chasing pirate's engage-range sphere, plus one

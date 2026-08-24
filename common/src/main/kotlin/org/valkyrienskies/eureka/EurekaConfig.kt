@@ -1613,6 +1613,134 @@ object EurekaConfig {
         var helmlessSettleSeconds = 10.0
         // endregion
 
+        // region Ship wrecks
+        // A ship SHOT DOWN is a different thing from one whose wheels were merely broken, and only the first
+        // gets any of this. There are two ways to be shot down: her integrity falls past damageFreefallBelow,
+        // or she loses her WHEEL to an enemy and nobody claims her. The one death that is NOT a wreck is a
+        // captain unmaking her own ship -- mine the wheel out of a hull you built and she comes apart the
+        // way she always did.
+        //
+        // A wreck falls exactly as any dying hull falls, on her own collision, so the deck stays solid
+        // underfoot the whole way down and riders still fall with her. What changes is where she ENDS UP.
+        // As she breaks up she is laid onto her side and put UNDER the ground she came to rest on, so her
+        // blocks merge with the landscape -- half in the sand, coral standing through her deck -- instead of
+        // punching a ship-shaped hole in it.
+        //
+        // How far under is measured by a notional box far smaller than the hull: think of it as the only
+        // part of her still solid enough to hold her weight, and she settles until THAT would have grounded.
+        // The burial scales with the ship, so a first-rate goes most of a deck deeper than a raft does.
+
+        @JsonSchema(
+            description = "Whether a shot-down ship is laid on her side and buried when she breaks up. Off, " +
+                "she comes apart upright and on the surface, exactly as a ship disassembled at her own wheel " +
+                "does. A ship whose helms were merely broken is unaffected either way. Default true."
+        )
+        var wreckBurialEnabled = true
+
+        @JsonSchema(
+            description = "The wreck box for a small hull -- width, height, length in blocks, the length " +
+                "laid along the hull's longer horizontal span. Deliberately far smaller than the ship: the " +
+                "gap between the two is exactly how deep she buries herself. Default [1, 2, 3]."
+        )
+        var wreckBoxSmall: List<Int> = listOf(1, 2, 3)
+
+        @JsonSchema(
+            description = "The wreck box for a medium hull -- a fishing boat, a small raider. " +
+                "Default [1, 3, 5]."
+        )
+        var wreckBoxMedium: List<Int> = listOf(1, 3, 5)
+
+        @JsonSchema(
+            description = "The wreck box for a large hull. Default [2, 5, 7]."
+        )
+        var wreckBoxLarge: List<Int> = listOf(2, 5, 7)
+
+        @JsonSchema(
+            description = "Assembled block count at or above which a wreck uses wreckBoxMedium rather than " +
+                "wreckBoxSmall. Default 5000."
+        )
+        var wreckBoxMediumMinBlocks = 5000
+
+        @JsonSchema(
+            description = "Assembled block count at or above which a wreck uses wreckBoxLarge. Default 15000."
+        )
+        var wreckBoxLargeMinBlocks = 15000
+
+        @JsonSchema(
+            description = "How much of a wreck ends up UNDER the ground she came to rest on, as a fraction " +
+                "of her height once she is laid on her side. 0.5 -- the default -- puts the surface through " +
+                "her middle: half of her showing, half of her in the seabed. Measured against her ROLLED " +
+                "height, so a ship 36 blocks wide that tips over shows about 18 of them whatever her masts " +
+                "were doing beforehand. Push it past 0.6 and hulls start disappearing entirely."
+        )
+        var wreckBurialFraction = 0.5
+
+        @JsonSchema(
+            description = "How far a wreck is rolled onto her side as she breaks up, in degrees. Rounded to " +
+                "a multiple of 90, because only those keep her blocks on the world grid. 0 lays her down " +
+                "level -- buried, but still the right way up. Note that block STATES are never rolled: a " +
+                "capsized hull keeps every stair, ladder and door facing the way it faced in the shipyard, " +
+                "and vanilla quietly knocks off whatever no longer has anything to hang on. Default 90."
+        )
+        var wreckRollDegrees = 90
+
+        @JsonSchema(
+            description = "What a ship loses on the way down, so that salvaging a wreck is worth less than " +
+                "taking the ship -- which is the whole argument for boarding one and putting your own wheel " +
+                "on her instead of sinking her. Each line is a block id or a #block tag, then a space, then " +
+                "a PERCENT chance that block is destroyed rather than laid down. Rolled independently per " +
+                "block, so a wreck comes up ragged and holed rather than evenly thinned. Read IN ORDER and " +
+                "the first matching line wins, because tags overlap and JSON guarantees no ordering. " +
+                "Applies ONLY to a sunk ship: a captain taking her own hull apart at the wheel, underwater " +
+                "or otherwise, loses nothing. An empty list disables it."
+        )
+        var wreckShatterChances: List<String> = listOf(
+            "#vs_eureka:balloons 60",
+            "#minecraft:wool 60",
+            "#vs_eureka:wreck_lights 50",
+            "vs_eureka:engine 40",
+            "minecraft:chest 30",
+            "minecraft:trapped_chest 30",
+            "#vs_eureka:wreck_wood 20"
+        )
+
+        @JsonSchema(
+            description = "How little a wreck must move, in blocks per second, to count as having touched " +
+                "down. Looser than the helm-less settle test on purpose: a wreck is not being waited on to " +
+                "see whether she can be saved, only to see where she finally lies. Default 0.35."
+        )
+        var wreckLandedEpsilon = 0.35
+
+        @JsonSchema(
+            description = "How long after touching down a wreck waits before breaking up, in seconds. The " +
+                "clock starts on first contact and never restarts, so a hull that keeps sliding still comes " +
+                "apart on schedule. She will still wait beyond this for anyone aboard to leave. Default 15.0."
+        )
+        var wreckGroundTimerSeconds = 15.0
+
+        @JsonSchema(
+            description = "How far outside a wreck, in blocks, still counts as being aboard her for the " +
+                "purpose of holding off the break-up. Generous because a sunken wreck is looted by SWIMMING " +
+                "through it, and a swimmer never registers as standing on a deck. Default 8.0."
+        )
+        var wreckPlayerInfluenceMargin = 8.0
+
+        @JsonSchema(
+            description = "Whether a pirate's wheel is proof against her own damage while any of her crew " +
+                "still live -- so a raider must be emptied of hands before she can be shot down. Off, she " +
+                "gives out on integrity alone as before. Default true."
+        )
+        var wreckPirateHelmNeedsCrewDead = true
+
+        @JsonSchema(
+            description = "Whether the one-minute conquest window happens only when a player is actually " +
+                "aboard as the wheel breaks. On, a prize nobody boarded starts falling at once and is a " +
+                "wreck to be salvaged rather than a hull to be claimed. Off, every conquest hangs for the " +
+                "full window whether or not anyone came. Default true."
+        )
+        var wreckPirateHoldNeedsPlayer = true
+        // endregion
+
         // region Pirate ships
         //
         // Generated pillager ships: proximity zones, the 20-second warning, wake-up and pursuit. Structure

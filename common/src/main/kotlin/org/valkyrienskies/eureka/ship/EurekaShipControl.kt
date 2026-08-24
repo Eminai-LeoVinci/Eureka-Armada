@@ -1624,6 +1624,21 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // first healthy tick after a helm returns clears it unasked.
     @Volatile var founderHold = false
 
+    // Whether this hull was SHOT DOWN, as opposed to merely losing its wheels. Integrity past the freefall
+    // line is what sets it; see ShipWreck, which owns both the latch and the collider swap that follows.
+    //
+    // LATCHED rather than read live, and owned by the game thread alone, for two reasons. The swap costs a
+    // walk of the whole hull, so it must never key off a predicate that can flicker at 60Hz. And a hull in
+    // freefall gives no account of WHY -- the physics branch treats a de-wheeled ship and a shot-down one
+    // identically, which is right for physics and wrong for everything downstream of it. This is the answer
+    // to the question that branch throws away.
+    //
+    // PERSISTED, so a wreck relogged mid-fall is still a wreck. The swap itself is deliberately NOT
+    // persisted: VS2 rebuilds a ship's physics voxels from its chunks on load, so a reloaded wreck comes
+    // back with her real hull colliders and has to be swapped again -- which ShipWreck does, from the
+    // in-memory set that is the honest record of what the physics engine currently believes.
+    @Volatile var wrecked = false
+
     // Engine fuel-tank aggregate for the helm's "Engine Power: X%" readout. Each engine reports its fuel level
     // (a 0..1 fraction of a full fuel slot) once per tick via [reportEngineFuel]; onServerTick averages last
     // tick's reports into [engineFuelPercent] (0..100). Double-buffered (accum vs accumNext) so the value is

@@ -931,16 +931,36 @@ object PirateShips {
             return
         }
         chases.remove(shipId)
-        store.frozenShips[shipId] = now + freezeTicks()
+        val loaded = level.shipObjectWorld.loadedShips.getById(shipId)
+        // The window exists for a BOARDER, and there is no boarder unless somebody is standing on her as
+        // the wheel goes. A prize shot to pieces from a mile off and left alone is not a prize to be
+        // claimed; she is a wreck, and hanging her in the air for a minute so that nobody can come is a
+        // minute of nothing happening. Without the hold, ShipFoundering has her on its very next pass and
+        // she goes down where she is -- which is the whole point of shooting one down.
+        val boarded = loaded != null &&
+            (!EurekaConfig.SERVER.wreckPirateHoldNeedsPlayer || ShipCrew.aboard(level, loaded).isNotEmpty())
+        if (boarded) store.frozenShips[shipId] = now + freezeTicks()
         store.markDirty()
-        level.shipObjectWorld.loadedShips.getById(shipId)?.let { loaded ->
-            ShipFollows.stopShip(loaded)
+        loaded?.let {
+            ShipFollows.stopShip(it)
             // The window is a HOLD, not a freeze: she keeps riding the water (or hanging in the air)
             // exactly as she did before the wheel broke -- the break only starts the clock. The first cut
             // set isStatic and the user watched a "conquered" ship stand rigid as if disassembled.
-            loaded.getAttachment(EurekaShipControl::class.java)?.founderHold = true
+            val ctl = it.getAttachment(EurekaShipControl::class.java)
+            ctl?.founderHold = boarded
+            if (!boarded) {
+                // Her wheel was destroyed and nobody came for her. She is a WRECK from this moment,
+                // whatever her integrity reads -- and it may well read 95%, because what killed her was
+                // losing the wheel, not losing planks. ShipWreck's other entrance is damage; this is the
+                // one that matters for a prize taken exactly as intended.
+                ctl?.wrecked = true
+            }
         }
-        logger.info("[pirates] wheel broken on ship {}; conquest window open", shipId)
+        if (boarded) {
+            logger.info("[pirates] wheel broken on ship {}; conquest window open", shipId)
+        } else {
+            logger.info("[pirates] wheel broken on ship {} with nobody aboard; she goes down where she is", shipId)
+        }
     }
 
     /**
@@ -989,7 +1009,10 @@ object PirateShips {
             iterator.remove()
             store.markDirty()
             control.founderHold = false
-            logger.info("[pirates] ship {} unclaimed; cut loose to founder", shipId)
+            // Unclaimed is the same verdict conquer reaches when nobody was aboard at all, just arrived at
+            // slowly: her wheel is gone, nobody came, and a sound-looking hull is going down regardless.
+            control.wrecked = true
+            logger.info("[pirates] ship {} unclaimed; cut loose to go down as a wreck", shipId)
         }
     }
 
@@ -1222,6 +1245,12 @@ object PirateShips {
         val threshold = EurekaConfig.SERVER.pirateHelmBreaksBelow
         if (threshold <= 0) return false
         if (ShipIntegrity.integrityPercent(control) >= threshold.coerceIn(1, 100)) return false
+
+        // A wheel does not give out while there is anybody left aboard to hold it. Damage alone used to be
+        // enough, which meant a raider could be finished at range without ever meeting her crew -- and the
+        // crew ARE the ship. Empty her first, then she gives up. A wheel that keeps no crew records at all
+        // (livingCrew reads -1 for a set-mark'd test helm) has nobody to wait for and gives out as before.
+        if (EurekaConfig.SERVER.wreckPirateHelmNeedsCrewDead && livingCrew(level, report.helm) > 0) return false
 
         val pos = report.helmPos
         if (!PirateHelm.gated(level.getBlockState(pos))) return false
