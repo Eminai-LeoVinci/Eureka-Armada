@@ -6,7 +6,9 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.util.StringUtil
 import org.joml.Vector3d
+import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.mod.common.executeIf
@@ -123,11 +125,30 @@ object HelmNames {
         // about its crew. Done first, so renaming immediately after adopting renames the adopted crew too.
         ledger.adoptLegacy(level.server, helm)
 
-        val crewId = helm.boundCrew(player.uuid) ?: return false
+        // Off the ARTICLES wheel, not the one that was clicked, and through bindingFor rather than the raw
+        // map. Both halves matter and both were missing: a multi-helm ship keeps its bindings on the crew
+        // station, so every other wheel answered null and the rename returned false without a word -- and a
+        // wheel from before crew ids carries a name and no binding at all until bindingFor adopts it. Same
+        // pair of mistakes, and the same fix, as the helm menu's crew dropdown. See CrewRoll.build.
+        val articles = CrewStations.shipOf(level, helm)?.let { CrewStations.stationOf(level, it) } ?: helm
+        val crewId = ledger.bindingFor(articles, player.uuid) ?: return false
         // Blank is not a rename. A crew with no name would be a blank row in the helm's list with no way to
         // pick it out from any other, so the old name stands.
         if (cleaned.isEmpty()) return false
-        return ledger.rename(crewId, cleaned)
+        if (!ledger.rename(crewId, cleaned)) return false
+
+        // Say so, to the screen that asked. The captain is LOOKING at that name -- it is drawn in the corner
+        // of the roster they just renamed it from -- and a rename that only appears after closing the book
+        // and opening it again reads exactly like a rename that did not take. Nothing polls; every other
+        // action in this menu answers with a fresh snapshot, and this one was the exception.
+        //
+        // The roll goes with it so the helm's own crew dropdown is right the moment they press Back, rather
+        // than right because the menu happened to be rebuilt on the way. Same pair, and the same reasoning,
+        // as ShipCrews.renameCrew -- which is the path that always did update, and the difference the
+        // captain could see between the two tabs.
+        CrewManifest.sender(player, CrewManifest.build(level, player, helm))
+        CrewRoll.sender(player, CrewRoll.build(player, helm))
+        return true
     }
 
     /**
@@ -217,12 +238,23 @@ object HelmNames {
     }
 
     /**
-     * Whether [player] is standing close enough to [helm] to be naming it.
+     * Whether [player] is close enough to [helm] to be naming anything of hers.
      *
      * An UNASSEMBLED wheel is where its block position says it is. An assembled one is filed in the shipyard
      * and is really wherever the ship has carried it, so its position has to be transformed before the
      * distance means anything. Getting this backwards would make a docked ship's helm unnameable and a distant
      * one nameable.
+     *
+     * Sixteen blocks of the wheel, OR standing anywhere on her -- the armada included. The radius alone is the
+     * wrong test for anything reached through a MENU, and that is how both callers get here: a captain opens
+     * the helm at the wheel and then walks their own deck while it is still up. On a first-rate a hundred
+     * blocks long that puts them out of range of a wheel they are standing thirty feet above, and the rename
+     * refused in silence -- there being nothing sensible to say to someone who looks like they are nowhere
+     * near the ship.
+     *
+     * This is [org.valkyrienskies.eureka.crew.ShipCrews]'s own book reach, and the crew manifest has always
+     * used it. The Crews tab's rename went through that path and worked; the Roster tab's went through this
+     * one and did not, for no reason a captain could see, because the two gestures are the same gesture.
      */
     private fun withinReach(level: ServerLevel, player: ServerPlayer, helm: ShipHelmBlockEntity): Boolean {
         val pos = helm.blockPos
@@ -235,7 +267,9 @@ object HelmNames {
         val dx = player.x - world.x
         val dy = player.y - world.y
         val dz = player.z - world.z
-        return dx * dx + dy * dy + dz * dz <= REACH_SQ
+        if (dx * dx + dy * dy + dz * dz <= REACH_SQ) return true
+        return ship != null &&
+            ShipCrew.standingOn(player)?.let { it in ArmadaGroup.idsOf(level, ship) } == true
     }
 
     /** Matches the crew menu's own reach, and comfortably more than a player can actually touch a block from. */
