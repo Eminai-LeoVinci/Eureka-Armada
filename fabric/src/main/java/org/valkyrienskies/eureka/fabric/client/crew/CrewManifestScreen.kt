@@ -259,14 +259,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             addTab(1, TAB_ROSTER_TEXT, Tab.ROSTER)
             addTab(2, TAB_CREWS_TEXT, Tab.CREWS)
 
-            // Pinned to the corner, outside the scrolling body, on both tabs. Sends the player back to the
-            // helm menu whose book brought them here (the server re-opens it; reach-guarded there).
-            helmBackButton = addRenderableWidget(
-                ShipHelmButton(
-                    left + PANEL_W - 8 - BACK_BTN_W, top + PANEL_H - 4 - BACK_BTN_H,
-                    BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
-                ) { PathNetworkingFabric.sendCrewOpenHelm(snapshot.helm) }
-            )
+            // Pinned to the corner, outside the scrolling body. Sends the player back to the helm menu whose
+            // book brought them here (the server re-opens it; reach-guarded there).
+            //
+            // NOT while a crew's articles are open. That view has its own Back -- out to the list of crews --
+            // and two buttons reading "Back" side by side, going to different places, is a coin toss with a
+            // label on it. The one that steps out one level takes the corner; Escape still leaves outright.
+            if (!(activeTab == Tab.CREWS && openCrew != null)) {
+                helmBackButton = addRenderableWidget(
+                    ShipHelmButton(
+                        left + PANEL_W - 8 - BACK_BTN_W, top + PANEL_H - 4 - BACK_BTN_H,
+                        BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
+                    ) { PathNetworkingFabric.sendCrewOpenHelm(snapshot.helm) }
+                )
+            }
 
             if (activeTab == Tab.OPERATIONS) {
                 initOperations()
@@ -278,12 +284,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 return
             }
 
-            // The crew's name is edited in place: clicking the heading swaps it for a box over the same
-            // pixels, which is the only spot in this panel wide enough for a name and the one a player
-            // would aim at. Built only while actually renaming, same reason the card's widgets are.
+            // The crew's name is edited where it is READ: bottom-left, over the label rather than over the
+            // heading at the top. The heading names the SHIP; the crew is a different thing and was being
+            // renamed from a box that covered somebody else's name.
+            //
+            // Its width is cut so it stops short of Rename Crew, which now shares this row. Taken as a share
+            // of the old full-width box and then bounded against the button, so the two can never overlap
+            // however the constants around them move.
             if (renamingCrew) {
+                val room = crewRenameX() - 4 - (left + 6)
                 crewNameBox = addRenderableWidget(
-                    EditBox(font, left + 6, top + 3, PANEL_W - 12 - BERTHS_GUTTER, NAME_BOX_H, RENAME_TEXT)
+                    EditBox(
+                        font, left + 6, bottomRowY(),
+                        minOf((PANEL_W - 12 - BERTHS_GUTTER) * 7 / 10, room), NAME_BOX_H, RENAME_TEXT
+                    )
                 ).also {
                     it.setMaxLength(CrewManifest.MAX_NAME_LENGTH)
                     it.value = crewNameValue
@@ -298,7 +312,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             // button says the rename EXISTS, which a click target does not.
             addRenderableWidget(
                 ShipHelmButton(
-                    left + 6, top + PANEL_H - 16, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
+                    crewRenameX(), bottomRowY(), CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
                 ) { beginCrewRename() }
             )
             return
@@ -390,10 +404,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 left + 6 + CREW_SUMMON_BTN_W + 4, rowY, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
             ) { beginOwnedCrewRename() }
         )
-        // Back to the LIST of crews, not out to the helm -- the corner Back still does that.
+        // Back to the LIST of crews. It takes the corner while these articles are open -- see init, where
+        // the helm's own Back stands down rather than sit beside it saying the same word.
         addRenderableWidget(
             ShipHelmButton(
-                left + PANEL_W - 8 - BACK_BTN_W - BACK_BTN_W - 4, rowY, BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
+                left + PANEL_W - 8 - BACK_BTN_W, rowY, BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
             ) { closeCrew() }
         )
     }
@@ -553,6 +568,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         closeCard()
     }
 
+    /** The row Back sits on, which Rename Crew and the crew's name now share. */
+    private fun bottomRowY(): Int = top + PANEL_H - 4 - BACK_BTN_H
+
+    /** Rename Crew's left edge: immediately left of Back, with a gap so the two do not read as one control. */
+    private fun crewRenameX(): Int =
+        left + PANEL_W - 8 - BACK_BTN_W - CREW_RENAME_GAP - CREW_RENAME_BTN_W
+
     /**
      * Start editing the crew's name, seeded with what it is now.
      *
@@ -709,7 +731,20 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // on the Crews tab. Bounded to the left of the berth counter and above the tab strip, so aiming at
         // the count or a tab never starts a rename.
         if (mx >= left && mx <= left + PANEL_W - BERTHS_GUTTER && my >= top + 2 && my < top + HEADER_BOTTOM) {
-            if (activeTab == Tab.CREWS) beginOwnedCrewRename() else beginCrewRename()
+            // Only on the Crews tab. On the Roster the heading is the SHIP's name, and clicking a ship's
+            // name to rename a crew was a coincidence of where the box used to be drawn.
+            if (activeTab == Tab.CREWS) {
+                beginOwnedCrewRename()
+                return true
+            }
+        }
+
+        // The crew's name at the bottom answers to a click, the way the heading used to.
+        if (activeTab == Tab.ROSTER && openCard == null &&
+            mx >= left + 6 && mx < crewRenameX() - 4 &&
+            my >= bottomRowY() && my < bottomRowY() + BACK_BTN_H
+        ) {
+            beginCrewRename()
             return true
         }
 
@@ -1179,8 +1214,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     private fun drawHeader(guiGraphics: GuiGraphics) {
         // While renaming, the box occupies these pixels -- drawing the heading underneath would show through.
+        // Only the CREWS tab's rename does that now: the roster's box has moved down to the crew's own name.
         val crewView = viewingCrew()
-        if (!renamingCrew && !renamingOwnedCrew) {
+        if (!renamingOwnedCrew) {
             val heading = when {
                 // A crew's own articles are headed by the CREW, not by the hull the book was opened on --
                 // the crew may have nothing to do with this ship at all.
@@ -1190,6 +1226,17 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 else -> Component.literal(snapshot.ship)
             }
             guiGraphics.drawString(font, heading, left + 8, top + 6, TEXT, false)
+        }
+
+        // The crew's OWN name, bottom-left. The heading above names the SHIP, and the two are different
+        // things -- a captain reading "Decor Battleship Blue" at the top had nowhere to see which crew was
+        // aboard her. It sits where it is edited: the rename box takes exactly these pixels.
+        if (activeTab == Tab.ROSTER && crewView == null && openCard == null && !renamingCrew) {
+            snapshot.crew.takeIf { it.isNotEmpty() }?.let { crew ->
+                guiGraphics.drawString(
+                    font, Component.literal(crew), left + 6, bottomRowY() + 3, DIM, false
+                )
+            }
         }
 
         val berths = when {
@@ -3057,6 +3104,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val DISMISS_BTN_W = 58
 
         private const val CREW_RENAME_BTN_W = 78
+
+        /** Between Rename Crew and Back. Enough that they are plainly two buttons, not a split one. */
+        private const val CREW_RENAME_GAP = 6
         private const val OFFER_H = 20
 
         /** The square the head is drawn in, one pixel inside the row. */
@@ -3110,6 +3160,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val CREW_DEL_W = 42
         private const val CREW_DEL_H = 14
         private const val CREW_DEL_INSET = 4
-        private const val CREW_SUMMON_BTN_W = 60
+        /**
+         * Matched to Rename Crew beside it. At 60 the label had to marquee, which on a button that is only
+         * ever read once -- to find out what it does -- is motion for nothing.
+         */
+        private const val CREW_SUMMON_BTN_W = CREW_RENAME_BTN_W
     }
 }

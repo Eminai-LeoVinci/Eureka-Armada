@@ -21,6 +21,7 @@ import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
+import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.mod.common.getShipMountedTo
 import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
@@ -548,7 +549,14 @@ object ShipCrews {
             PirateHelm.deny(player)
             return
         }
-        player.openMenu(helm)
+        // A TICK later, not now. This is called with the manifest still open, and opening a menu on top of
+        // one that is still closing loses the new menu's opening sync -- the helm came back with every
+        // readout blank, no ship name and "No crew", looking for all the world like an unassembled wheel,
+        // and closing it and walking back to the same wheel put it right. One tick of daylight between the
+        // close and the open is all it wants.
+        val server = level.server
+        val openAt = server.overworld().gameTime + 1
+        server.executeIf({ server.overworld().gameTime >= openAt }) { player.openMenu(helm) }
     }
 
     /** Arm's length of the wheel's WORLD position, or standing on its ship (armada included). */

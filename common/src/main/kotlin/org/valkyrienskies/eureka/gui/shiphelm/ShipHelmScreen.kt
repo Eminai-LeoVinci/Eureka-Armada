@@ -1189,8 +1189,15 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // most of its life marqueeing. Its left edge runs flush against Summon's right, so the pair reads as
         // one block of crew controls rather than two things that happen to be near each other -- so it shares
         // Summon's row as well as its edge.
-        private const val CREW_LIST_X = SUMMON_X + SUMMON_W                             // 184
-        private const val CREW_LIST_W = PANEL_WIDTH - PANEL_RIGHT_MARGIN - CREW_LIST_X  // 130
+        /**
+         * Taken off EACH side of the crew list -- a tenth of the width it used to span, so the control reads
+         * as its own thing rather than as a bar running from the book to the panel edge. It no longer sits
+         * flush against Summon; that was the point of the flush arrangement, and this replaces it.
+         */
+        private const val CREW_LIST_INSET = 13
+        private const val CREW_LIST_SPAN = PANEL_WIDTH - PANEL_RIGHT_MARGIN - (SUMMON_X + SUMMON_W) // 130
+        private const val CREW_LIST_X = SUMMON_X + SUMMON_W + CREW_LIST_INSET               // 197
+        private const val CREW_LIST_W = CREW_LIST_SPAN - 2 * CREW_LIST_INSET                // 104
         private const val CREW_LIST_H = 12
         private const val CREW_LIST_Y = SUMMON_Y
 
