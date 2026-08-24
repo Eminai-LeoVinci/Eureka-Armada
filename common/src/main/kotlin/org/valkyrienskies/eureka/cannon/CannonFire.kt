@@ -69,7 +69,10 @@ object CannonFire {
         val facing = state.getValue(HORIZONTAL_FACING)
         val rear = clicked.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
         val pitch = Math.toRadians(EurekaProperties.elevationDegrees(state.getValue(ELEVATION)))
-        return fireCore(level, rear, pitch, worldArc = false, speedOverride = null, consume = true, player = player)
+        return fireCore(
+            level, rear, pitch, worldArc = false, speedOverride = null, consume = true, player = player,
+            cooldownTicks = null
+        )
     }
 
     /**
@@ -90,7 +93,9 @@ object CannonFire {
         pitchDegrees: Double,
         speed: Double,
         consume: Boolean = true,
-        player: ServerPlayer? = null
+        player: ServerPlayer? = null,
+        /** Reload to use INSTEAD of the breech's own, in ticks. Fire at Will's rate; null keeps the gun's. */
+        cooldownTicks: Long? = null
     ): Component? {
         val state = level.getBlockState(rear)
         if (state.block !is CannonBlock) return Component.translatable("info.vs_eureka.cannon_broken")
@@ -98,7 +103,7 @@ object CannonFire {
         layVisual(level, rear, state, clamped)
         return fireCore(
             level, rear, Math.toRadians(clamped), worldArc = true,
-            speedOverride = speed, consume = consume, player = player
+            speedOverride = speed, consume = consume, player = player, cooldownTicks = cooldownTicks
         )
     }
 
@@ -122,7 +127,8 @@ object CannonFire {
         worldArc: Boolean,
         speedOverride: Double?,
         consume: Boolean,
-        player: ServerPlayer?
+        player: ServerPlayer?,
+        cooldownTicks: Long?
     ): Component? {
         val state = level.getBlockState(rear)
         if (state.block !is CannonBlock) return Component.translatable("info.vs_eureka.cannon_broken")
@@ -135,12 +141,22 @@ object CannonFire {
 
         // What the breech is set to, which decides the arc, the powder cost AND the reload.
         val charge = magazine.powderCharge
-        val cooldown = charge.reloadTicks
+        val reload = charge.reloadTicks
+
+        // Firing at will overrides the powder-derived reload: the whole battery keeps ONE rhythm, whatever
+        // measure each breech happens to be set to, so a captain turning the order on knows how fast their
+        // ship will speak. A hand-called shot keeps the gun's own reload, as it always has.
+        val cooldown = cooldownTicks?.takeIf { it > 0L } ?: reload
 
         // Anything beyond a full cooldown means the world clock moved rather than the gun being genuinely
         // hot -- a restored backup, most likely -- so let it fire instead of locking the gun out for a week.
+        //
+        // Measured against the LONGEST wait this gun could honestly have been handed. Testing only one of
+        // the two rates breaks in both directions: the shorter one releases a gun early the moment the
+        // rates differ, and the longer one would let fire-at-will skip a long manual reload already running.
+        val ceiling = maxOf(reload, cooldown)
         val remaining = magazine.readyAt - level.gameTime
-        if (remaining in 1..cooldown) {
+        if (remaining in 1..ceiling) {
             return Component.translatable("info.vs_eureka.cannon_cooling", (remaining / 20.0 + 0.5).toInt().coerceAtLeast(1))
         }
 

@@ -101,7 +101,8 @@ object PirateGunnery {
             val aim = AutoGunnery.aimFor(level, gun, target) ?: fallback
             val refusal = AutoGunnery.fireAt(
                 level, gun, aim, cfg.pirateCannonJitterBlocks,
-                cfg.pirateCannonBearingToleranceDegrees, consume = !cfg.pirateCannonInfiniteAmmo
+                cfg.pirateCannonBearingToleranceDegrees, consume = !cfg.pirateCannonInfiniteAmmo,
+                cooldownTicks = (cfg.pirateFireAtWillFireRateSeconds * 20.0).toLong()
             )
             if (refusal == null) {
                 state.nextShotAt = now + cfg.pirateCannonStaggerTicks.toLong().coerceAtLeast(1L)

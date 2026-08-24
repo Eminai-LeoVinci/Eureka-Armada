@@ -116,7 +116,8 @@ object FireAtWill {
             val refusal = AutoGunnery.fireAt(
                 level, gun, aim, cfg.fireAtWillJitterBlocks,
                 cfg.fireAtWillBearingToleranceDegrees, consume = true,
-                only = if (berth.locked) gun.powderCharge else null
+                only = if (berth.locked) gun.powderCharge else null,
+                cooldownTicks = (cfg.cannonFireAtWillFireRateSeconds * 20.0).toLong()
             )
             if (refusal == null) {
                 control.fireAtWillNextShotAt = now + cfg.fireAtWillStaggerTicks.toLong().coerceAtLeast(1L)

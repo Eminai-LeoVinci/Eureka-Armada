@@ -172,7 +172,9 @@ object AutoGunnery {
         jitterBlocks: Double,
         bearingToleranceDegrees: Double,
         consume: Boolean,
-        only: PowderCharge? = null
+        only: PowderCharge? = null,
+        /** Reload to hand the gun instead of its own, in ticks. The caller's fire-at-will rate, or null. */
+        cooldownTicks: Long? = null
     ): Component? {
         if (CannonShot.loadOf(gun.shot) == null) {
             return Component.translatable("info.vs_eureka.cannon_no_shot")
@@ -182,7 +184,8 @@ object AutoGunnery {
             ?: return Component.literal("cannot bear")
         gun.powderCharge = lay.charge
         return CannonFire.fireAimed(
-            level, gun.blockPos, lay.solution.pitchDegrees, lay.solution.speed, consume
+            level, gun.blockPos, lay.solution.pitchDegrees, lay.solution.speed, consume,
+            cooldownTicks = cooldownTicks
         )
     }
 

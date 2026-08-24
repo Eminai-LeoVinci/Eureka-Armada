@@ -1866,6 +1866,15 @@ object EurekaConfig {
         var pirateCannonStaggerTicks = 2
 
         @JsonSchema(
+            description = "How long a pirate gun takes to reload while her crew are firing at will, in " +
+                "seconds -- REPLACING the powder-derived reload every gun would otherwise keep. It is what " +
+                "sets a raider's weight of fire: the stagger above only decides which gun speaks next, " +
+                "while this decides how often each one can. 0 or less leaves every gun on its own reload. " +
+                "Default 3.0."
+        )
+        var pirateFireAtWillFireRateSeconds = 3.0
+
+        @JsonSchema(
             description = "How far out a pirate ship's guns will engage an enemy hull, in blocks. This is " +
                 "the trigger range, not the ballistic limit. Set close to what a triple charge can actually " +
                 "carry (the arithmetic asymptote is speed/(1-drag), about 107 blocks) and let the SOLVER " +
@@ -1939,6 +1948,15 @@ object EurekaConfig {
                 "Default 2, the same roll a hand-called broadside has."
         )
         var fireAtWillStaggerTicks = 2
+
+        @JsonSchema(
+            description = "How long a gun takes to reload while Fire at Will is up, in seconds -- REPLACING " +
+                "the powder-derived reload it keeps under a hand-called broadside. One rate for the whole " +
+                "battery, whatever measure each breech is set to, so a captain who turns the order on knows " +
+                "exactly how fast their ship speaks. 0 or less leaves every gun on its own reload. " +
+                "Default 3.0."
+        )
+        var cannonFireAtWillFireRateSeconds = 3.0
 
         @JsonSchema(
             description = "A villager seated at a gun is put fully to sleep -- no brain, no pathfinding, " +
