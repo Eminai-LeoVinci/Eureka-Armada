@@ -102,6 +102,7 @@
   "gui.vs_eureka.shipwright_name_hint": "Name this design, or leave it blank",
   "gui.vs_eureka.shipwright_no_changes": "Nothing changed",
   "gui.vs_eureka.shipwright_dismantle": "Dismantle",
+  "gui.vs_eureka.shipwright_dismantle_fee": "Dismantle Fee:",
   "gui.vs_eureka.shipwright_really": "Really?",
   "gui.vs_eureka.shipwright_dismiss_all": "Dismiss All",
   "gui.vs_eureka.shipwright_dismiss": "Dismiss",

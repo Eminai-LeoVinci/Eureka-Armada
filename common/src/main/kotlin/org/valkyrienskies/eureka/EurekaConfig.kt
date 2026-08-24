@@ -1401,6 +1401,56 @@ object EurekaConfig {
                 "dropped -- but the ship itself is gone and cannot be brought back. Default true."
         )
         var shipwrightDismantle = true
+
+        // The dismantle fee. A shipwright breaking a ship up is doing a job, and the yard charges for it by
+        // the size of the hull -- so scrapping a raft is free and scrapping a first-rate is a real decision.
+        //
+        // Charged against the hull's LIVE block count, walked at the moment the book is opened, not against
+        // her plans or the count she was assembled at. A ship shot half to pieces is half a ship, and the
+        // bill says so. Cargo is not counted: the coal in her engines and the wheat in her hold are not
+        // hull, and the claim list hands them straight back anyway.
+        //
+        // Paid out of the captain's own pockets. Two items are provided because one currency is a rule and
+        // two is an economy -- leave the second blank for the ordinary case.
+
+        @JsonSchema(
+            description = "How many blocks of hull one unit of the dismantle fee covers. A hull is charged " +
+                "one unit per WHOLE multiple and never rounds up, so at the default 1000 a 1278-block ship " +
+                "pays 1 and a 19,879-block ship pays 19. 0 or less makes dismantling free. Default 1000."
+        )
+        var shipwrightDismantleFeeBlocks = 1000
+
+        @JsonSchema(
+            description = "Hulls smaller than this many blocks are broken up for nothing -- a rowboat is not " +
+                "worth a shipwright's invoice. Default 1000, which lines up with the unit size so the first " +
+                "unit is also the first charge. Set it to 0 to charge for EVERYTHING: a 30-block raft still " +
+                "owes nothing by the unit maths, so it pays the minimum of one unit instead, which is how a " +
+                "world makes even the smallest scrapping cost something."
+        )
+        var shipwrightDismantleFeeFreeBelow = 1000
+
+        @JsonSchema(
+            description = "The item a dismantle fee is paid in. Blank charges nothing. Default " +
+                "minecraft:emerald -- at one per 1000 blocks and a 50,000-block assembly ceiling, the most " +
+                "a ship can ever cost to scrap is 50."
+        )
+        var shipwrightDismantleFeeItem = "minecraft:emerald"
+
+        @JsonSchema(
+            description = "How many of shipwrightDismantleFeeItem one unit costs. Default 1."
+        )
+        var shipwrightDismantleFeeCount = 1
+
+        @JsonSchema(
+            description = "A SECOND item charged alongside the first, for worlds that want a dismantle to " +
+                "cost more than one currency. Blank -- the default -- charges only the first."
+        )
+        var shipwrightDismantleFeeItem2 = ""
+
+        @JsonSchema(
+            description = "How many of shipwrightDismantleFeeItem2 one unit costs. Default 0."
+        )
+        var shipwrightDismantleFeeCount2 = 0
         // endregion
 
         // region Ship damage repercussions

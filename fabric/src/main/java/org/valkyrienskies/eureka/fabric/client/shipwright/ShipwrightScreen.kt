@@ -364,7 +364,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
                         openVessel = null
                         scroll = 0
                     }
-                }
+                }.also { it.active = canPayFee(hull) }
             )
         }
 
@@ -978,6 +978,8 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             left + 8, top + 20, TEXT
         )
 
+        drawFee(guiGraphics, hull)
+
         val line = when {
             hull.plansName == null -> NO_MATCH.string
             hull.refusal != null -> "${(hull.match * 100).toInt()}% matches -- refused"
@@ -1575,6 +1577,53 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         guiGraphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, PANEL_BG)
     }
 
+    /**
+     * "Dismantle Fee: 19 <emerald>", right-aligned under the hull's dimensions.
+     *
+     * Laid out RIGHT TO LEFT: the last item sits against the panel edge and the label ends up wherever the
+     * icons leave room. A one-item fee and a two-item fee then both read as one block against the margin,
+     * and a long fee grows leftward into empty panel rather than pushing its own label off the edge.
+     *
+     * The count is drawn as text ahead of the icon rather than as the stack's corner decoration: a stack
+     * badge is for what you are holding, and this is a price.
+     */
+    private fun drawFee(guiGraphics: GuiGraphics, hull: ShipwrightMenu.Vessel) {
+        if (hull.fee.isEmpty()) return
+        val y = top + 20
+        var x = left + PANEL_W - 8
+
+        for (line in hull.fee.asReversed()) {
+            x -= ICON
+            guiGraphics.renderItem(ItemStack(line.item), x, y)
+            val count = Component.literal(line.needed.toString())
+            x -= (font.width(count) * SMALL).toInt() + 2
+            small(guiGraphics, count, x, y + 5, TEXT)
+            x -= 3
+        }
+        x -= (font.width(DISMANTLE_FEE_TEXT) * SMALL).toInt()
+        small(guiGraphics, DISMANTLE_FEE_TEXT, x, y + 5, DIM)
+    }
+
+    /**
+     * Whether the captain is carrying the fee. Answered on the CLIENT so the button can grey itself rather
+     * than accept a click and refuse -- the same courtesy the Bottle button pays with [Shelf.hasFreeBottle].
+     * The server re-quotes and re-checks regardless; this only decides how the button looks.
+     */
+    private fun canPayFee(hull: ShipwrightMenu.Vessel): Boolean {
+        if (hull.fee.isEmpty()) return true
+        val player = Minecraft.getInstance().player ?: return true
+        if (player.abilities.instabuild) return true
+        for (line in hull.fee) {
+            var held = 0
+            for (slot in 0 until player.inventory.containerSize) {
+                val stack = player.inventory.getItem(slot)
+                if (!stack.isEmpty && stack.`is`(line.item)) held += stack.count
+            }
+            if (held < line.needed) return false
+        }
+        return true
+    }
+
     private fun small(guiGraphics: GuiGraphics, text: Component, x: Int, y: Int, color: Int) {
         val pose = guiGraphics.pose()
         pose.pushMatrix()
@@ -1637,6 +1686,8 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private val RESET_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_reset")
         private val NAME_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_name_prompt")
         private val DISMANTLE_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_dismantle")
+        private val DISMANTLE_FEE_TEXT: Component =
+            Component.translatable("gui.vs_eureka.shipwright_dismantle_fee")
         private val REALLY_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_really")
         private val DISMISS_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_dismiss")
         private val DISMISS_ALL_TEXT: Component =
@@ -1703,6 +1754,9 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private const val BACK_W = 40
         private const val BTN_H = 16
         private const val SMALL = 0.7f
+
+        /** A vanilla item icon is 16 square, and the fee row lays itself out against that. */
+        private const val ICON = 16
 
         private const val PANEL_BORDER = 0xFF000000.toInt()
         private const val PANEL_BG = 0xFFC6C6C6.toInt()

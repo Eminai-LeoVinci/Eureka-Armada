@@ -211,6 +211,8 @@ object ShipwrightNetworkingFabric {
                 buf.writeVarInt(material.needed)
                 buf.writeVarInt(material.given)
             }
+            buf.writeVarInt(vessel.fee.size)
+            for (material in vessel.fee) writeMaterial(buf, material)
         }
 
         buf.writeBoolean(shelf.dismantleEnabled)
@@ -283,8 +285,11 @@ object ShipwrightNetworkingFabric {
                 val item: Item? = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)
                 if (item != null) repairs.add(ShipwrightMenu.Material(item, needed, given))
             }
+            val fee = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { fee.add(it) } }
             ShipwrightMenu.Vessel(
-                slug, width, height, length, blocks, mass, fuel, child, plansName, match, refusal, repairs
+                slug, width, height, length, blocks, mass, fuel, child, plansName, match, refusal,
+                repairs, fee
             )
         }
 

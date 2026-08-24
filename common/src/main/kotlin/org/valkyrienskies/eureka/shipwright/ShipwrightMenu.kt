@@ -98,7 +98,13 @@ object ShipwrightMenu {
         val match: Float,
         /** Why a repair is refused, or null. */
         val refusal: String?,
-        val repairs: List<Material>
+        val repairs: List<Material>,
+        /**
+         * What the yard charges to break this hull up, quoted off [blocks] -- her LIVE count, not her plans.
+         * Empty when the world charges nothing or she is under one whole unit. [Material.needed] is the
+         * count owed and [Material.given] is always zero; the row is reused so the wire codec is too.
+         */
+        val fee: List<Material> = emptyList()
     ) {
         val given: Int get() = repairs.sumOf { minOf(it.needed, it.given) }
         val needed: Int get() = repairs.sumOf { it.needed }
