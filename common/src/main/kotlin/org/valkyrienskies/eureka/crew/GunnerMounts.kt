@@ -171,6 +171,24 @@ object GunnerMounts {
         mob.isNoGravity = false
     }
 
+    /**
+     * Cut every gunner aboard [ship] loose at once, and answer how many there were.
+     *
+     * Found by sweeping the hull's WORLD box rather than by walking [posts]: a posted gunner is held at
+     * ordinary world coordinates on a moving deck, which is the same place [ShipCrew.villagersAboard] looks
+     * for the crew, and it means a mob whose post record was lost to a restart is still cut loose.
+     */
+    fun releaseAll(level: ServerLevel, ship: LoadedServerShip, reason: String): Int {
+        val hull = ship.worldAABB
+        val box = AABB(
+            hull.minX() - 2.0, hull.minY() - 2.0, hull.minZ() - 2.0,
+            hull.maxX() + 2.0, hull.maxY() + 2.0, hull.maxZ() + 2.0
+        )
+        val gunners = level.getEntitiesOfClass(Mob::class.java, box) { isGunner(it) }
+        for (mob in gunners) release(level, mob, reason)
+        return gunners.size
+    }
+
     /** Every posted gunner, held on its mark against the deck's movement. */
     private fun hold(level: ServerLevel) {
         for ((mobId, post) in posts.entries.toList()) {

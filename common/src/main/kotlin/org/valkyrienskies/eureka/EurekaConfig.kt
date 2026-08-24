@@ -1510,6 +1510,16 @@ object EurekaConfig {
         )
         var damageFreefallBelow = 45
 
+        @JsonSchema(
+            description = "Whether a hull going ungoverned breaks every wheel aboard her and turns her " +
+                "gunners off their guns. A ship that can no longer answer her helm has no further use for " +
+                "one, and a crew still sighting down a barrel while the deck falls away reads as a bug. " +
+                "Happens ONCE per descent, so a helm placed on a falling hull -- a boarder claiming a prize " +
+                "-- is not smashed the moment it goes down. Applies to pirates and players alike. " +
+                "Default true."
+        )
+        var damageFreefallBreaksHelm = true
+
         // A pirate hull answers to its own set of the same five numbers, because a pirate ship is a PRIZE:
         // the whole reason to shoot one is to take it, so the line where she stops answering her wheel is
         // the line where a boarding party can reach her -- not the line where a captain's own ship would

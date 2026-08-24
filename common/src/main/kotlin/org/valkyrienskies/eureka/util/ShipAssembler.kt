@@ -16,6 +16,8 @@ import net.minecraft.world.entity.decoration.HangingEntity
 import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.level.block.ChestBlock
+import net.minecraft.world.level.block.state.properties.ChestType
 import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.block.SnowLayerBlock
 import net.minecraft.world.level.block.state.BlockState
@@ -60,6 +62,11 @@ val WRECK_DISCARD: TagKey<Block> =
 // because a wreck erasing the reef it is lying in reads as damage rather than as time passing.
 val WRECK_PRESERVE: TagKey<Block> =
     TagKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "wreck_preserve"))
+
+// Blocks that fall to what will hold them once a wreck is laid down. A hull comes apart around her cargo,
+// and a chest left hanging in open water where a deck used to be reads as the wreck being unfinished.
+val WRECK_SETTLES: TagKey<Block> =
+    TagKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "wreck_settles"))
 
 object ShipAssembler {
     // BFS-collect the connected block set (world coordinates) that would become a ship, or null if it
@@ -268,6 +275,68 @@ object ShipAssembler {
         }
         m.scale(shipToWorldScaling)
             .translate(-positionInShip.x(), -positionInShip.y(), -positionInShip.z())
+    }
+
+    /**
+     * Chests fall to whatever will hold them.
+     *
+     * A wreck loses a fair share of herself on the way down, and what she loses is mostly the deck a chest
+     * was standing on -- so the cargo ends up hanging in open water above a hole. Dropping it to the first
+     * thing underneath puts it on the seabed, or on the part of the hull that DID survive, which is where a
+     * diver would expect to find it.
+     *
+     * Lowest first, so a chest that has already landed can be the thing the next one lands on.
+     *
+     * A double chest moves as a PAIR and only as far as the shyer half can go. Letting the two halves fall
+     * independently would tear the pair in two -- one block of a two-block thing, with the contents of both
+     * behind whichever half kept the block entity.
+     */
+    private fun settleCargo(level: ServerLevel, placed: Set<Triple<BlockPos, BlockPos, BlockState>>) {
+        val floor = level.minY + 1
+        val moved = HashSet<BlockPos>()
+
+        for (pos in placed.map { it.second }.sortedBy { it.y }) {
+            if (pos in moved) continue
+            val state = level.getBlockState(pos)
+            if (!state.`is`(WRECK_SETTLES)) continue
+
+            // The other half, when there is one. Read off the CURRENT state, not the shipyard's: a rolled
+            // wreck lays its chests out having never rotated their block states, so the pairing on the
+            // ground is whatever actually ended up next to what.
+            val partner = if (state.hasProperty(ChestBlock.TYPE) &&
+                state.getValue(ChestBlock.TYPE) != ChestType.SINGLE
+            ) {
+                pos.relative(ChestBlock.getConnectedDirection(state))
+            } else {
+                null
+            }
+            val halves = if (partner != null && level.getBlockState(partner).`is`(WRECK_SETTLES)) {
+                listOf(pos, partner)
+            } else {
+                listOf(pos)
+            }
+
+            val drop = halves.minOf { fallDistance(level, it, floor) }
+            if (drop <= 0) continue
+
+            for (half in halves) {
+                level.relocateBlock(half, half.below(drop), true, null, Rotation.NONE)
+                moved.add(half)
+            }
+        }
+    }
+
+    /** How far [pos] can fall before something stops it: open air and water are not something. */
+    private fun fallDistance(level: ServerLevel, pos: BlockPos, floor: Int): Int {
+        var drop = 0
+        val cursor = BlockPos.MutableBlockPos()
+        while (pos.y - drop - 1 >= floor) {
+            cursor.set(pos.x, pos.y - drop - 1, pos.z)
+            val below = level.getBlockState(cursor)
+            if (!below.isAir && below.fluidState.isEmpty) break
+            drop++
+        }
+        return drop
     }
 
     /** The world Y of the lowest corner of the ship's block box through [m]. */
@@ -488,6 +557,8 @@ object ShipAssembler {
         for (triple in toUpdate) {
             updateBlock(level, triple.first, triple.second, triple.third)
         }
+
+        if (wreck) settleCargo(level, toUpdate)
 
         // A sunk ship's engines are cold ones. Done HERE, on the world copy, rather than in the shipyard
         // before the move: relocateBlock rebuilds the block entity from a saved tag, so anything doused on

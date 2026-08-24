@@ -1639,6 +1639,12 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     // in-memory set that is the honest record of what the physics engine currently believes.
     @Volatile var wrecked = false
 
+    // Whether her wheel has already been struck for going ungoverned. Latched so it happens ONCE per
+    // descent: without it, a helm placed on a still-falling hull would be smashed the instant it went
+    // down, which would take the conquest window -- a boarder's whole reason to be aboard -- with it.
+    // Cleared if she is ever mended back over the line, so a second fall strikes again.
+    @Volatile var freefallStruck = false
+
     // Engine fuel-tank aggregate for the helm's "Engine Power: X%" readout. Each engine reports its fuel level
     // (a 0..1 fraction of a full fuel slot) once per tick via [reportEngineFuel]; onServerTick averages last
     // tick's reports into [engineFuelPercent] (0..100). Double-buffered (accum vs accumNext) so the value is

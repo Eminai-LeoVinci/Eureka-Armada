@@ -10,6 +10,8 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.crew.CrewMuster
+import org.valkyrienskies.eureka.crew.CrewStations
+import org.valkyrienskies.eureka.crew.GunnerMounts
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.pirate.PirateStore
 import org.valkyrienskies.eureka.util.ShipAssembler
@@ -66,6 +68,10 @@ object ShipFoundering {
         for (ship in level.shipObjectWorld.loadedShips) {
             if (ship.chunkClaimDimension != dimension) continue
             val control = ship.getAttachment(EurekaShipControl::class.java) ?: continue
+
+            // A hull that has gone ungoverned has no further use for a wheel. Before the wreck latch,
+            // because breaking her helms is what hands a pirate to it.
+            strikeIfUngoverned(level, ship, control)
 
             // Maintained before anything else looks at this hull, because it decides WHICH of the two
             // deaths she is dying -- and a ship shot down keeps her wheel, so the test below would
@@ -213,6 +219,51 @@ object ShipFoundering {
         // only source -- which is exactly the case that sweep exists for.
         CrewMuster.standDownShip(level, shipId, holdAABB, crewIds = emptyList())
         return true
+    }
+
+    /**
+     * A hull too far gone to answer her helm loses it, and her gunners come off their guns.
+     *
+     * A ship that cannot be steered has no use for a wheel, and a crew still sighting down a barrel while
+     * the deck falls away underneath them reads as a bug rather than as bravery. For a PIRATE this is also
+     * what hands her to the conquest machinery: the wheel vanishing is the same event a boarder breaking it
+     * would have caused, so the grace, the claim window and the wreck latch all follow by themselves.
+     *
+     * ONCE per descent. Without the latch a helm placed on a still-falling hull would be smashed the moment
+     * it went down -- and that helm is a boarder claiming a prize, which is the entire point of the window
+     * the break itself opens.
+     *
+     * Note the ordering this creates for a raider: her freefall band (65 by default) is crossed BEFORE her
+     * own wheel-break line (pirateHelmBreaksBelow, 60), so this fires first and pirateHelmBreaksBelow --
+     * along with the crew gate on it -- no longer decides anything. Put damageFreefallBelow's pirate band
+     * under 60 if her crew should go on protecting the wheel.
+     */
+    private fun strikeIfUngoverned(level: ServerLevel, ship: LoadedServerShip, control: EurekaShipControl) {
+        if (!EurekaConfig.SERVER.damageFreefallBreaksHelm) return
+        if (ArmadaShipControl.get(ship)?.isChild == true) return
+
+        if (!ShipIntegrity.freefall(control)) {
+            // Mended back over the line: a later fall gets its own strike.
+            if (control.freefallStruck) control.freefallStruck = false
+            return
+        }
+        if (control.freefallStruck) return
+        control.freefallStruck = true
+
+        val gunners = GunnerMounts.releaseAll(level, ship, "her ship is going down")
+        var wheels = 0
+        for (wheel in CrewStations.helmsAboard(level, ship).orEmpty()) {
+            // No drops. A wheel that went down with the ship is wreckage, not salvage -- the same reading
+            // PirateShips.shootDownWheel already takes of one that gave out under fire.
+            level.destroyBlock(wheel.blockPos, false)
+            wheels++
+        }
+        if (wheels > 0 || gunners > 0) {
+            logger.info(
+                "[wreck] ship {} went ungoverned at {}%: {} wheel(s) broken, {} gunner(s) cut loose",
+                ship.id, ShipIntegrity.integrityPercent(control), wheels, gunners
+            )
+        }
     }
 
     /**
