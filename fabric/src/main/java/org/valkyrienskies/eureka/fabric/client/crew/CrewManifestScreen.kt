@@ -172,9 +172,17 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** How far the Operations body is scrolled: the tab outgrew its panel when it grew categories. */
     private var opsScroll = 0
 
-    /** The count boxes' values, kept as fields so widget rebuilds keep what was typed. */
-    private var gunnerCount = 0
-    private var fireCount = 0
+    /**
+     * The count boxes' values. Kept in the COMPANION for the same reason the assign modes are: a captain who
+     * closes the book after ordering twelve hands to the guns is going to order twelve again, and retyping
+     * it every time is the sort of small tax that makes a panel feel like paperwork.
+     */
+    private var gunnerCount: Int
+        get() = rememberedGunnerCount
+        set(value) { rememberedGunnerCount = value }
+    private var fireCount: Int
+        get() = rememberedFireCount
+        set(value) { rememberedFireCount = value }
     private var gunnerCountBox: EditBox? = null
     private var fireCountBox: EditBox? = null
 
@@ -182,7 +190,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * The crew assigner's scope -- which side's guns to man, on which deck (0 = all). Its own pair of
      * knobs, independent of the cannon controls', because "man Deck 1 while I lay Deck 2" is one trip.
      */
-    private var crewSide = CrewOperations.Side.BOTH
+    private var crewSide: CrewOperations.Side
+        get() = rememberedCrewSide
+        set(value) { rememberedCrewSide = value }
     private var crewLayer = 0
 
     /**
@@ -190,11 +200,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * pick, and the deck half of the cannonball restock. One pair rather than one per row, because the
      * rows under it are one battery being worked.
      */
-    private var ctrlSide = CrewOperations.Side.BOTH
+    private var ctrlSide: CrewOperations.Side
+        get() = rememberedCtrlSide
+        set(value) { rememberedCtrlSide = value }
     private var ctrlLayer = 0
 
     /** The cannonball restock's own side; its DECK comes from the cannon controls above it. */
-    private var shotSide = CrewOperations.Side.BOTH
+    private var shotSide: CrewOperations.Side
+        get() = rememberedShotSide
+        set(value) { rememberedShotSide = value }
 
     /**
      * What each Assign button will DO -- kept in the companion, not here, so closing the book and opening
@@ -431,10 +445,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      */
     private fun initOperations() {
         gunnerCountBox = addRenderableWidget(
-            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_G), gunnerCount) { gunnerCount = it }
+            // Clamped on the way in: a habit carried from a first-rate must not ask a sloop for forty hands.
+            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_G), gunnerCount.coerceIn(0, snapshot.maxBerths)) {
+                gunnerCount = it
+            }
         )
         fireCountBox = addRenderableWidget(
-            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_F), fireCount) { fireCount = it }
+            countBox(left + OPS_BOX_X, opsRowY(OPS_V_ROW_F), fireCount.coerceIn(0, snapshot.maxBerths)) {
+                fireCount = it
+            }
         )
         // First look at the holds: asked once, not polled -- every action answers with a fresh tally.
         if (stores == null) PathNetworkingFabric.sendCrewStoresAsk(snapshot.helm)
@@ -2680,10 +2699,24 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private var rememberedCrewMode = CrewOperations.AssignMode.KEEP
         private var rememberedFireMode = CrewOperations.AssignMode.KEEP
 
-        /** Both toggles back to Keep Assigned. Called when the client disconnects. */
+        // The rest of what an Operations order is made of: how many hands, and which side. Same reasoning
+        // as the modes above -- these are a captain's standing habit, not a property of the ship in front
+        // of them, so they outlive the screen and reset with the session.
+        private var rememberedGunnerCount = 0
+        private var rememberedFireCount = 0
+        private var rememberedCrewSide = CrewOperations.Side.BOTH
+        private var rememberedCtrlSide = CrewOperations.Side.BOTH
+        private var rememberedShotSide = CrewOperations.Side.BOTH
+
+        /** Every remembered order back to its default. Called when the client disconnects. */
         fun forgetModes() {
             rememberedCrewMode = CrewOperations.AssignMode.KEEP
             rememberedFireMode = CrewOperations.AssignMode.KEEP
+            rememberedGunnerCount = 0
+            rememberedFireCount = 0
+            rememberedCrewSide = CrewOperations.Side.BOTH
+            rememberedCtrlSide = CrewOperations.Side.BOTH
+            rememberedShotSide = CrewOperations.Side.BOTH
         }
 
         /** Open a manifest, or fold a fresh one into the manifest already on screen for that same wheel. */
