@@ -90,6 +90,7 @@
   "gui.vs_eureka.shipwright_excluded": "Left out of the build",
   "gui.vs_eureka.shipwright_swap": "Build it from…",
   "gui.vs_eureka.shipwright_swap_any": "Anything of the kind",
+  "gui.vs_eureka.shipwright_any_kind": "Any Kind",
   "gui.vs_eureka.shipwright_swap_original": "As drawn",
   "gui.vs_eureka.shipwright_no_swap": "Nothing else will do",
   "gui.vs_eureka.shipwright_hull_locked": "Structure is built as drawn",

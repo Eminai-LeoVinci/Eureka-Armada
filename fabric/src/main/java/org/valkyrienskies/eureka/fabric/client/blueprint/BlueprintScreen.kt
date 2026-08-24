@@ -6,7 +6,9 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
+import org.valkyrienskies.eureka.shipwright.MaterialFamilies
 import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.util.BuoyancyMath
 
@@ -35,10 +37,34 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
     private var top = 0
     private var scroll = 0
 
-    /** Rebuilt once per open rather than per frame -- the census never changes under us. */
-    private val rows: List<Row> = page.census.map { (item, count) -> Row(ItemStack(item), count) }
+    /**
+     * Rebuilt once per open rather than per frame -- the census never changes under us.
+     *
+     * An ANY row keeps its FAMILY rather than a stack, because it has no one face to show: it is drawn as a
+     * different member every few seconds. The list is worked out here, once, because
+     * [MaterialFamilies.replacementsFor] walks the whole item registry.
+     */
+    private val rows: List<Row> = page.census.map { row ->
+        Row(
+            item = row.item,
+            count = row.count,
+            faces = if (row.any) MaterialFamilies.replacementsFor(row.item) else emptyList()
+        )
+    }
 
-    private class Row(val stack: ItemStack, val count: Int)
+    private class Row(val item: Item, val count: Int, val faces: List<Item>) {
+        val any: Boolean get() = faces.isNotEmpty()
+
+        /**
+         * What to draw right now. The phase is taken off the WALL CLOCK, so every open Any row -- here and
+         * on the shipwright's own panel -- turns over on the same beat rather than flickering out of step.
+         */
+        fun face(): ItemStack {
+            if (faces.isEmpty()) return ItemStack(item)
+            val step = (System.currentTimeMillis() / ANY_CYCLE_MS).toInt()
+            return ItemStack(faces[Math.floorMod(step, faces.size)])
+        }
+    }
 
     override fun init() {
         left = (width - PANEL_W) / 2
@@ -115,8 +141,14 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
             mouseY >= y && mouseY < y + ROW_H && mouseY >= top + LIST_TOP && mouseY < top + LIST_BOTTOM
         if (hovered) guiGraphics.fill(left + 4, y, left + PANEL_W - 8, y + ROW_H - 1, ROW_HOVER)
 
-        guiGraphics.renderItem(row.stack, left + 8, y + 1)
-        guiGraphics.drawString(font, row.stack.hoverName, left + 30, y + 5, TEXT, false)
+        val face = row.face()
+        guiGraphics.renderItem(face, left + 8, y + 1)
+        // Orange, and marked, exactly as the shipwright's own list marks a row the plans left open -- a page
+        // that says nothing about it is a page a captain reads as demanding one particular slab.
+        guiGraphics.drawString(
+            font, if (row.any) ANY_KIND_TEXT else face.hoverName,
+            left + 30, y + 5, if (row.any) ORANGE else TEXT, false
+        )
 
         // Right-aligned so the numbers form a column the eye can run down, which is how a shopping list is read.
         val count = Component.literal(fmt(row.count))
@@ -187,6 +219,14 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
         private const val ROW_HOVER = 0xFFD8D8D8.toInt()
         private const val ROW_LOCKED = 0xFFA0A0A0.toInt()
         private const val TEXT = 0xFF404040.toInt()
+
+        private val ANY_KIND_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_any_kind")
+
+        /** A row the plans left open. The shipwright's own list marks these the same colour. */
+        private const val ORANGE = 0xFFC97A1E.toInt()
+
+        /** How long an ANY row shows each member of its family. Shared beat with the shipwright panel. */
+        private const val ANY_CYCLE_MS = 3000L
         private const val DIM = 0xFF7A7A7A.toInt()
         private const val ACCENT = 0xFF2A8FA6.toInt()
     }

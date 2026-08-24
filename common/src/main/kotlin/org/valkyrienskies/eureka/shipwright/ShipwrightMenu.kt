@@ -37,9 +37,26 @@ object ShipwrightMenu {
         /** The family this row may be swapped within, or null when it may not be swapped at all. */
         val family: String? = null,
         /** FOUNDATIONAL / FURNITURE / DECOR -- whether this row may be struck off, and under which heading. */
-        val category: String = "FOUNDATIONAL"
+        val category: String = "FOUNDATIONAL",
+        /**
+         * Whether this row is an ANY row -- "anything of the kind will do" -- rather than a fixed swap.
+         *
+         * It has to ride separately, because an Any row's representative IS its original item: the bill is
+         * keyed by the representative so that a delivery of any family member pays into it, and the tidiest
+         * representative to pick is the material the plans already called for. That makes an Any row and an
+         * unswapped row identical in every other field, which is exactly how choosing "Anything of the kind"
+         * came to look like it had silently reverted to the top of the list.
+         */
+        val anyOfKind: Boolean = false
     ) {
         val outstanding: Int get() = maxOf(0, needed - given)
+        /**
+         * Whether this row has been altered at all -- fixed swap or ANY alike. It is what the materials list
+         * draws its asterisk and its orange from, so excluding Any rows here (an earlier cut did) makes a
+         * row that IS altered look untouched everywhere except the card you altered it on.
+         *
+         * Telling the two apart is [anyOfKind]'s job, and every place that needs to asks that FIRST.
+         */
         val swapped: Boolean get() = swappedFrom != null
         val excludable: Boolean get() = category != "FOUNDATIONAL"
     }
@@ -296,12 +313,13 @@ object ShipwrightMenu {
         needed: Int,
         given: Int = plans.delivered[item] ?: 0
     ): Material {
-        val from = plans.alteration.swaps.entries.firstOrNull { (_, swap) ->
+        val match = plans.alteration.swaps.entries.firstOrNull { (_, swap) ->
             when (swap) {
                 is Alteration.Fixed -> swap.item == item
                 is Alteration.Any -> swap.representative == item
             }
-        }?.key
+        }
+        val from = match?.key
         val family = MaterialFamilies.familyOf(from ?: item)?.location()?.toString()
         return Material(
             item = item,
@@ -309,7 +327,8 @@ object ShipwrightMenu {
             given = given,
             swappedFrom = from,
             family = family,
-            category = MaterialFamilies.categoryOf(from ?: item).name
+            category = MaterialFamilies.categoryOf(from ?: item).name,
+            anyOfKind = match?.value is Alteration.Any
         )
     }
 

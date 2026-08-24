@@ -145,6 +145,7 @@ object ShipwrightNetworkingFabric {
         buf.writeUtf(material.swappedFrom?.let { BuiltInRegistries.ITEM.getKey(it).toString() } ?: "")
         buf.writeUtf(material.family ?: "")
         buf.writeUtf(material.category)
+        buf.writeBoolean(material.anyOfKind)
     }
 
     private fun readMaterial(buf: FriendlyByteBuf): ShipwrightMenu.Material? {
@@ -154,13 +155,15 @@ object ShipwrightNetworkingFabric {
         val from = buf.readUtf()
         val family = buf.readUtf()
         val category = buf.readUtf()
+        val anyOfKind = buf.readBoolean()
         val item: Item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null) ?: return null
         return ShipwrightMenu.Material(
             item, needed, given,
             swappedFrom = from.takeIf { it.isNotEmpty() }
                 ?.let { BuiltInRegistries.ITEM.getOptional(Identifier.parse(it)).orElse(null) },
             family = family.takeIf { it.isNotEmpty() },
-            category = category
+            category = category,
+            anyOfKind = anyOfKind
         )
     }
 

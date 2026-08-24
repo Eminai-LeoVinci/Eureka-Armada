@@ -62,6 +62,17 @@ object Blueprint {
     private const val CENSUS_ITEM = "id"
     private const val CENSUS_COUNT = "n"
 
+    /**
+     * Written only on a row the plans left OPEN -- "anything of the kind will do".
+     *
+     * An ANY choice cannot be baked into the template the way a fixed swap can. A template is blocks, and
+     * "any slab" is not a block: [ShipAlterations.rewrite] resolves an Any row to its representative, which
+     * IS the material the plans started with, so a page drawn from altered plans came out looking exactly
+     * like the unaltered ones. The openness has to ride on the PAGE, beside the count, and be turned back
+     * into an [Alteration.Any] when the page is filed.
+     */
+    private const val CENSUS_ANY = "any"
+
     /** Templates written by a blueprint are named for nothing else, so a player cannot collide with one. */
     private fun templateNameFor(id: UUID) = "blueprint/${id.toString().replace("-", "")}"
 
@@ -111,7 +122,12 @@ object Blueprint {
      * civilianized template (ShipTemplate.civilianize) that needs its page written. The manifest is
      * computed against the template server-side, same as ever; only the capture is absent.
      */
-    fun draftFromTemplate(level: ServerLevel, templateName: String, shipName: String): ItemStack? {
+    fun draftFromTemplate(
+        level: ServerLevel,
+        templateName: String,
+        shipName: String,
+        anyItems: Set<Item> = emptySet()
+    ): ItemStack? {
         val template = ShipTemplate.find(level, templateName) ?: return null
         val manifest = ShipManifest.of(template)
 
@@ -133,12 +149,22 @@ object Blueprint {
             val row = CompoundTag()
             row.putString(CENSUS_ITEM, BuiltInRegistries.ITEM.getKey(item).toString())
             row.putInt(CENSUS_COUNT, count)
+            // Only when true, so an ordinary page's tag is exactly the shape it always was.
+            if (item in anyItems) row.putBoolean(CENSUS_ANY, true)
             census.add(row)
         }
         tag.put(CENSUS_KEY, census)
         page.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
         return page
     }
+
+    /**
+     * One line of a page's bill.
+     *
+     * A data class so that `for ((item, count) in census)` still reads as it always did -- the openness is
+     * a third component nothing that does not care about it has to mention.
+     */
+    data class Row(val item: Item, val count: Int, val any: Boolean = false)
 
     /** Everything a drafted page knows about its ship. Null on a blank one. */
     class Page(
@@ -154,8 +180,8 @@ object Blueprint {
         val topSpeed: Double,
         /** BOAT / AIRSHIP / SUBMARINE, as the hull will classify once built. */
         val profile: String,
-        /** Item to count, in the order the census produced -- which is the order the ship was walked in. */
-        val census: List<Pair<Item, Int>>
+        /** One row per material, in the order the census produced -- the order the ship was walked in. */
+        val census: List<Row>
     ) {
         val kinds: Int get() = census.size
     }
@@ -171,13 +197,15 @@ object Blueprint {
         val template = tag.getString(TEMPLATE_KEY).orElse(null)?.takeIf { it.isNotEmpty() } ?: return null
 
         val size = tag.getIntArray(SIZE_KEY).orElse(null) ?: IntArray(3)
-        val census = ArrayList<Pair<Item, Int>>()
+        val census = ArrayList<Row>()
         tag.getList(CENSUS_KEY).ifPresent { rows ->
             for (i in 0 until rows.size) {
                 val row = rows.getCompound(i).orElse(null) ?: continue
                 val id = row.getString(CENSUS_ITEM).orElse(null) ?: continue
                 val item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null) ?: continue
-                census.add(item to row.getIntOr(CENSUS_COUNT, 0))
+                census.add(
+                    Row(item, row.getIntOr(CENSUS_COUNT, 0), row.getBooleanOr(CENSUS_ANY, false))
+                )
             }
         }
 

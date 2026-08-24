@@ -91,6 +91,9 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
     /** Whether Dismiss All has been pressed once. Emptying a whole list asks twice, like everything else here. */
     private var dismissAllArmed = false
 
+    /** Family members an ANY row cycles through, worked out once per item and kept for this screen's life. */
+    private val anyFaces = HashMap<net.minecraft.world.item.Item, List<net.minecraft.world.item.Item>>()
+
     /** Whether Dismantle has been pressed once. Same reason, and the more serious of the two. */
     private var dismantleArmed = false
 
@@ -494,8 +497,14 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         // Swap. Blocked outright for hull materials unless the shipwright has been told otherwise.
         val canSwap = shelf.swapEnabled && material.family != null &&
             (material.excludable || shelf.swapFoundational)
-        val head = material.swappedFrom?.let { ItemStack(material.item).hoverName.string }
-            ?: SWAP_TEXT.string
+        // An ANY row has to name itself. Its representative is its ORIGINAL item -- that is how a delivery
+        // of any family member finds the row to pay into -- so drawing the representative's name here made
+        // "Anything of the kind" look like it had reverted to the material the plans started with.
+        val head = when {
+            material.anyOfKind -> SWAP_ANY_TEXT.string
+            material.swappedFrom != null -> ItemStack(material.item).hoverName.string
+            else -> SWAP_TEXT.string
+        }
         addRenderableWidget(
             ShipHelmButton(
                 left + 8, top + LIST_TOP + 24, DROP_W, BTN_H, Component.literal(head), font
@@ -508,15 +517,22 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
 
         if (swapOpen && canSwap) initSwapList(row, material)
 
-        addRenderableWidget(
-            ShipHelmButton(
-                left + PANEL_W - 8 - BACK_W, y, BACK_W, BTN_H, BACK_TEXT, font
-            ) {
-                openMaterial = null
-                swapOpen = false
-                rebuild()
-            }
-        )
+        // Not while the replacement list is open across it. Widgets draw in the order they are added but
+        // take clicks in that order too, so a Back button added after the list paints ON TOP of it and a
+        // Back added before it would swallow clicks meant for the rows underneath -- there is no ordering
+        // that makes an overlap work. The swap button on the left stays put and folds the list away, which
+        // is the same escape the yard's plans dropdown offers.
+        if (!swapOpen) {
+            addRenderableWidget(
+                ShipHelmButton(
+                    left + PANEL_W - 8 - BACK_W, y, BACK_W, BTN_H, BACK_TEXT, font
+                ) {
+                    openMaterial = null
+                    swapOpen = false
+                    rebuild()
+                }
+            )
+        }
     }
 
     /**
@@ -541,7 +557,9 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
                 ItemStack(candidate).hoverName to BuiltInRegistries.ITEM.getKey(candidate).toString()
             )
         }
-        if (material.swapped) options.add(SWAP_ORIGINAL_TEXT to "")
+        // swappedFrom rather than `swapped`: an ANY row reads as unswapped by that flag (its representative
+        // IS its original), and a row you cannot put back is a row you are stuck in.
+        if (material.swappedFrom != null) options.add(SWAP_ORIGINAL_TEXT to "")
 
         swapScroll = swapScroll.coerceIn(0, maxOf(0, options.size - DROP_ROWS))
         val head = top + LIST_TOP + 24
@@ -552,7 +570,8 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             // have this" and "this does not exist" are different things and a blank list says the wrong one.
             // Greyed when the captain holds none of it, and when it is already what the row is built from --
             // the yard dropdown marks its current entry the same way.
-            val current = argument == BuiltInRegistries.ITEM.getKey(material.item).toString()
+            val current = if (material.anyOfKind) argument.startsWith("*")
+            else argument == BuiltInRegistries.ITEM.getKey(material.item).toString()
             val holds = !current && (
                 creative || argument.startsWith("*") || argument.isEmpty() ||
                     heldCount(player, argument) > 0
@@ -1023,20 +1042,25 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         row: ShipwrightMenu.Row,
         material: ShipwrightMenu.Material
     ) {
-        val stack = ItemStack(material.item)
+        val stack = faceOf(material)
         guiGraphics.renderItem(stack, left + 8, top + 4)
         guiGraphics.drawString(
-            font, clip(stack.hoverName.string, PANEL_W - 38), left + 30, top + 8, ACCENT, false
+            font, clip(nameOf(material, stack), PANEL_W - 38), left + 30, top + 8, ACCENT, false
         )
 
         val heading = when {
             material.needed <= 0 -> EXCLUDED_TEXT.string
+            material.anyOfKind -> "${fmt(material.needed)} needed  -  ${SWAP_ANY_TEXT.string.lowercase()}"
             material.swapped -> "${fmt(material.needed)} needed  -  swapped"
             else -> "${fmt(material.given)} of ${fmt(material.needed)} delivered"
         }
         small(guiGraphics, Component.literal(heading), left + 8, top + 22, TEXT)
 
-        val origin = material.swappedFrom?.let { ItemStack(it).hoverName.string }
+        // An ANY row's "original" is the row itself, so "originally Spruce Slab" under a Spruce Slab
+        // heading says nothing; let the category line have the space instead.
+        val origin = material.swappedFrom
+            ?.takeIf { !material.anyOfKind }
+            ?.let { ItemStack(it).hoverName.string }
         small(
             guiGraphics,
             Component.literal(
@@ -1161,7 +1185,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
     ) {
         if (hovered) guiGraphics.fill(left + 4, y, left + PANEL_W - 8, y + ROW_H - 1, ROW_HOVER)
 
-        val stack = ItemStack(material.item)
+        val stack = faceOf(material)
         guiGraphics.renderItem(stack, left + 8, y + 1)
 
         // Orange for a row the captain has re-materialled, dim for one they have struck off -- with a marker
@@ -1192,7 +1216,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             nameRoom = markX - 4 - (left + 30)
         }
         guiGraphics.drawString(
-            font, Component.literal(clip(stack.hoverName.string, nameRoom)), left + 30, y + 5,
+            font, Component.literal(clip(nameOf(material, stack), nameRoom)), left + 30, y + 5,
             when {
                 struck -> DIM
                 material.swapped -> ORANGE
@@ -1624,6 +1648,36 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         return true
     }
 
+    /**
+     * What an ANY row shows: a different member of its family every few seconds, rather than one arbitrary
+     * item standing in for a choice the captain deliberately left open.
+     *
+     * The phase comes off the WALL CLOCK rather than a per-row counter, so every Any row on the panel turns
+     * over on the same beat. Rows advancing independently would flicker against each other, which reads as
+     * something being wrong rather than as one idea.
+     *
+     * The name follows the icon, because a row whose picture and label disagree looks broken. The asterisk
+     * and the orange are what say "this is not fixed"; the card behind it says "anything of the kind".
+     *
+     * Cached per item: [MaterialFamilies.replacementsFor] walks the whole item registry, which is fine once
+     * when a card opens and ruinous sixty times a second.
+     */
+    /**
+     * What to CALL a row. An ANY row is named for the choice rather than for whichever member of the family
+     * its picture happens to be showing this second: the icon cycling is the signal that the choice is open,
+     * and a label cycling with it is just a word that will not sit still long enough to be read.
+     */
+    private fun nameOf(material: ShipwrightMenu.Material, face: ItemStack): String =
+        if (material.anyOfKind) ANY_KIND_TEXT.string else face.hoverName.string
+
+    private fun faceOf(material: ShipwrightMenu.Material): ItemStack {
+        if (!material.anyOfKind) return ItemStack(material.item)
+        val members = anyFaces.getOrPut(material.item) { MaterialFamilies.replacementsFor(material.item) }
+        if (members.isEmpty()) return ItemStack(material.item)
+        val step = (System.currentTimeMillis() / ANY_CYCLE_MS).toInt()
+        return ItemStack(members[Math.floorMod(step, members.size)])
+    }
+
     private fun small(guiGraphics: GuiGraphics, text: Component, x: Int, y: Int, color: Int) {
         val pose = guiGraphics.pose()
         pose.pushMatrix()
@@ -1686,6 +1740,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private val RESET_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_reset")
         private val NAME_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_name_prompt")
         private val DISMANTLE_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_dismantle")
+        private val ANY_KIND_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_any_kind")
         private val DISMANTLE_FEE_TEXT: Component =
             Component.translatable("gui.vs_eureka.shipwright_dismantle_fee")
         private val REALLY_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_really")
@@ -1757,6 +1812,9 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
 
         /** A vanilla item icon is 16 square, and the fee row lays itself out against that. */
         private const val ICON = 16
+
+        /** How long an ANY row shows each member of its family. */
+        private const val ANY_CYCLE_MS = 3000L
 
         private const val PANEL_BORDER = 0xFF000000.toInt()
         private const val PANEL_BG = 0xFFC6C6C6.toInt()

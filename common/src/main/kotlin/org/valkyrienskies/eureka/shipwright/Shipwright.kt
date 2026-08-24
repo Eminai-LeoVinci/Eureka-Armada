@@ -60,10 +60,21 @@ object Shipwright {
             return false
         }
 
+        // A page that was drawn up from altered plans comes back altered. Without this the openness dies on
+        // the page: the census would file as a fixed bill for whatever the representative happened to be,
+        // and a captain who deliberately said "any slab" would be handed a plan demanding dark oak ones.
+        val swaps = LinkedHashMap<Item, Alteration.Swap>()
+        for (row in page.census) {
+            if (!row.any) continue
+            val family = MaterialFamilies.familyOf(row.item) ?: continue
+            swaps[row.item] = Alteration.Any(family, row.item)
+        }
+        val alteration = if (swaps.isEmpty()) Alteration.NONE else Alteration(swaps = swaps)
+
         val ledger = ShipwrightLedger.get(level.server)
         val refusal = ledger.file(
             player.uuid,
-            ShipwrightLedger.Plans(page.shipName, page.template, cost)
+            ShipwrightLedger.Plans(page.shipName, page.template, cost, alteration = alteration)
         )
         if (refusal != null) {
             PathMessages.send(player, refusal, PathMessages.Kind.WARN)
@@ -153,7 +164,15 @@ object Shipwright {
             return false
         }
 
-        val page = Blueprint.draftFromTemplate(level, baked, plans.shipName) ?: run {
+        // The ANY rows, by the material the plans started from. rewrite() has resolved each one to its
+        // representative -- which for an Any row IS that same material -- so the baked census names exactly
+        // these items, and flagging them by key lines up row for row.
+        val anyItems = plans.alteration.swaps.entries
+            .filter { it.value is Alteration.Any }
+            .map { it.key }
+            .toSet()
+
+        val page = Blueprint.draftFromTemplate(level, baked, plans.shipName, anyItems) ?: run {
             ShipTemplate.delete(level, baked)
             PathMessages.send(player, "The page could not be drawn up.", PathMessages.Kind.ERROR)
             return false
