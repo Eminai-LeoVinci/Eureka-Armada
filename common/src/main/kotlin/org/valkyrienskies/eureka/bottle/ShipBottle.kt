@@ -2,6 +2,7 @@ package org.valkyrienskies.eureka.bottle
 
 import java.util.UUID
 import net.minecraft.core.BlockPos
+import net.minecraft.network.chat.Component
 import net.minecraft.core.component.DataComponents
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.server.level.ServerLevel
@@ -455,6 +456,21 @@ object ShipBottle {
             // people standing on a deck that is briefly not collidable, and a hull coming out of a bottle has
             // nobody standing on it -- so all the freeze can do here is grab whoever is passing overhead, which
             // on a thrown bottle is very often the person who threw it, mid-elytra.
+            // Her name goes back on the wheel BEFORE she is built, and Keep Name goes on with it.
+            //
+            // A bottle is the one case where the name is not a preference -- it is what was captured, it is
+            // printed on the bottle, and the message the captain is about to read says it out loud. Leaving
+            // it to the wheel's own switch meant a hull came out under a freshly invented slug while the
+            // bottle in the player's hand still said otherwise; and WHICH wheel gets asked is decided by
+            // helmIn's scoring rather than by the captain, so its switch is not theirs in any real sense.
+            //
+            // Stamped on the wheel rather than applied to the ship afterwards, so it travels the same road
+            // every other assembly name takes -- HelmNames.applyShipName's verify-loop included, which is
+            // what makes a name survive a hull vs-core is still building.
+            shipNameOf(stack)?.takeIf { it.isNotBlank() }?.let { captured ->
+                helmEntity.setHelmName(Component.literal(captured.replace('-', ' ')))
+                helmEntity.setKeepName(true)
+            }
             helmEntity.assemble(player, placed, holdEntities = false)
             // Said out loud on purpose: a hull resting on the ground looks exactly like a pile of blocks, so
             // "it came out" and "it came out as a ship" are indistinguishable without being told which.

@@ -97,6 +97,18 @@ object ShipRepair {
     class Assessment(
         /** Whether the hull is small enough to BE these plans -- see the fit test in [assess]. */
         val fits: Boolean,
+        /**
+         * Whether the hull is still called what the plans call her. Reported, never REQUIRED.
+         *
+         * A name is the one thing about a ship that changes for reasons having nothing to do with the ship:
+         * it is rewritten by a bottle, by an anvil, by assembling from a different wheel, and by vs-core
+         * inventing one when nobody said otherwise. Making it a gate meant a captain with a 100% match and
+         * a full bill of materials was turned away and told the plans were for a different ship -- and the
+         * only way through was to rename the hull by hand to a string they had to go and read off the page.
+         *
+         * What actually identifies a hull is [fits] plus [match]: she is no bigger than the plans describe,
+         * and enough of her is where the plans say. That is a test about the SHIP.
+         */
         val nameMatches: Boolean,
         /** 0..1 of the plans' non-air blocks already correct. */
         val match: Float,
@@ -104,14 +116,13 @@ object ShipRepair {
         /** Shipyard positions that need writing, with the state to write. Empty unless [accepted]. */
         val repairs: List<Repair>
     ) {
-        val accepted: Boolean get() = fits && nameMatches && match >= matchThreshold
+        val accepted: Boolean get() = fits && match >= matchThreshold
         val sound: Boolean get() = accepted && missing.isEmpty()
 
         /** Why a shipwright turned this away, or null if it did not. */
         val refusal: String?
             get() = when {
                 !fits -> "That hull is bigger than these plans describe."
-                !nameMatches -> "These plans are for a different ship."
                 match < matchThreshold ->
                     "Too little of that hull matches these plans -- ${(match * 100).toInt()}% of it, and a " +
                         "shipwright needs $matchPercent%. This is not the same ship."

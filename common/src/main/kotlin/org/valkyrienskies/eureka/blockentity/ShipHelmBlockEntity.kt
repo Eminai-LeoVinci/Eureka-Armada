@@ -1484,7 +1484,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // Deferred like the settle above, and for the same two reasons -- the generated slug is not final
             // until vs-core has finished building the ship, and the wheels cannot be found until it has filled
             // in the hull's bounds.
-            if (keepNameAtAssembly) {
+            run {
                 val namedId = loadedShip.id
                 val server = level.server
                 val nameAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
@@ -1493,13 +1493,23 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                     val master = helmDisplayAtAssembly
                         ?: wheelNameAtAssembly?.replace('-', ' ')
                         ?: built.slug?.replace('-', ' ')
-                        ?: return@executeIf
-                    val name = Component.literal(master)
                     for (wheel in CrewStations.helmsAboard(level, built).orEmpty()) {
                         // Pirate wheels keep their own papers. Renaming one would rewrite a design fact that
                         // every copy of that hull shares.
                         if (PirateHelm.gated(wheel.blockState)) continue
-                        if (wheel.helmName?.string != master) wheel.setHelmName(name)
+
+                        // The master's SETTINGS travel too, not only its name. A captain ticking Keep Name at
+                        // the wheel they are standing at means it for the SHIP -- and a hull whose wheels
+                        // disagree behaves differently depending on which one was last touched, or, after a
+                        // bottle, on which one helmIn happened to score highest.
+                        if (wheel.keepName != keepNameAtAssembly) wheel.setKeepName(keepNameAtAssembly)
+
+                        // The NAME only travels while Keep Name is on. With it off the hull answers to
+                        // whatever vs-core called her, and wiping a name the captain typed -- off every wheel
+                        // at once -- is not what turning a switch off ought to do.
+                        if (keepNameAtAssembly && master != null && wheel.helmName?.string != master) {
+                            wheel.setHelmName(Component.literal(master))
+                        }
                         // The menu's readout is pushed in the same breath. Left to converge on its own slow
                         // stagger it pushes only when the SERVER's value changes -- so a wheel whose client
                         // copy was already behind had nothing to correct it, and went on showing whatever the
