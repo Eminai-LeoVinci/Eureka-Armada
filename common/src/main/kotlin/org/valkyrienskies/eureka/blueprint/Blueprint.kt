@@ -6,14 +6,18 @@ import net.minecraft.core.component.DataComponents
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.nbt.ListTag
+import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
+import net.minecraft.util.StringUtil
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaItems
+import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.template.ShipManifest
@@ -187,6 +191,29 @@ object Blueprint {
     }
 
     /**
+     * Rename the drafted blueprint [player] is holding. Blank clears it back to the name it was drawn under.
+     *
+     * The two hands and nowhere else. A slot index would be a number a client could make up, and the only
+     * page a captain can be reading is one they are holding -- the screen opens off the held stack.
+     *
+     * A BLANK page is left alone: it describes no ship, so there is nothing for a name to tell apart.
+     */
+    fun rename(player: ServerPlayer, raw: String): Boolean {
+        val cleaned = StringUtil.filterText(raw).trim().take(HelmNames.MAX_NAME_LENGTH)
+        for (hand in InteractionHand.entries) {
+            val stack = player.getItemInHand(hand)
+            if (!stack.`is`(EurekaItems.BLUEPRINT.get()) || read(stack) == null) continue
+            if (cleaned.isEmpty()) {
+                stack.remove(DataComponents.CUSTOM_NAME)
+            } else {
+                stack.set(DataComponents.CUSTOM_NAME, Component.literal(cleaned))
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
      * Read [stack] as a drafted page, or null if it is blank.
      *
      * Safe on the client: everything it needs travels in the item's component.
@@ -211,7 +238,13 @@ object Blueprint {
 
         return Page(
             template = template,
-            shipName = tag.getString(SHIP_NAME_KEY).orElse(null)?.takeIf { it.isNotEmpty() } ?: "unnamed ship",
+            // A page WEARING a name answers to it. Renaming a blueprint -- at an anvil, or from the page
+            // itself -- has to change what the plans will be filed under, or the rename is decoration and
+            // two copies of one design stay indistinguishable at the moment it matters. Same arrangement as
+            // a wheel, whose custom name is the ship's name.
+            shipName = stack.get(DataComponents.CUSTOM_NAME)?.string?.trim()?.takeIf { it.isNotEmpty() }
+                ?: tag.getString(SHIP_NAME_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+                ?: "unnamed ship",
             width = size.getOrElse(0) { 0 },
             height = size.getOrElse(1) { 0 },
             length = size.getOrElse(2) { 0 },

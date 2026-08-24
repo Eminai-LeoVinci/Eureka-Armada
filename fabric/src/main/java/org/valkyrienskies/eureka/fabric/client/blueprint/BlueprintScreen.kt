@@ -4,7 +4,13 @@ import net.fabricmc.api.EnvType
 import net.fabricmc.api.Environment
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
+import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.KeyEvent
+import org.lwjgl.glfw.GLFW
+import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
+import org.valkyrienskies.eureka.fabric.client.MaterialSort
+import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
@@ -44,13 +50,21 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
      * different member every few seconds. The list is worked out here, once, because
      * [MaterialFamilies.replacementsFor] walks the whole item registry.
      */
-    private val rows: List<Row> = page.census.map { row ->
+    private val unsorted: List<Row> = page.census.map { row ->
         Row(
             item = row.item,
             count = row.count,
             faces = if (row.any) MaterialFamilies.replacementsFor(row.item) else emptyList()
         )
     }
+
+    /**
+     * The census in the captain's chosen order. Re-read per frame rather than cached, because the order can
+     * change under the button while the page is open and a cached list would need invalidating by hand --
+     * sixty sorts a second of a sixty-row list is nothing beside the bug that forgetting to do so would be.
+     */
+    private val rows: List<Row>
+        get() = MaterialSort.apply(unsorted, { ItemStack(it.item).hoverName.string }, { it.count })
 
     private class Row(val item: Item, val count: Int, val faces: List<Item>) {
         val any: Boolean get() = faces.isNotEmpty()
@@ -66,10 +80,103 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
         }
     }
 
+    /**
+     * What the header says right now.
+     *
+     * Held apart from [page] because the page is a snapshot of the ITEM, and a rename travels to the server
+     * and comes back on the next inventory sync. Waiting for that would leave the old name on screen for a
+     * beat after the captain typed the new one, which reads as the rename having missed.
+     */
+    private var displayName: String = page.shipName
+    private var renaming = false
+    private var nameValue: String = ""
+    private var nameBox: EditBox? = null
+
     override fun init() {
         left = (width - PANEL_W) / 2
         top = (height - PANEL_H) / 2
         clampScroll()
+
+        // Edited where it is read: the box takes the header's own pixels. Short of the dimensions on the
+        // right, which stay legible while typing and are the thing that tells two similar hulls apart.
+        if (renaming) {
+            nameBox = addRenderableWidget(
+                EditBox(font, left + 6, top + 3, PANEL_W - 12 - NAME_GUTTER, NAME_BOX_H, RENAME_TEXT)
+            ).also {
+                it.setMaxLength(MAX_NAME_LENGTH)
+                it.value = nameValue
+                it.setResponder { typed -> nameValue = typed }
+                it.isFocused = true
+                this.focused = it
+            }
+        } else {
+            addRenderableWidget(
+                ShipHelmButton(left + 8, top + BTN_Y, RENAME_W, BTN_H, RENAME_TEXT, font) {
+                    nameValue = displayName
+                    renaming = true
+                    rebuild()
+                }
+            )
+        }
+
+        addRenderableWidget(
+            ShipHelmButton(left + PANEL_W - 8 - EXIT_W, top + BTN_Y, EXIT_W, BTN_H, EXIT_TEXT, font) {
+                onClose()
+            }
+        )
+
+        // Above the divider, in the corner the header leaves empty. It belongs to the LIST rather than to
+        // the page, which is why it sits on the line between them rather than down with Rename and Exit.
+        addRenderableWidget(
+            ShipHelmButton(
+                left + PANEL_W - 8 - SORT_W, top + LIST_TOP - 5 - SORT_H, SORT_W, SORT_H,
+                MaterialSort.label, font, SORT_TEXT_SCALE
+            ) {
+                MaterialSort.cycle()
+                rebuild()
+            }
+        )
+    }
+
+    private fun rebuild() {
+        clearWidgets()
+        init()
+    }
+
+    /**
+     * Send the new name, or abandon it.
+     *
+     * Blank clears the custom name rather than setting an empty one, which puts the page back to the name it
+     * was drawn under -- so a captain who renames one by mistake has a way back that does not involve
+     * guessing what it used to be called.
+     */
+    private fun commitRename(send: Boolean) {
+        if (send) {
+            val typed = nameValue.trim()
+            if (typed != displayName) {
+                PathNetworkingFabric.sendBlueprintName(typed)
+                displayName = typed.ifEmpty { page.shipName }
+            }
+        }
+        renaming = false
+        nameBox = null
+        rebuild()
+    }
+
+    override fun keyPressed(keyEvent: KeyEvent): Boolean {
+        if (renaming) {
+            when (keyEvent.key()) {
+                GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
+                    commitRename(send = true)
+                    return true
+                }
+                GLFW.GLFW_KEY_ESCAPE -> {
+                    commitRename(send = false)
+                    return true
+                }
+            }
+        }
+        return super.keyPressed(keyEvent)
     }
 
     override fun isPauseScreen(): Boolean = false
@@ -83,7 +190,10 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
     }
 
     private fun drawHeader(guiGraphics: GuiGraphics) {
-        guiGraphics.drawString(font, Component.literal(page.shipName), left + 8, top + 6, ACCENT, false)
+        // While renaming, the box occupies these pixels -- the heading underneath would show through it.
+        if (!renaming) {
+            guiGraphics.drawString(font, Component.literal(displayName), left + 8, top + 6, ACCENT, false)
+        }
 
         val size = Component.literal("${page.width} x ${page.height} x ${page.length}")
         guiGraphics.drawString(font, size, left + PANEL_W - 8 - font.width(size), top + 6, DIM, false)
@@ -213,6 +323,29 @@ class BlueprintScreen private constructor(private val page: Blueprint.Page) : Sc
         private const val LIST_BOTTOM = LIST_TOP + ROW_H * VISIBLE_ROWS
 
         private const val SMALL = 0.7f
+
+        private const val BTN_H = 14
+        private const val SORT_W = 32
+        private const val SORT_H = 12
+
+        /** All three labels, not just the long ones: a control whose type changes size as you cycle it reads
+         *  as two different controls. "Hi-Lo" is what sets the size; "A-Z" simply comes along. */
+        private const val SORT_TEXT_SCALE = 0.8f
+
+        /** The row under the list. LIST_BOTTOM is exclusive, so a button starting on it clears the last row. */
+        private const val BTN_Y = LIST_BOTTOM
+        private const val RENAME_W = 56
+        private const val EXIT_W = 44
+        private const val NAME_BOX_H = 14
+
+        /** Room kept on the header's right for the dimensions, which stay readable while the name is typed. */
+        private const val NAME_GUTTER = 76
+
+        /** The helm's own cap. A page's name and a ship's name are the same string in the end. */
+        private const val MAX_NAME_LENGTH = 32
+
+        private val RENAME_TEXT: Component = Component.translatable("gui.vs_eureka.blueprint_rename")
+        private val EXIT_TEXT: Component = Component.translatable("gui.vs_eureka.blueprint_exit")
 
         private const val PANEL_BORDER = 0xFF000000.toInt()
         private const val PANEL_BG = 0xFFC6C6C6.toInt()

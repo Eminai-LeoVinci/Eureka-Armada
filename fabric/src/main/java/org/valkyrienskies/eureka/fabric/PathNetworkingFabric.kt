@@ -27,6 +27,7 @@ import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.CrewRoll
+import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.ShipCrews
@@ -87,6 +88,8 @@ object PathNetworkingFabric {
     private val CREW_LIST_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_list")
     private val CREW_ROSTER_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "crew_roster")
     private val HELM_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_name")
+    private val BLUEPRINT_NAME_RL: Identifier =
+        Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "blueprint_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
@@ -106,6 +109,7 @@ object PathNetworkingFabric {
     private val CREW_LIST_TYPE = CustomPacketPayload.Type<CrewListPayload>(CREW_LIST_RL)
     private val CREW_ROSTER_TYPE = CustomPacketPayload.Type<CrewRosterPayload>(CREW_ROSTER_RL)
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
+    private val BLUEPRINT_NAME_TYPE = CustomPacketPayload.Type<BlueprintNamePayload>(BLUEPRINT_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
@@ -146,6 +150,8 @@ object PathNetworkingFabric {
 
     /** Upper bound on an occupant name in the station dropdown; crew names are capped well under this. */
     private const val MAX_OCCUPANT_NAME = 64
+    private val BLUEPRINT_NAME_CODEC: StreamCodec<FriendlyByteBuf, BlueprintNamePayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, BlueprintNamePayload::data) { BlueprintNamePayload(it) }
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -235,6 +241,16 @@ object PathNetworkingFabric {
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
     class HelmNamePayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = HELM_NAME_TYPE
+    }
+
+    /**
+     * "Call this PAGE that." Renames the blueprint in the sender's hands.
+     *
+     * No position and no slot: the only blueprint a player can be reading is one they are holding, and a slot
+     * index is a number a client could make up. The server looks in the two hands and nowhere else.
+     */
+    class BlueprintNamePayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = BLUEPRINT_NAME_TYPE
     }
 
     /**
@@ -371,6 +387,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(CREW_LIST_TYPE, CREW_LIST_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_ROSTER_TYPE, CREW_ROSTER_CODEC)
         PayloadTypeRegistry.playC2S().register(HELM_NAME_TYPE, HELM_NAME_CODEC)
+        PayloadTypeRegistry.playC2S().register(BLUEPRINT_NAME_TYPE, BLUEPRINT_NAME_CODEC)
         PayloadTypeRegistry.playC2S().register(SHIP_NAME_TYPE, SHIP_NAME_CODEC)
 
         // Both of these report whether the push went out, which is what lets ShipCrews fall back to the roster
@@ -529,6 +546,13 @@ object PathNetworkingFabric {
                 val level = player.level() as? ServerLevel ?: return@execute
                 HelmNames.rename(level, player, pos, name)
             }
+        }
+
+        ServerPlayNetworking.registerGlobalReceiver(BLUEPRINT_NAME_TYPE) { payload, context ->
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val name = buf.readUtf(HelmNames.MAX_NAME_LENGTH * 4)
+            context.server().execute { Blueprint.rename(player, name) }
         }
 
         ServerPlayNetworking.registerGlobalReceiver(SHIP_NAME_TYPE) { payload, context ->
@@ -1225,6 +1249,14 @@ object PathNetworkingFabric {
         buf.writeBlockPos(pos)
         buf.writeUtf(name.take(HelmNames.MAX_NAME_LENGTH))
         ClientPlayNetworking.send(HelmNamePayload(toArray(buf)))
+    }
+
+    /** Client: rename the blueprint in hand. Blank clears it back to the name the page was drawn under. */
+    @Environment(EnvType.CLIENT)
+    fun sendBlueprintName(name: String) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeUtf(name.take(HelmNames.MAX_NAME_LENGTH))
+        ClientPlayNetworking.send(BlueprintNamePayload(toArray(buf)))
     }
 
     /** Client: name the SHIP that the wheel at [pos] belongs to. */

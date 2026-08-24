@@ -16,7 +16,18 @@ import net.minecraft.util.FormattedCharSequence
  * overrides renderContents (1.21.11 made AbstractButton.renderWidget final).
  */
 class ShipHelmButton(
-    x: Int, y: Int, width: Int, height: Int, text: Component, private val font: Font, onPress: OnPress
+    x: Int, y: Int, width: Int, height: Int, text: Component, private val font: Font,
+    /**
+     * Draw the label at this fraction of the normal size.
+     *
+     * For a button whose label is a fixed short word that does not quite fit -- where the honest answer is
+     * smaller type rather than a wider control, because the control's width is doing something (sitting in a
+     * corner, matching its neighbour) that the label should not get to overrule. Without it the only
+     * behaviour on overflow is the marquee below, which is right for a captain's ship name and wrong for a
+     * two-syllable label that would then never sit still.
+     */
+    private val textScale: Float = 1.0f,
+    onPress: OnPress
 ) : Button(x, y, width, height, text, onPress, DEFAULT_NARRATION) {
 
     var isPressed = false
@@ -43,12 +54,26 @@ class ShipHelmButton(
         guiGraphics.fill(x + 1, y + 1, x + width - 1, y + height - 1, fill)
 
         val label: FormattedCharSequence = message.visualOrderText
-        val labelWidth = font.width(label)
+        val labelWidth = (font.width(label) * textScale).toInt()
         val inner = width - 2 * LABEL_PAD
-        val baseline = y + (height - 8) / 2
+        val baseline = y + (height - (8 * textScale).toInt()) / 2
 
         if (labelWidth <= inner) {
-            guiGraphics.drawString(font, label, (x + width / 2) - labelWidth / 2, baseline, textColor, false)
+            val tx = (x + width / 2) - labelWidth / 2
+            if (textScale == 1.0f) {
+                guiGraphics.drawString(font, label, tx, baseline, textColor, false)
+            } else {
+                // Scaled about the screen origin, so the position has to be divided back out -- the same
+                // arrangement every `small` helper on these panels uses.
+                val pose = guiGraphics.pose()
+                pose.pushMatrix()
+                pose.scale(textScale, textScale)
+                guiGraphics.drawString(
+                    font, label,
+                    Math.round(tx / textScale), Math.round(baseline / textScale), textColor, false
+                )
+                pose.popMatrix()
+            }
             return
         }
 

@@ -13,14 +13,16 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.valkyrienskies.eureka.block.ShipHelmBlock;
+import org.valkyrienskies.eureka.blueprint.Blueprint;
 
 /**
- * Naming a ship's wheel at an anvil costs nothing.
+ * Naming a ship's wheel or a set of plans at an anvil costs nothing.
  *
- * <p>A wheel's name is its CREW's name, and a crew is renamed for free from the crew manifest. The anvil is
- * the same job done with the block in hand, so charging for one and not the other would only mean the free
- * route is the one nobody discovers -- and a captain who has just spent 28 Hearts of the Sea on berths should
- * not also be levelling up to relabel them.
+ * <p>A wheel's name is its CREW's name, and a crew is renamed for free from the crew manifest. A blueprint's
+ * name is what its plans will be FILED under, and that is renamed for free from the page itself. The anvil is
+ * the same job done with the thing in hand, so charging for one route and not the other would only mean the
+ * free one is the route nobody discovers -- and a captain who has just spent 28 Hearts of the Sea on berths,
+ * or a blank blueprint on a copy, should not also be levelling up to tell two of them apart.
  *
  * <p>Anvil WEAR is deliberately untouched. That is the anvil's cost, not the rename's, and an anvil that never
  * chipped would be a change to the block rather than to this feature.
@@ -33,7 +35,7 @@ import org.valkyrienskies.eureka.block.ShipHelmBlock;
  * patching at all.
  */
 @Mixin(AnvilMenu.class)
-public abstract class MixinAnvilFreeHelmRename {
+public abstract class MixinAnvilFreeRename {
 
     @Shadow
     @Final
@@ -47,8 +49,8 @@ public abstract class MixinAnvilFreeHelmRename {
      * price that vanilla then recomputes.
      */
     @Inject(method = "createResult", at = @At("TAIL"))
-    private void vs_eureka$helmRenameIsFree(final CallbackInfo ci) {
-        if (!vs_eureka$isHelm()) {
+    private void vs_eureka$renameIsFree(final CallbackInfo ci) {
+        if (!vs_eureka$isFreeToName()) {
             return;
         }
         this.cost.set(0);
@@ -64,13 +66,19 @@ public abstract class MixinAnvilFreeHelmRename {
     @Inject(method = "mayPickup", at = @At("HEAD"), cancellable = true)
     private void vs_eureka$freeResultsCanBeTaken(final Player player, final boolean hasStack,
         final CallbackInfoReturnable<Boolean> cir) {
-        if (hasStack && vs_eureka$isHelm()) {
+        if (hasStack && vs_eureka$isFreeToName()) {
             cir.setReturnValue(true);
         }
     }
 
-    private boolean vs_eureka$isHelm() {
+    private boolean vs_eureka$isFreeToName() {
         final ItemStack input = ((AnvilMenu) (Object) this).getSlot(AnvilMenu.INPUT_SLOT).getItem();
-        return input.getItem() instanceof BlockItem blockItem && blockItem.getBlock() instanceof ShipHelmBlock;
+        if (input.getItem() instanceof BlockItem blockItem && blockItem.getBlock() instanceof ShipHelmBlock) {
+            return true;
+        }
+        // A DRAFTED blueprint. read() answers null for anything that is not one -- the page rides in the
+        // item's own component -- so this needs no separate item check, and a BLANK page is correctly
+        // excluded: it describes no ship, so naming one is ordinary labelling at the ordinary price.
+        return Blueprint.INSTANCE.read(input) != null;
     }
 }

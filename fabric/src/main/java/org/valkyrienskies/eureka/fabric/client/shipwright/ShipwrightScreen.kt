@@ -17,6 +17,7 @@ import net.minecraft.client.gui.components.AbstractButton
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.input.KeyEvent
 import org.valkyrienskies.eureka.fabric.ShipwrightNetworkingFabric
+import org.valkyrienskies.eureka.fabric.client.MaterialSort
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmCheckbox
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import org.valkyrienskies.eureka.shipwright.MaterialFamilies
@@ -119,7 +120,9 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         get() = openPile?.let { name -> shelf.salvage.firstOrNull { it.shipName == name } }
 
     /** The rows on the open tab. Empty for the keepsakes, which are a count rather than a list. */
-    private fun claimRows(pile: ShipwrightMenu.Pile): List<ShipwrightMenu.Material> = when (claimTab) {
+    private fun claimRows(pile: ShipwrightMenu.Pile): List<ShipwrightMenu.Material> = sorted(claimPile(pile))
+
+    private fun claimPile(pile: ShipwrightMenu.Pile): List<ShipwrightMenu.Material> = when (claimTab) {
         1 -> pile.cargo
         2 -> emptyList()
         else -> pile.hull
@@ -151,6 +154,21 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
                 ShipHelmButton(left + 6 + TAB_W, top + PANEL_H - 22, TAB_W, BTN_H, YARD_TAB, font) {
                     onYard = true; openCard = null; scroll = 0; rebuild()
                 }.also { it.active = !onYard }
+            )
+        }
+
+        // Above the divider, in the corner the header leaves empty -- on the plans card and on a claim list
+        // alike, being the two places a column of materials is read. Not on the shelf or the yard listings:
+        // those are lists of SHIPS, and a bill's ordering has nothing to say about them.
+        if ((!onYard && openCard != null && openMaterial == null) || (onYard && openPile != null)) {
+            addRenderableWidget(
+                ShipHelmButton(
+                    left + PANEL_W - 8 - SORT_W, top + LIST_TOP - 5 - SORT_H, SORT_W, SORT_H,
+                    MaterialSort.label, font, SORT_TEXT_SCALE
+                ) {
+                    MaterialSort.cycle()
+                    rebuild()
+                }
             )
         }
 
@@ -1163,8 +1181,17 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
      */
     private fun cardRows(row: ShipwrightMenu.Row): List<ShipwrightMenu.Material> {
         val outstanding = row.materials.filter { it.outstanding > 0 }
-        return outstanding.ifEmpty { row.materials }
+        return sorted(outstanding.ifEmpty { row.materials })
     }
+
+    /**
+     * A material list in the captain's chosen order -- see [MaterialSort], which every list in the mod reads.
+     *
+     * Sorted by the row's own item name rather than by anything on the wire: an ANY row is named for the
+     * choice and a swapped one for what it became, and both are what a captain is scanning the column for.
+     */
+    private fun sorted(rows: List<ShipwrightMenu.Material>): List<ShipwrightMenu.Material> =
+        MaterialSort.apply(rows, { ItemStack(it.item).hoverName.string }, { it.needed })
 
     /**
      * Struck rows are listed after the outstanding ones rather than dropped.
@@ -1173,7 +1200,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
      * toward the total or the percentage -- but a row a captain cannot see is a row they cannot put back.
      */
     private fun cardRowsAll(row: ShipwrightMenu.Row): List<ShipwrightMenu.Material> =
-        cardRows(row) + row.struck
+        cardRows(row) + sorted(row.struck)
 
     private fun drawMaterial(
         guiGraphics: GuiGraphics,
@@ -1771,6 +1798,12 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private const val STICK_DEADZONE = 0.4f
         private const val STICK_EVERY = 3
         private const val LIST_TOP = 53
+        private const val SORT_W = 32
+        private const val SORT_H = 12
+
+        /** All three labels, not just the long ones: a control whose type changes size as you cycle it reads
+         *  as two different controls. "Hi-Lo" is what sets the size; "A-Z" simply comes along. */
+        private const val SORT_TEXT_SCALE = 0.8f
         private const val ROW_H = 18
         private const val VISIBLE_ROWS = 8
         private const val LIST_BOTTOM = LIST_TOP + ROW_H * VISIBLE_ROWS

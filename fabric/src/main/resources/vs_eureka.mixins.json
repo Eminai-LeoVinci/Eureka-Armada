@@ -3,7 +3,7 @@
   "package": "org.valkyrienskies.eureka.fabric.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "MixinAnvilFreeHelmRename",
+    "MixinAnvilFreeRename",
     "MixinCrewNoWheelVisit",
     "MixinCrewNoWorkAtWheel",
     "MixinCrewProjectileBoost",

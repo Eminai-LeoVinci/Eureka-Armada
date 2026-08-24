@@ -72,9 +72,14 @@ object Shipwright {
         val alteration = if (swaps.isEmpty()) Alteration.NONE else Alteration(swaps = swaps)
 
         val ledger = ShipwrightLedger.get(level.server)
+
+        // Filed BESIDE plans of the same name rather than refused. A captain holding two pages of one design
+        // -- an original and a variant off it -- was told to go away and rename one before either could be
+        // filed, which is a demand to solve the shelf's bookkeeping by hand. The shelf can count.
+        val filedAs = freeName(ledger, player, page.shipName)
         val refusal = ledger.file(
             player.uuid,
-            ShipwrightLedger.Plans(page.shipName, page.template, cost, alteration = alteration)
+            ShipwrightLedger.Plans(filedAs, page.template, cost, alteration = alteration)
         )
         if (refusal != null) {
             PathMessages.send(player, refusal, PathMessages.Kind.WARN)
@@ -83,9 +88,13 @@ object Shipwright {
 
         stack.shrink(1)
         val library = ledger.libraryOf(player.uuid)
+        // Said out loud when the shelf had to pick a different name, because a captain who filed
+        // "Battleship Blue" and later cannot find it should not have to work out where it went.
+        val told = if (filedAs == page.shipName) "'$filedAs' is on file"
+        else "'${page.shipName}' is on file as '$filedAs'"
         PathMessages.send(
             player,
-            "'${page.shipName}' is on file -- ${library.plans.size} of ${library.slots} sets of plans.",
+            "$told -- ${library.plans.size} of ${library.slots} sets of plans.",
             PathMessages.Kind.GOOD
         )
         return true
@@ -172,7 +181,13 @@ object Shipwright {
             .map { it.key }
             .toSet()
 
-        val page = Blueprint.draftFromTemplate(level, baked, plans.shipName, anyItems) ?: run {
+        // Named apart from the plans it came off. Only altered plans can be drawn up at all -- the guard at
+        // the top of this method says so -- so a page taken here is BY DEFINITION not the original, and
+        // handing back a second thing with the original's name on it is how a captain ends up rebuilding
+        // the wrong ship. Same suffix saveAsNew uses, for the same reason.
+        val pageName = variantName(ShipwrightLedger.get(level.server), player, plans.shipName)
+
+        val page = Blueprint.draftFromTemplate(level, baked, pageName, anyItems) ?: run {
             ShipTemplate.delete(level, baked)
             PathMessages.send(player, "The page could not be drawn up.", PathMessages.Kind.ERROR)
             return false
@@ -205,6 +220,15 @@ object Shipwright {
     }
 
     /** '<name> (altered)', then '(altered 2)' and so on -- whatever the shelf does not already hold. */
+    /** [base] if the shelf has room for it, else the first "base (2)", "base (3)" that is free. */
+    private fun freeName(ledger: ShipwrightLedger, player: ServerPlayer, base: String): String {
+        val held = ledger.libraryOf(player.uuid).plans.keys
+        if (base !in held) return base
+        var n = 2
+        while ("$base ($n)" in held) n++
+        return "$base ($n)"
+    }
+
     private fun variantName(ledger: ShipwrightLedger, player: ServerPlayer, base: String): String {
         val held = ledger.libraryOf(player.uuid).plans.keys
         val first = "$base (altered)"
@@ -406,7 +430,13 @@ object Shipwright {
             return false
         }
 
-        val bottled = ShipBottle.bottleOf(bottleTemplate, plans.shipName)
+        // Named apart from the plans when those plans are altered, exactly as a blueprint taken off them is.
+        // A bottle and a page are the same promise in two shapes -- "this design, as you changed it" -- and
+        // a captain holding both should be able to tell either from the original at a glance.
+        val bottleName = if (plans.alteration.isEmpty) plans.shipName
+        else variantName(ShipwrightLedger.get(level.server), player, plans.shipName)
+
+        val bottled = ShipBottle.bottleOf(bottleTemplate, bottleName)
         ShipwrightLedger.get(level.server).spendMaterials(plans)
         // The bottle becomes the bottled ship rather than sitting alongside it.
         bottle.shrink(1)
@@ -414,7 +444,7 @@ object Shipwright {
 
         PathMessages.send(
             player,
-            "The shipwright hands over '${plans.shipName}', bottled.",
+            "The shipwright hands over '$bottleName', bottled.",
             PathMessages.Kind.GOOD
         )
         return true
