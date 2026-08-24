@@ -120,6 +120,28 @@ object PirateShips {
         val shipId = level.getLoadedShipManagingPos(pos)?.id
 
         var berthId = helm.pirateBerth
+
+        // A wheel that arrived on a TEMPLATE carries the papers of the ship the template was cut from.
+        // pirateBerth rides in the block entity's NBT, so every copy placed from one claims the SAME site --
+        // and a berth holds one report. Spawn three raiders from the same template and two of them are
+        // invisible to the manager: no ring, no countdown, no wake, while the one report and the site's
+        // remembered position both follow whichever wheel ticked last. (That is what makes it look like a
+        // limit on how many you can summon, and why placing one far away appears to fix it: the ring did
+        // not appear at the new ship, it MOVED there.)
+        //
+        // Whichever copy reports first keeps the site; the rest notice another wheel already holding it and
+        // take out their own. Settled in a tick, and permanently -- adopt stamps the new key onto the wheel.
+        //
+        // Only for a wheel still standing in the WORLD. An assembled ship reports from shipyard coordinates,
+        // and a berth adopted there would record a spawn site out in the shipyard where nothing can ever
+        // regenerate.
+        if (berthId != null && shipId == null) {
+            val holder = reports[berthId]
+            if (holder != null && holder.helm !== helm && level.gameTime - holder.lastSeen <= STALE_TICKS) {
+                berthId = null
+            }
+        }
+
         if (berthId == null) {
             berthId = adopt(level, pos, helm, shipId)
             if (berthId == null) return
