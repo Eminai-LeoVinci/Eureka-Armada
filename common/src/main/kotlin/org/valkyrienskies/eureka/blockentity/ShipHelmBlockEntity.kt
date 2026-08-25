@@ -774,7 +774,22 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     private var shouldDisassembleWhenPossible = false
     private var orphanScanCooldown = 0
 
+    /**
+     * This wheel's "n of total" on its own hull, packed through [org.valkyrienskies.eureka.ship.ShipBearing.packNumber]; 0 when it is not
+     * on a ship. Stamped in [createMenu] rather than recomputed per broadcast -- the menu's data slots are
+     * read every sync, and a hull walk at that rate to keep a label current would be indefensible for a
+     * number that only moves when a wheel is added or removed.
+     */
+    var fittingNumber = 0
+        private set
+
     override fun createMenu(id: Int, playerInventory: Inventory, player: Player): AbstractContainerMenu {
+        // Stamp this wheel's number just before the menu syncs it; see [fittingNumber].
+        val level = this.level
+        if (level is ServerLevel) {
+            val ship = level.getLoadedShipManagingPos(blockPos) as? LoadedServerShip
+            fittingNumber = ship?.let { CrewStations.numberAt(level, it, blockPos) } ?: 0
+        }
         return ShipHelmScreenMenu(id, playerInventory, this)
     }
 

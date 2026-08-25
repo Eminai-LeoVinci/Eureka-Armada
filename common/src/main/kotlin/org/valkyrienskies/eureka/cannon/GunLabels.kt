@@ -6,7 +6,8 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
-import org.valkyrienskies.eureka.crew.CrewStations
+import org.valkyrienskies.eureka.ship.ShipBearing
+import org.valkyrienskies.eureka.ship.ShipBearing.along
 
 /**
  * The deck-and-bow-relative names of a ship's guns: `L1 - D1`, `L2 - D1`, ... down the port side of the
@@ -51,11 +52,15 @@ object GunLabels {
 
     class Labeled(val gun: CannonBlockEntity, val label: String, val layer: Int)
 
-    /** The bow, as a shipyard-space direction, or null for a ship with no crew-station helm. */
-    fun forwardOf(level: ServerLevel, ship: LoadedServerShip): Direction? {
-        val helm = CrewStations.stationOf(level, ship) ?: return null
-        return helm.blockState.getValue(HORIZONTAL_FACING).opposite
-    }
+    /**
+     * The bow, as a shipyard-space direction, or null for a ship with no crew-station helm.
+     *
+     * Kept as the guns' own entry point -- callers throughout the cannon code ask GunLabels where forward is
+     * -- but the definition itself now lives in [ShipBearing], because holds, wheels and engines are numbered
+     * from the same bow and two definitions of forward would eventually disagree.
+     */
+    fun forwardOf(level: ServerLevel, ship: LoadedServerShip): Direction? =
+        ShipBearing.forwardOf(level, ship)
 
     /**
      * Every gun aboard [ship] (armada included), named, in reading order: Deck 1's port battery bow to
@@ -86,16 +91,15 @@ object GunLabels {
 
         // Deal the decks first: every distinct gun-bearing height, ranked keel-up. The breech block's Y is
         // the whole cannon's -- both halves stand on one deck.
-        val deckOf = guns.map { it.blockPos.y }.distinct().sorted()
-            .withIndex().associate { (index, y) -> y to index + 1 }
+        val deckOf = ShipBearing.decksOf(guns.map { it.blockPos })
 
         // Bow-most first for the broadsides; port-most first for the chasers. The cross axis breaks ties so
         // the order is total within a deck and the names can never shuffle between two calls on the same
         // hull. (Height needs no tiebreak here: a deck is one height by construction.)
-        val toBow = compareByDescending<CannonBlockEntity> { it.blockPos.dot(forward) }
-            .thenBy { it.blockPos.dot(starboard) }
-        val toStarboard = compareBy<CannonBlockEntity> { it.blockPos.dot(starboard) }
-            .thenByDescending { it.blockPos.dot(forward) }
+        val toBow = compareByDescending<CannonBlockEntity> { it.blockPos.along(forward) }
+            .thenBy { it.blockPos.along(starboard) }
+        val toStarboard = compareBy<CannonBlockEntity> { it.blockPos.along(starboard) }
+            .thenByDescending { it.blockPos.along(forward) }
 
         val out = ArrayList<Labeled>(guns.size)
         fun emit(group: List<CannonBlockEntity>, comparator: Comparator<CannonBlockEntity>, letter: Char, deck: Int) {
@@ -134,11 +138,6 @@ object GunLabels {
      * `startsWith` -- and both emission and [decode] build through here so the two can never disagree.
      */
     fun format(group: Char, number: Int, layer: Int): String = "$group$number - D$layer"
-
-    private fun BlockPos.dot(direction: Direction): Int {
-        val unit = direction.unitVec3i
-        return x * unit.x + y * unit.y + z * unit.z
-    }
 
     // region label <-> int packing, for ContainerData slots (the cannon menu's synced ints)
 

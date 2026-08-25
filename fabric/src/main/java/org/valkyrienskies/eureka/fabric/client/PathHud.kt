@@ -86,9 +86,19 @@ object PathHud {
         )
     }
 
-    /** Queue an event message. */
-    fun add(text: Component, argb: Int) {
-        val life = (EurekaConfig.CLIENT.pathMessageSeconds.coerceIn(1.0, 30.0) * 1000.0).toLong()
+    /**
+     * Queue an event message.
+     *
+     * [seconds] overrides how long this one holds; 0 -- the default for everything that does not ask -- means
+     * the player's own `pathMessageSeconds`. A restock report is deliberately short: it is a receipt, useful
+     * for the moment it takes to read and clutter afterwards, and it fires often enough that leaving it up
+     * for six seconds would push everything else off the HUD.
+     */
+    @JvmOverloads
+    fun add(text: Component, argb: Int, seconds: Float = 0.0f) {
+        val configured = EurekaConfig.CLIENT.pathMessageSeconds
+        val held = if (seconds > 0.0f) seconds.toDouble() else configured
+        val life = (held.coerceIn(0.5, 30.0) * 1000.0).toLong()
         entries.add(Entry(text, argb, System.currentTimeMillis(), life))
         while (entries.size > MAX_ENTRIES) entries.removeAt(0)
     }

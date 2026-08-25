@@ -20,6 +20,7 @@ import net.minecraft.world.level.block.ChestBlock
 import net.minecraft.world.level.block.state.properties.ChestType
 import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.block.SnowLayerBlock
+import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.AABB
 import org.joml.AxisAngle4d
@@ -30,6 +31,8 @@ import org.valkyrienskies.core.util.datastructures.DenseBlockPosSet
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties.HEAT
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
+import org.valkyrienskies.eureka.crew.HoldRetag
+import org.valkyrienskies.eureka.crew.HoldTags
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
 import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.mod.common.isTickingChunk
@@ -102,6 +105,7 @@ object ShipAssembler {
     // VSShipAssembler reads the current world state into the ship. Clears orphaned resting snow first.
     fun finishAssembly(level: ServerLevel, blockPositions: Set<BlockPos>): Assembled {
         clearRestingSnowLayers(level, blockPositions)
+        tagHoldsBeforeAssembly(level, blockPositions)
         val context = VSShipAssembler.assembleToShipFull(level, blockPositions, 1.0)
 
         // Recompute the paste's corner exactly as the assembler computed it: min/max of the set, the box's
@@ -144,6 +148,23 @@ object ShipAssembler {
                 level.setBlock(above, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS)
             }
         }
+    }
+
+    // Teach every chest and barrel what it is for, from what is already in it, BEFORE the hull moves.
+    //
+    // Done here rather than after the ship exists for two reasons. The blocks are still in the world, so
+    // reading them needs no shipyard chunk to have settled -- and a relocation carries a block entity's full
+    // saved tag with it, so a tag written now arrives in the shipyard already attached to the right box.
+    //
+    // The alternative was making a captain open and shut forty barrels to tell the ship what it can plainly
+    // see: a magazine stocked before the ship was raised is still a magazine.
+    private fun tagHoldsBeforeAssembly(level: ServerLevel, blockPositions: Set<BlockPos>) {
+        val holds = ArrayList<BaseContainerBlockEntity>()
+        for (pos in blockPositions) {
+            val blockEntity = level.getBlockEntity(pos) ?: continue
+            if (HoldTags.isHold(blockEntity)) holds.add(blockEntity as BaseContainerBlockEntity)
+        }
+        if (holds.isNotEmpty()) HoldRetag.tagAllAboard(level, holds)
     }
 
     private fun roundToNearestMultipleOf(number: Double, multiple: Double) = multiple * round(number / multiple)

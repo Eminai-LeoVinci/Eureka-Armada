@@ -29,6 +29,7 @@ import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.CrewRoll
 import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.crew.HelmNames
+import org.valkyrienskies.eureka.crew.HoldLabelSync
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.ShipCrews
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreen
@@ -38,6 +39,7 @@ import org.valkyrienskies.eureka.item.CannonCharge
 import org.valkyrienskies.eureka.fabric.client.ClientCrewMarkers
 import org.valkyrienskies.eureka.fabric.client.PathHud
 import org.valkyrienskies.eureka.fabric.client.crew.CrewManifestScreen
+import org.valkyrienskies.eureka.fabric.client.crew.HoldLabelClient
 import org.valkyrienskies.eureka.path.ClientPathState
 import org.valkyrienskies.eureka.path.PathFollower
 import org.valkyrienskies.eureka.path.PathMessages
@@ -91,6 +93,7 @@ object PathNetworkingFabric {
     private val BLUEPRINT_NAME_RL: Identifier =
         Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "blueprint_name")
     private val SHIP_NAME_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "ship_name")
+    private val HOLD_LABEL_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "hold_label")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
     private val ROUTES_TYPE = CustomPacketPayload.Type<RoutesPayload>(ROUTES_RL)
@@ -111,6 +114,7 @@ object PathNetworkingFabric {
     private val HELM_NAME_TYPE = CustomPacketPayload.Type<HelmNamePayload>(HELM_NAME_RL)
     private val BLUEPRINT_NAME_TYPE = CustomPacketPayload.Type<BlueprintNamePayload>(BLUEPRINT_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
+    private val HOLD_LABEL_TYPE = CustomPacketPayload.Type<HoldLabelPayload>(HOLD_LABEL_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ActionPayload::data) { ActionPayload(it) }
@@ -152,6 +156,8 @@ object PathNetworkingFabric {
     private const val MAX_OCCUPANT_NAME = 64
     private val BLUEPRINT_NAME_CODEC: StreamCodec<FriendlyByteBuf, BlueprintNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, BlueprintNamePayload::data) { BlueprintNamePayload(it) }
+    private val HOLD_LABEL_CODEC: StreamCodec<FriendlyByteBuf, HoldLabelPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HoldLabelPayload::data) { HoldLabelPayload(it) }
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -239,6 +245,11 @@ object PathNetworkingFabric {
     }
 
     /** "Call this WHEEL that." Names the CREW, and is the key they are filed under. Not the ship. */
+    /** Server -> client: which numbered box this chest screen is looking at, and what it is for. */
+    class HoldLabelPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = HOLD_LABEL_TYPE
+    }
+
     class HelmNamePayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = HELM_NAME_TYPE
     }
@@ -374,6 +385,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(ROUTES_TYPE, ROUTES_CODEC)
         PayloadTypeRegistry.playS2C().register(LIVE_TYPE, LIVE_CODEC)
         PayloadTypeRegistry.playS2C().register(MESSAGE_TYPE, MESSAGE_CODEC)
+        PayloadTypeRegistry.playS2C().register(HOLD_LABEL_TYPE, HOLD_LABEL_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_MARKS_TYPE, CREW_MARKS_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_MANIFEST_TYPE, CREW_MANIFEST_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_DETAIL_TYPE, CREW_DETAIL_CODEC)
@@ -435,14 +447,28 @@ object PathNetworkingFabric {
         // Point `:common`'s feedback at the stacking HUD, but only for players whose client actually declared
         // the channel -- sending to one that didn't is an error, not a no-op. Anyone else keeps the action bar,
         // which is the whole reason PathMessages has a fallback.
-        PathMessages.sender = { player, text, kind ->
+        PathMessages.sender = { player, text, kind, seconds ->
             if (ServerPlayNetworking.canSend(player, MESSAGE_TYPE)) {
                 val buf = FriendlyByteBuf(Unpooled.buffer())
                 buf.writeByte(kind.ordinal)
                 buf.writeUtf(text)
+                // 0 means "hold it for however long the player configured"; anything else is this line
+                // asking to be more perishable than the default.
+                buf.writeFloat(seconds.toFloat())
                 ServerPlayNetworking.send(player, MessagePayload(toArray(buf)))
             } else {
                 player.displayClientMessage(Component.literal(text).withStyle(kind.formatting), true)
+            }
+        }
+
+        // The chest screen's number. Pushed once at open; see HoldLabelSync.
+        HoldLabelSync.sender = { player, containerId, label, tags ->
+            if (ServerPlayNetworking.canSend(player, HOLD_LABEL_TYPE)) {
+                val buf = FriendlyByteBuf(Unpooled.buffer())
+                buf.writeVarInt(containerId)
+                buf.writeUtf(label)
+                buf.writeVarInt(tags)
+                ServerPlayNetworking.send(player, HoldLabelPayload(toArray(buf)))
             }
         }
     }
@@ -817,13 +843,21 @@ object PathNetworkingFabric {
                 CrewManifestScreen.acceptStores(update.helm, update.stores, update.decks, update.firing)
             }
         }
+        ClientPlayNetworking.registerGlobalReceiver(HOLD_LABEL_TYPE) { payload, context ->
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val containerId = buf.readVarInt()
+            val label = buf.readUtf()
+            val tags = buf.readVarInt()
+            context.client().execute { HoldLabelClient.accept(containerId, label, tags) }
+        }
         ClientPlayNetworking.registerGlobalReceiver(MESSAGE_TYPE) { payload, context ->
             val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
             val kind = PathMessages.Kind.entries.getOrElse(buf.readByte().toInt()) { PathMessages.Kind.GOOD }
             val text = buf.readUtf()
+            val seconds = buf.readFloat()
             context.client().execute {
                 if (kind == PathMessages.Kind.PROMPT) PathHud.prompt(Component.literal(text))
-                else PathHud.add(Component.literal(text), kind.argb)
+                else PathHud.add(Component.literal(text), kind.argb, seconds)
             }
         }
     }

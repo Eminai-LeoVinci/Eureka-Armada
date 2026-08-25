@@ -5,6 +5,7 @@ import net.minecraft.server.level.ServerLevel
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipBearing
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.util.logger
 
@@ -125,6 +126,24 @@ object CrewStations {
             }
         }
         return wheels
+    }
+
+    /**
+     * "n of total" for the wheel at [pos] on its own hull, packed for the helm menu's synced int.
+     *
+     * Counted per HULL rather than armada-wide, unlike the guns and holds. A wheel is a hull's control point
+     * and an armada child keeps its own -- "Helm: 1/1" on a tender under tow is the true and useful answer,
+     * where numbering it 7 of 12 across a whole fleet would tell a captain nothing they could act on.
+     *
+     * Reads through [ShipBearing] so a wheel counts from the bow like everything else, and falls back to the
+     * raw sweep order on a hull with no claimed station -- which is exactly the hull where a captain is most
+     * likely to be looking at wheels and deciding which to claim.
+     */
+    fun numberAt(level: ServerLevel, ship: LoadedServerShip, pos: BlockPos): Int {
+        val wheels = helmsAboard(level, ship) ?: return 0
+        val ordered = ShipBearing.flatRunOrder(ShipBearing.forwardOf(level, ship), wheels) { it.blockPos }
+        val index = ordered.indexOfFirst { it.blockPos == pos }
+        return ShipBearing.packNumber(index + 1, ordered.size)
     }
 
     /**

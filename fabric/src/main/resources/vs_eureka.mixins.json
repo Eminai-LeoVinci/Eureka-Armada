@@ -4,6 +4,8 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "MixinAnvilFreeRename",
+    "MixinBlockEntityHoldTags",
+    "MixinChestMenuHoldTags",
     "MixinCrewNoWheelVisit",
     "MixinCrewNoWorkAtWheel",
     "MixinCrewProjectileBoost",
@@ -20,6 +22,7 @@
   "client": [
     "client.MixinRaycastUtils",
     "client.MixinCameraSubAir",
+    "client.MixinContainerScreenHoldLabel",
     "client.MixinEntityRenderStateCrewPlate",
     "client.MixinEntityRendererCrewNameTag",
     "client.MixinHumanoidGunnerPose",

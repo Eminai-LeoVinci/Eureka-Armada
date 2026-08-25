@@ -789,6 +789,17 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             }
         }
 
+        // Which of this hull's wheels you are standing at. A big ship carries several and they are identical
+        // to look at, so "Helm: 2/8" is the difference between giving an order and guessing. Right-aligned on
+        // the title strip, clear of the name and its Rename control; absent on a wheel that is not on a ship,
+        // because an unassembled wheel is not one of anything yet.
+        menu.helmNumber?.let { number ->
+            val text = "Helm: $number"
+            guiGraphics.drawString(
+                font, text, PANEL_WIDTH - PANEL_RIGHT_MARGIN - font.width(text), titleLabelY, INFO_TEXT, false
+            )
+        }
+
         val s = ship ?: return
 
         // Bottom-left info boxes -- the same three whatever the ship is. The "from Damage" suffixes appear

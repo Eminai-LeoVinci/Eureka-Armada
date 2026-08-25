@@ -12,6 +12,7 @@ import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
 import org.valkyrienskies.eureka.command.AssemblerPreferences
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.ship.ControlProfile
+import org.valkyrienskies.eureka.ship.ShipBearing
 import kotlin.math.roundToInt
 
 class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEntity: ShipHelmBlockEntity?) :
@@ -79,6 +80,12 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
     private var syncedKeepName = true    // does this WHEEL re-apply the last ship name it saw
     private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
+    private var syncedHelmNumber = 0    // this wheel's "n of total" on its hull; 0 = not aboard a ship
+
+    /** "2/8" for the header, or null when this wheel is not on a ship and so is not one of anything. */
+    val helmNumber: String?
+        get() = ShipBearing.unpackNumber(blockEntity?.fittingNumber ?: syncedHelmNumber)
+
     init {
         addDataSlot(object : DataSlot() {
             override fun get(): Int = if (blockEntity?.keepActive ?: syncedKeepActive) 1 else 0
@@ -274,6 +281,14 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
                 return f
             }
             override fun set(value: Int) { syncedArmadaParent = value }
+        })
+        // APPENDED, and it must stay last: data slots are matched by index, so inserting one anywhere
+        // above would renumber every slot after it. Stamped once at open (see
+        // ShipHelmBlockEntity.fittingNumber) rather than recomputed here -- this getter runs on every
+        // broadcast, and a hull walk at that rate would be absurd for a label that never moves.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.fittingNumber ?: 0
+            override fun set(value: Int) { syncedHelmNumber = value }
         })
     }
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive

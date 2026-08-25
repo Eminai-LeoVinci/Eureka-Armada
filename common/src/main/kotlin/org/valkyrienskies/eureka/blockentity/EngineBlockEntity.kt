@@ -24,6 +24,7 @@ import org.valkyrienskies.eureka.EurekaProperties.HEAT
 import org.valkyrienskies.eureka.gui.engine.EngineScreenMenu
 import org.valkyrienskies.eureka.registry.FuelRegistry
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipEngines
 import org.valkyrienskies.eureka.util.KtContainerData
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import kotlin.math.ceil
@@ -38,11 +39,29 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     private var heatLevel by data
     private var fuelLeft by data
     private var fuelTotal by data
+
+    /**
+     * This engine's "n of total" aboard, packed through [org.valkyrienskies.eureka.ship.ShipBearing.packNumber];
+     * 0 when it is not on a ship. Refreshed in [createMenu] -- open time is the one moment it is wanted, the
+     * number only moves when engines are added or removed, and a whole-ship walk per tick to keep a label
+     * current would be absurd.
+     *
+     * DECLARATION ORDER MATTERS: [data] hands out slot indices in declaration order and [EngineScreenMenu]
+     * mirrors this class field for field. Append here, and append there to match.
+     */
+    var fittingNumber by data
     var fuel: ItemStack = ItemStack.EMPTY
     private var lastFuelValue = 1600; // coal: 1600
 
-    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu =
-        EngineScreenMenu(containerId, inventory, this)
+    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu {
+        // Stamp this engine's number just before the menu syncs it; see [fittingNumber].
+        val level = this.level
+        if (level is ServerLevel) {
+            val ship = level.getLoadedShipManagingPos(blockPos) as? LoadedServerShip
+            fittingNumber = ship?.let { ShipEngines.numberAt(level, it, blockPos) } ?: 0
+        }
+        return EngineScreenMenu(containerId, inventory, this)
+    }
 
     override fun getDefaultName(): Component = Component.translatable("gui.vs_eureka.engine")
 

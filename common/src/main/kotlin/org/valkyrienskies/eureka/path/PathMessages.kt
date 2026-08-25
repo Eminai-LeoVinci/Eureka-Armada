@@ -46,12 +46,22 @@ object PathMessages {
     /** Installed by the loader's networking layer. Null until then, and on any loader that hasn't got one. */
     @Volatile
     @JvmStatic
-    var sender: ((ServerPlayer, String, Kind) -> Unit)? = null
+    var sender: ((ServerPlayer, String, Kind, Double) -> Unit)? = null
 
-    fun send(player: ServerPlayer, message: String, kind: Kind) {
+    /**
+     * Say [message] on the HUD.
+     *
+     * [seconds] overrides how long this one line holds; 0 means "whatever the player configured". It is a
+     * per-message argument rather than a new [Kind] on purpose -- kinds mean what a message IS, and the two
+     * times timing has been smuggled into one of them it has gone wrong (see [Kind.PROMPT]). Some lines are
+     * simply more perishable than others: a restock report is worth two seconds and worth getting out of the
+     * way, and that is a property of the report, not of it being good news.
+     */
+    @JvmOverloads
+    fun send(player: ServerPlayer, message: String, kind: Kind, seconds: Double = 0.0) {
         val installed = sender
         if (installed != null) {
-            installed(player, message, kind)
+            installed(player, message, kind, seconds)
         } else {
             player.displayClientMessage(Component.literal(message).withStyle(kind.formatting), true)
         }

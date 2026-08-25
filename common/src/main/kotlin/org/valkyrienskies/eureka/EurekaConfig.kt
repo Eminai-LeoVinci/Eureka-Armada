@@ -1104,6 +1104,19 @@ object EurekaConfig {
         var crewPassagePearls = 1
 
         // region Cannons
+        @JsonSchema(
+            description = "Show the two-line receipt after a restock or refuel -- how many guns were loaded, " +
+                "and which numbered chests the stock came out of and went back into. Turn off for a quieter " +
+                "HUD; the restock itself is unaffected. Default true."
+        )
+        var restockMessages = true
+
+        @JsonSchema(
+            description = "How long the restock receipt holds on the HUD, in seconds. Deliberately shorter " +
+                "than ordinary messages: it is a receipt, read once and then clutter. Default 2.0."
+        )
+        var restockMessageSeconds = 2.0
+
         // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
         // the three carries its OWN four numbers, repeated below rather than scaled off one base arc.
         //

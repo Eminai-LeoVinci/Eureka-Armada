@@ -416,7 +416,8 @@ object CrewOperations {
             PathMessages.send(player, "Every magazine is already full.", PathMessages.Kind.WARN)
             return
         }
-        var avail = ShipStores.count(level, op.ship) { it.`is`(Items.GUNPOWDER) }
+        val stores = ShipStores.manifest(level, op.ship)
+        var avail = stores.count { it.`is`(Items.GUNPOWDER) }
         if (avail == 0) {
             PathMessages.send(player, "No gunpowder in the holds.", PathMessages.Kind.WARN)
             return
@@ -452,11 +453,13 @@ object CrewOperations {
 
         var moved = 0
         var touched = 0
+        val fromBoxes = LinkedHashSet<String>()
         for (named in order) {
             val quota = grant[named.gun] ?: continue
-            val got = ShipStores.withdraw(level, op.ship, { it.`is`(Items.GUNPOWDER) }, quota)
-            if (got == 0) break
-            val stack = ItemStack(Items.GUNPOWDER, got)
+            val draw = stores.withdraw(HoldTag.GUNPOWDER, { it.`is`(Items.GUNPOWDER) }, quota)
+            if (draw.taken == 0) break
+            fromBoxes.addAll(draw.from)
+            val stack = ItemStack(Items.GUNPOWDER, draw.taken)
             val loaded = named.gun.load(stack, true)
             if (loaded > 0) {
                 moved += loaded
@@ -465,14 +468,17 @@ object CrewOperations {
             if (!stack.isEmpty) {
                 // The gun would not take what the holds gave (should not happen -- room was measured);
                 // whatever is left goes back rather than vanishing.
-                ShipStores.deposit(level, op.ship, stack)
+                stores.deposit(HoldTag.GUNPOWDER, stack)
             }
         }
 
         if (moved == 0) {
             PathMessages.send(player, "No gunpowder in the holds.", PathMessages.Kind.WARN)
         } else {
-            PathMessages.send(player, "Distributed $moved powder over $touched guns, evenly.", PathMessages.Kind.GOOD)
+            report(player, "Distributed $moved powder over $touched guns, evenly.")
+            Receipt().apply {
+                took(mapOf(ItemStack(Items.GUNPOWDER).hoverName.string to moved), fromBoxes.toList())
+            }.send(player)
         }
         pushStores(op)
     }
@@ -515,8 +521,19 @@ object CrewOperations {
             .mapNotNullTo(HashSet()) { it.station }
         val chosen = ItemStack(EurekaItems.cannonball(ball, charge))
 
+        // One walk of the ship, spent over every gun below. The old code took a fresh armada-wide chunk walk
+        // per gun, so a sixty-gun broadside read every container sixty times -- and now that each read also
+        // numbers and tag-sorts the holds, doing that would have turned a bad number into a silly one.
+        val stores = ShipStores.manifest(level, op.ship)
+
         var moved = 0
         var swapped = 0
+        val loaded = HashSet<Long>()
+        val took = LinkedHashMap<String, Int>()
+        val sent = LinkedHashMap<String, Int>()
+        val fromBoxes = LinkedHashSet<String>()
+        val intoBoxes = LinkedHashSet<String>()
+
         for (named in guns) {
             val gun = named.gun
             val wantRef: ItemStack
@@ -527,31 +544,42 @@ object CrewOperations {
                 wantRef = chosen
                 if (!gun.shot.isEmpty && !ItemStack.isSameItemSameComponents(gun.shot, chosen)) {
                     val out = gun.shot
+                    val name = out.hoverName.string
+                    val count = out.count
                     gun.shot = ItemStack.EMPTY
                     gun.setChanged()
-                    val rest = ShipStores.deposit(level, op.ship, out)
-                    if (!rest.isEmpty) dropAtGun(level, op.ship, gun, rest)
+                    val paid = stores.deposit(HoldTag.CANNONBALLS, out)
+                    sent.merge(name, count - paid.leftover.count, Int::plus)
+                    intoBoxes.addAll(paid.into)
+                    if (!paid.leftover.isEmpty) dropAtGun(level, op.ship, gun, paid.leftover)
                     swapped++
                 }
             }
 
             val need = CannonBlockEntity.MAGAZINE_CAPACITY - gun.shot.count
             if (need <= 0) continue
-            val got = ShipStores.withdraw(
-                level, op.ship, { ItemStack.isSameItemSameComponents(it, wantRef) }, need
+            val draw = stores.withdraw(
+                HoldTag.CANNONBALLS, { ItemStack.isSameItemSameComponents(it, wantRef) }, need
             )
-            if (got > 0) {
-                if (gun.shot.isEmpty) gun.shot = wantRef.copyWithCount(got) else gun.shot.grow(got)
+            if (draw.taken > 0) {
+                if (gun.shot.isEmpty) gun.shot = wantRef.copyWithCount(draw.taken) else gun.shot.grow(draw.taken)
                 gun.setChanged()
-                moved += got
+                moved += draw.taken
+                loaded.add(gun.blockPos.asLong())
+                took.merge(wantRef.hoverName.string, draw.taken, Int::plus)
+                fromBoxes.addAll(draw.from)
             }
         }
 
-        val swaps = if (swapped == 0) "" else " ($swapped guns re-armed)"
         if (moved == 0 && swapped == 0) {
             PathMessages.send(player, "Nothing to load -- the holds have none and the guns are full.", PathMessages.Kind.WARN)
         } else {
-            PathMessages.send(player, "Distributed $moved shot$swaps.", PathMessages.Kind.GOOD)
+            val what = if (took.size == 1) took.keys.first() else chosen.hoverName.string
+            report(player, "${loaded.size} cannons were reloaded with $what.")
+            Receipt().apply {
+                took(took, fromBoxes.toList())
+                sent(sent, intoBoxes.toList())
+            }.send(player)
         }
         pushStores(op)
     }
@@ -713,7 +741,10 @@ object CrewOperations {
             return
         }
 
-        val fuels = ShipStores.tally(level, op.ship).fuels
+        // One walk, spent over the loops below -- which are worse than the gun deck's: a pass per fuel kind,
+        // and a count plus a withdrawal per engine inside each.
+        val stores = ShipStores.manifest(level, op.ship)
+        val fuels = ShipStores.tally(stores).fuels
         if (fuels.isEmpty()) {
             PathMessages.send(player, "No fuel in the holds.", PathMessages.Kind.WARN)
             return
@@ -721,6 +752,7 @@ object CrewOperations {
 
         val stoked = HashSet<Long>()
         val spent = LinkedHashMap<String, Int>()
+        val fromBoxes = LinkedHashSet<String>()
 
         for (kind in fuels) {
             val item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(kind.itemId)).orElse(null) ?: continue
@@ -736,7 +768,7 @@ object CrewOperations {
                     }
                 }
                 if (eligible.isEmpty()) break
-                val avail = ShipStores.count(level, op.ship, matches)
+                val avail = stores.count(matches)
                 if (avail == 0) break
 
                 val share = avail / eligible.size
@@ -744,17 +776,35 @@ object CrewOperations {
                 var movedThisPass = 0
 
                 for ((index, engine) in eligible.withIndex()) {
-                    val quota = share + if (index < remainder) 1 else 0
+                    // Never draw more than this engine can actually swallow.
+                    //
+                    // The share is how a SHORT supply is spread evenly; it is not a quota to be met. Taking
+                    // it literally is what emptied a magazine: with 93,806 coal and 102 engines the share is
+                    // 919, so each engine was handed 919 blocks, accepted 64, and had 855 paid straight back
+                    // into the holds as LOOSE stacks -- draining every shulker aboard to do it, and
+                    // converting a tidy magazine into a thousand loose stacks that then would not fit.
+                    val room = when {
+                        engine.fuel.isEmpty -> ref.maxStackSize
+                        else -> ref.maxStackSize - engine.fuel.count
+                    }
+                    val quota = minOf(share + if (index < remainder) 1 else 0, room)
                     if (quota <= 0) continue
-                    val got = ShipStores.withdraw(level, op.ship, matches, quota)
-                    if (got == 0) break
-                    val stack = ItemStack(item, got)
+                    val draw = stores.withdraw(HoldTag.FUEL, matches, quota)
+                    if (draw.taken == 0) break
+                    fromBoxes.addAll(draw.from)
+                    val stack = ItemStack(item, draw.taken)
                     val loaded = engine.load(stack, true)
                     if (loaded > 0) {
                         movedThisPass += loaded
                         stoked.add(engine.blockPos.asLong())
                     }
-                    if (!stack.isEmpty) ShipStores.deposit(level, op.ship, stack)
+                    // Whatever the engine would not take goes back, and what the HOLDS will not take is
+                    // dropped at the engine rather than discarded. The leftover used to be thrown away with
+                    // the return value: fuel a captain owned, deleted because there was no room for it.
+                    if (!stack.isEmpty) {
+                        val back = stores.deposit(HoldTag.FUEL, stack)
+                        if (!back.leftover.isEmpty) dropAtEngine(level, op.ship, engine, back.leftover)
+                    }
                 }
 
                 if (movedThisPass == 0) break
@@ -766,7 +816,8 @@ object CrewOperations {
             PathMessages.send(player, "Every engine is already stoked full.", PathMessages.Kind.WARN)
         } else {
             val bill = spent.entries.joinToString(", ") { (name, n) -> "$n $name" }
-            PathMessages.send(player, "Stoked ${stoked.size} engines: $bill.", PathMessages.Kind.GOOD)
+            report(player, "Stoked ${stoked.size} engines: $bill.")
+            Receipt().apply { took(spent, fromBoxes.toList()) }.send(player)
         }
         pushStores(op)
     }
@@ -788,6 +839,52 @@ object CrewOperations {
      * The same authority every manifest action answers to: the wheel resolves, holds articles, and the
      * captain is within reach of it or standing anywhere on its armada.
      */
+    /**
+     * The second line of a restock: what moved, and which numbered boxes it moved between.
+     *
+     * Two lines rather than one because they answer different questions. The first says whether the order was
+     * carried out ("60 cannons reloaded"); this one says where the ship's stock actually WENT, which is the
+     * half a captain needs when the answer is "not where I meant it to". Sent immediately after the first so
+     * they read as a pair, and both expire quickly -- a receipt is worth the moment it takes to read.
+     *
+     * Silent when nothing moved, and silent when the captain has turned receipts off.
+     */
+    private class Receipt {
+        private val parts = ArrayList<String>(2)
+
+        fun took(items: Map<String, Int>, from: List<String>) = note(items, "taken from", from)
+
+        fun sent(items: Map<String, Int>, into: List<String>) = note(items, "sent to", into)
+
+        /**
+         * A map because one order can move several kinds: a battery of locked guns each refills with its own
+         * round, and a swap-out empties whatever each gun happened to be holding. Reporting only the biggest
+         * pile would quietly hide the ammunition a captain is most likely to be looking for.
+         */
+        private fun note(items: Map<String, Int>, verb: String, boxes: List<String>) {
+            val moved = items.filterValues { it > 0 }
+            if (moved.isEmpty() || boxes.isEmpty()) return
+            val what = moved.entries.joinToString(", ") { (name, count) -> "%,d %s".format(count, name) }
+            // More than one box is the interesting case and the one worth spelling out: it means a room ran
+            // out mid-order, which is exactly what a captain would want to go and look at.
+            parts.add("$what $verb ${boxes.joinToString(", ")}")
+        }
+
+        fun send(player: ServerPlayer) {
+            if (parts.isEmpty() || !EurekaConfig.SERVER.restockMessages) return
+            PathMessages.send(
+                player, parts.joinToString("  |  "),
+                PathMessages.Kind.GOOD, EurekaConfig.SERVER.restockMessageSeconds
+            )
+        }
+    }
+
+    /** The first line of a restock. Same gate and same short life as the receipt it precedes. */
+    private fun report(player: ServerPlayer, message: String) {
+        if (!EurekaConfig.SERVER.restockMessages) return
+        PathMessages.send(player, message, PathMessages.Kind.GOOD, EurekaConfig.SERVER.restockMessageSeconds)
+    }
+
     private fun gate(level: ServerLevel, player: ServerPlayer, helm: Long): Op? {
         val station = CrewManifest.stationAt(level, player, helm) ?: return null
         val crewId = CrewManifest.crewIdFor(player, station) ?: return null
@@ -966,6 +1063,21 @@ object CrewOperations {
         if (degrees > 0) "+${degrees.toInt()}°" else "${degrees.toInt()}°"
 
     /** What the holds would not take back lands at the gun -- visible, retrievable, never voided. */
+    /** Fuel the holds would not take back, put on the deck beside the engine rather than deleted. */
+    private fun dropAtEngine(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        engine: org.valkyrienskies.eureka.blockentity.EngineBlockEntity,
+        stack: ItemStack
+    ) {
+        val world = ship.shipToWorld.transformPosition(
+            Vector3d(engine.blockPos.x + 0.5, engine.blockPos.y + 1.0, engine.blockPos.z + 0.5)
+        )
+        val drop = ItemEntity(level, world.x, world.y, world.z, stack)
+        drop.setDefaultPickUpDelay()
+        level.addFreshEntity(drop)
+    }
+
     private fun dropAtGun(level: ServerLevel, ship: LoadedServerShip, gun: CannonBlockEntity, stack: ItemStack) {
         val world = ship.shipToWorld.transformPosition(
             Vector3d(gun.blockPos.x + 0.5, gun.blockPos.y + 1.0, gun.blockPos.z + 0.5)

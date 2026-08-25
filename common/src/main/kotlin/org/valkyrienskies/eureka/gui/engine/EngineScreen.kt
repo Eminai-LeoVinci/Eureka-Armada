@@ -7,6 +7,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.player.Inventory
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.ship.ShipBearing
 
 class EngineScreen(handler: EngineScreenMenu, playerInventory: Inventory, text: Component) :
     AbstractContainerScreen<EngineScreenMenu>(handler, playerInventory, text) {
@@ -69,11 +70,31 @@ class EngineScreen(handler: EngineScreenMenu, playerInventory: Inventory, text: 
         layer(0, 0, 0, 0, imageWidth, imageHeight)
     }
 
+    /**
+     * The engine's number, and nothing else.
+     *
+     * `super` is deliberately not called: the vanilla labels are the container name and "Inventory", and this
+     * screen's art has no room reserved for either. What a captain actually needs here is which of their
+     * engines this one is -- an engine room is a wall of identical fireboxes, and "Engine: 14/35" is the
+     * difference between reporting a cold engine and reporting THAT cold engine.
+     *
+     * Drawn only when the engine is aboard a ship; a firebox on land is not one of anything.
+     */
     override fun renderLabels(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
-        // super.renderLabels(poseStack, mouseX, mouseY)
+        val number = ShipBearing.unpackNumber(menu.fittingNumber) ?: return
+        guiGraphics.drawString(font, "Engine: $number", NUMBER_X, NUMBER_Y, NUMBER_COLOUR, false)
     }
 
-    companion object { // TEXTURE DATA -- all in the atlas's own 512x512 pixel space
+    companion object {
+        // Top-left of the panel, clear of the fire hole and the fuel slot.
+        private const val NUMBER_X = 8
+        private const val NUMBER_Y = 6
+        // 0xFF..., NOT the bare 0x404040 that vanilla's own label calls use. GuiGraphics honours the alpha
+        // byte, so a colour written without one is fully TRANSPARENT -- the text draws, occupies its space,
+        // and is simply never seen. Every colour constant in this mod carries its alpha for this reason.
+        private const val NUMBER_COLOUR = 0xFF404040.toInt()
+
+        // TEXTURE DATA -- all in the atlas's own 512x512 pixel space
         internal val TEXTURE = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "textures/gui/engine.png")
 
         private const val TEXTURE_SIZE = 512

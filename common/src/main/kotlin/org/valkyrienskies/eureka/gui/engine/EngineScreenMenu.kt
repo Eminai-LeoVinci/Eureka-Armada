@@ -24,6 +24,9 @@ class EngineScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Engin
     var fuelLeft by data
     var fuelTotal by data
 
+    /** Mirrors `EngineBlockEntity.fittingNumber`; must stay LAST, exactly as it is there. */
+    var fittingNumber by data
+
     init {
         // Add the fuel slot
         addSlot(FuelSlot(container, 0, 80, 57, playerInv.player.level().fuelValues()))
