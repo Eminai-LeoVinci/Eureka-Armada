@@ -223,7 +223,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         set(value) { rememberedFireMode = value }
 
     /** The round the shot restock will load. Defaults to the holds' most plentiful when stores arrive. */
-    private var selectedAmmo: Pair<Cannonball, CannonCharge>? = null
+    /**
+     * The round the Operations tab is set to load, remembered for as long as the player is in a world.
+     *
+     * Delegates to the companion for exactly the reason the crew counts and sides do: the manifest is built
+     * fresh every time the book opens, so a captain who picked their round, closed it and opened it again
+     * found the choice quietly back on something else. Which round you are loading is a standing habit, not
+     * a property of the ship in front of you.
+     *
+     * Reset by [forgetModes] when the connection drops, so it lives exactly as long as the voyage does.
+     */
+    private var selectedAmmo: Pair<Cannonball, CannonCharge>?
+        get() = rememberedAmmo
+        set(value) {
+            rememberedAmmo = value
+        }
     private var ammoMenuOpen = false
     private var ammoMenuScroll = 0
 
@@ -2086,7 +2100,15 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         BuiltInRegistries.ITEM.getOptional(Identifier.parse(itemId)).map { ItemStack(it).hoverName.string }
             .orElse(itemId)
 
-    /** A fresh count of the holds. Also picks a default round -- the most plentiful -- if none is chosen. */
+    /**
+     * A fresh count of the holds. Also picks a default round if none is chosen, or if the chosen one is no
+     * longer aboard.
+     *
+     * The default is the TOP OF THE LIST rather than the most plentiful pile. A remembered choice now
+     * survives every re-open (see [selectedAmmo]), so this only runs on a cold start or after the holds have
+     * genuinely lost that round -- and in both cases a predictable first entry beats one that moves as the
+     * magazine drains.
+     */
     private fun acceptStoresNow(next: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
         stores = next
         deckCounts = decks
@@ -2094,7 +2116,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         val chosen = selectedAmmo
         val stillThere = chosen != null && next.ammo.any { it.ball == chosen.first && it.charge == chosen.second }
         if (!stillThere) {
-            selectedAmmo = next.ammo.maxByOrNull { it.count }?.let { it.ball to it.charge }
+            selectedAmmo = next.ammo.firstOrNull()?.let { it.ball to it.charge }
         }
         // A deck that stopped existing -- guns torn out, the ship rebuilt under the open book -- falls
         // back to All rather than pointing an order at nothing.
@@ -2755,6 +2777,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private var rememberedCtrlSide = CrewOperations.Side.BOTH
         private var rememberedShotSide = CrewOperations.Side.BOTH
 
+        /** The round chosen in the ammunition dropdown. Null means "not chosen yet"; see [selectedAmmo]. */
+        private var rememberedAmmo: Pair<Cannonball, CannonCharge>? = null
+
         /** Every remembered order back to its default. Called when the client disconnects. */
         fun forgetModes() {
             rememberedCrewMode = CrewOperations.AssignMode.KEEP
@@ -2764,6 +2789,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             rememberedCrewSide = CrewOperations.Side.BOTH
             rememberedCtrlSide = CrewOperations.Side.BOTH
             rememberedShotSide = CrewOperations.Side.BOTH
+            rememberedAmmo = null
         }
 
         /** Open a manifest, or fold a fresh one into the manifest already on screen for that same wheel. */
