@@ -1780,15 +1780,18 @@ object EurekaConfig {
         )
         var pirateZoneMinRadius = 40.0
 
-        @JsonSchema(
-            description = "Whether a proximity ring is capped at the distance a sleeping ship can actually " +
-                "notice you from. A dormant site only wakes while its wheel is ticking, which happens only " +
-                "inside a player's simulation distance -- so on a large hull the size-scaled ring reaches " +
-                "past that and its outer band is decoration you can cross with nothing stirring. On, the " +
-                "ring means one thing again: inside it she wakes. Off, the ring is drawn at its full " +
-                "configured size and the outer part of it is a promise the site cannot keep. Default true."
-        )
-        var pirateZoneClampToSimulationDistance = true
+        // REMOVED: pirateZoneClampToSimulationDistance.
+        //
+        // It capped every ring at the player's simulation distance, because a sleeping site could only
+        // notice anyone while its wheel was ticking and a wheel ticks only inside that distance. The cap was
+        // honest then and is obsolete now: sleeping sites are found in the PERSISTED store and measured
+        // against the player directly, with no wheel and no loaded chunk (see `PirateShips.scanZones`).
+        //
+        // Worth remembering WHY it had to go rather than merely defaulting off: while it was on it silently
+        // ate `pirateZoneScale`, so raising the scale did nothing on any ordinary simulation distance. A
+        // setting that appears broken is worse than one that is documented as overridden, and leaving the
+        // lever in place would have left the trap in place with it. Jackson ignores unknown keys, so an
+        // existing vs_eureka.json carrying the old entry loads fine and the entry is dropped on next write.
 
         @JsonSchema(
             description = "How many seconds a player standing inside a pirate ship's zone is given to get " +

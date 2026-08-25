@@ -892,7 +892,7 @@ it ships. Kept as one register so nothing has to be remembered — grep `DEV ONL
 | `/armada debug` | Armada bond recompute readout | Diagnostic output only. |
 | `/vs cruise-cancel-debug <bool>` | Cruise-cancel tracing | Single-player only by construction; no gameplay use. |
 | `/vs pocket-occluder`, `-debug`, `-status` | Sub-air occluder toggles | Existed to A/B the occluder without relaunching; the setting should be config, not a command. |
-| `/vs pirate set-mark\|capture\|list\|arm\|regen` | The pirate machinery's harness | Mints unobtainable helm states; `capture` is the authoring pen. Authoring is a dev activity. |
+| `/vs pirate set-mark\|capture\|list\|arm\|regen\|prune` | The pirate machinery's harness | Mints unobtainable helm states; `capture` is the authoring pen. Authoring is a dev activity. `prune` deletes persisted berths and exists to clean up after a bug that is now fixed. |
 | `/vs pirate aim <x> <y> <z>` | The gunnery test bench | Fires every gun of the ship you stand on at a point; a free broadside on demand. |
 | `/vs pirate-zones <bool>` | Pirate proximity wireframe | Client toggle + `PirateZoneRenderer`; the finished feature has no visible zone. |
 | `/vs cannon-range <bool>` | Cannon engage-range wireframe | Client toggle + `CannonRangeRenderer`; the bench's picture, not a player HUD. |

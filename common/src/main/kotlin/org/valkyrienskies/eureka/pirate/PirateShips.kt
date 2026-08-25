@@ -135,9 +135,23 @@ object PirateShips {
         // Only for a wheel still standing in the WORLD. An assembled ship reports from shipyard coordinates,
         // and a berth adopted there would record a spawn site out in the shipyard where nothing can ever
         // regenerate.
+        //
+        // A REMOVED block entity is not a competitor, and forgetting that is what made the rings multiply.
+        // Disassembly relocates the wheel out of the shipyard and back into the world, and a relocation
+        // REBUILDS the block entity from a saved tag -- so the wheel that comes back is a different object
+        // from the one that has been reporting, standing in the world (shipId == null) with the old report
+        // still inside STALE_TICKS. Every one of the three tests above passed, the ship disowned its own
+        // site, and adopt() minted a fresh berth wherever she happened to come apart. The abandoned berth
+        // stays BERTHED forever and keeps drawing its dormant ring, so the zones pile up one per teardown --
+        // exactly where teardowns happen, which is how it was spotted.
+        //
+        // Assembly never showed it: that path leaves the wheel ON a ship, so `shipId == null` is false and
+        // this whole block is skipped.
         if (berthId != null && shipId == null) {
             val holder = reports[berthId]
-            if (holder != null && holder.helm !== helm && level.gameTime - holder.lastSeen <= STALE_TICKS) {
+            if (holder != null && holder.helm !== helm && !holder.helm.isRemoved &&
+                level.gameTime - holder.lastSeen <= STALE_TICKS
+            ) {
                 berthId = null
             }
         }
@@ -428,26 +442,95 @@ object PirateShips {
         return spheres
     }
 
+    /**
+     * Every sleeping site, measured against the players, once per ten ticks.
+     *
+     * ## Why a sleeping ship no longer needs a ticking wheel
+     * A dormant berth used to be invisible here until its wheel's chunk came inside simulation distance and
+     * the block entity began to tick. That made the proximity ring a promise the feature could not keep at
+     * any useful size, and it forced a captain to raise their simulation distance to make their own config
+     * setting mean anything. Nothing about the ring actually needs the wheel: [PirateStore] persists where
+     * it was last seen, how big the hull is and which template it came from, and this manager ticks from
+     * `END_WORLD_TICK`, which runs for the level whatever is or is not loaded in it. The wheel is fetched
+     * exactly once, at the end, to assemble -- see [materialiseDormant].
+     *
+     * ## One sleeping site, ONE ring
+     * The loop walks the STORE, not the reports, and that is load-bearing rather than tidy. The first cut
+     * kept the old report-driven sweep and bolted a store-driven one beside it, each skipping what the other
+     * owned. A sleeping site then had two different definitions of its own ring -- one centred on the live
+     * wheel's position, one on the berth's remembered position -- and ownership flipped between them every
+     * time the report crossed [STALE_TICKS], which is two seconds. Every flip re-asked "is anyone inside?"
+     * of a slightly different sphere, and a disagreement made one sweep CANCEL the countdown that the other
+     * had just started. In game that read as a timer resetting about once a second and a ring flickering
+     * between colours, which is exactly what it was.
+     *
+     * A site that is genuinely awake -- a fresh report carrying a ship id -- is skipped: it has a hull in
+     * the world and [zoneOf] draws it from that. Everything else is asleep and is measured from its papers,
+     * whether or not its wheel happens to be ticking at this instant.
+     */
     private fun scanZones(level: ServerLevel, now: Long) {
         val store = PirateStore.get(level)
-        for ((berthId, report) in reports) {
-            if (now - report.lastSeen > STALE_TICKS) continue
-            val berth = store.berth(berthId) ?: continue
+        if (store.allBerths.isEmpty()) return
+
+        for ((berthId, berth) in store.allBerths) {
             if (berth.state != PirateStore.BERTHED) continue
-            if (report.shipId != null) continue // already awake (or conquered-in-place); nothing to arm
             if (berthId in arming) continue
+
+            val report = reports[berthId]?.takeIf { now - it.lastSeen <= STALE_TICKS }
+            if (report?.shipId != null) continue // already awake (or conquered-in-place); nothing to arm
             // A TAKEN wheel is a dead crew's wheel: the ship stays quiet until they respawn or it is
-            // conquered. A ghost ship rising to give crewless chase reads as a bug, not a haunting.
-            if (report.helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE) continue
-
-            val zone = zoneOf(level, berthId, report) ?: continue
-
-            if (trespasserIn(level, zone) == null) {
-                countdowns.remove(berthId)
+            // conquered. A ghost ship rising to give crewless chase reads as a bug, not a haunting. Only
+            // answerable when the wheel is actually loaded; a site too far away to read is assumed willing.
+            if (report != null &&
+                report.helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE
+            ) {
                 continue
             }
-            countdowns.putIfAbsent(berthId, now + EurekaConfig.SERVER.pirateCountdownSeconds * 20L)
+
+            val zone = dormantZone(level, berthId, berth)
+            if (trespasserIn(level, zone) == null) {
+                // Only interesting when a countdown was actually running: that is the flicker, and this
+                // says which of trespasserIn's three tests dropped it.
+                if (countdowns.remove(berthId) != null) explainNoTrespass(level, berthId, zone)
+                continue
+            }
+            if (countdowns.putIfAbsent(
+                    berthId, now + EurekaConfig.SERVER.pirateCountdownSeconds * 20L
+                ) == null
+            ) {
+                logger.info("[pirates] berth {} countdown STARTED (zone r={})", berthId, zone.radius.toInt())
+            }
         }
+    }
+
+    /**
+     * Fetch a sleeping site's wheel, loading its chunk to do it, and file a report so the rest of the
+     * pipeline can proceed exactly as it does for a wheel that was ticking all along.
+     *
+     * Called ONLY at the moment a countdown fires. That timing is the whole reason this is affordable: the
+     * ring is measured from the store for the entire approach and the entire countdown, and a chunk is
+     * pulled in once, for one site, at the instant a ship is about to exist anyway.
+     *
+     * Returns null when the site is not there any more -- the wheel mined out, the chunk unreadable, or the
+     * block no longer a pirate wheel. That is a dead berth, and the caller drops the countdown rather than
+     * retrying into the void forever.
+     */
+    private fun materialiseDormant(level: ServerLevel, berthId: Long, berth: PirateStore.Berth, now: Long): Report? {
+        val pos = BlockPos.of(berth.lastPos)
+        // getChunk, not getChunkNow: this site is asleep precisely because nothing is holding its chunk
+        // open, so "is it loaded?" is a question with a known and useless answer.
+        level.getChunk(pos.x shr 4, pos.z shr 4)
+
+        val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: run {
+            logger.info("[pirates] berth $berthId has no wheel at ${pos.toShortString()}; countdown dropped")
+            return null
+        }
+        if (helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE) return null
+
+        val report = Report(pos, level.getLoadedShipManagingPos(pos)?.id, now, helm)
+        reports[berthId] = report
+        logger.info("[pirates] woke dormant berth $berthId at ${pos.toShortString()} out of the store")
+        return report
     }
 
     /**
@@ -527,6 +610,35 @@ object PirateShips {
      * VS2's own per-face default -- the same server-side stand-in for the client influence border that
      * carries a thrown bottle with a moving deck.
      */
+    /**
+     * Say why nobody counted as inside [zone], for the one case that matters: a countdown that had started
+     * and has just been dropped. That is the flicker, and it is invisible from outside -- [trespasserIn]
+     * fails three separate tests and returns the same null for all of them.
+     *
+     * Prints one line per LOADED ship with each test's answer, so the log says whether the ring missed the
+     * hull, the player left the hull's influence, or the ship was skipped as a pirate's. DEV ONLY, and it
+     * only ever fires on a real cancellation, so a settled zone is silent.
+     */
+    private fun explainNoTrespass(level: ServerLevel, berthId: Long, zone: Zone) {
+        val dimension = level.dimensionId
+        val players = level.players().filter { it.isAlive && !it.isSpectator }
+        val detail = StringBuilder()
+        for (ship in level.shipObjectWorld.loadedShips) {
+            if (ship.chunkClaimDimension != dimension) continue
+            val box = ship.worldAABB
+            val aboard = players.count { withinInfluence(it, box) }
+            detail.append(
+                " [ship=${ship.id} touches=${zone.touches(box)} aboard=$aboard pirate=${ship.id in chases}]"
+            )
+        }
+        if (detail.isEmpty()) detail.append(" (no loaded ships in this dimension at all)")
+        logger.info(
+            "[pirates] berth {} countdown CANCELLED -- zone r={} at ({}, {}, {}); players={};{}",
+            berthId, zone.radius.toInt(), zone.x.toInt(), zone.y.toInt(), zone.z.toInt(),
+            players.size, detail
+        )
+    }
+
     private fun trespasserIn(level: ServerLevel, zone: Zone): Trespass? {
         val players = level.players().filter { it.isAlive && !it.isSpectator }
         if (players.isEmpty()) return null
@@ -566,12 +678,32 @@ object PirateShips {
             val entry = iterator.next()
             val berthId = entry.key
             val armAt = entry.value
-            val report = reports[berthId]
-            if (report == null || now - report.lastSeen > STALE_TICKS) {
+
+            // A countdown no longer implies a reporting wheel: [scanZones] starts them straight from the
+            // store. The zone MUST come from the same place the scan measured it -- see [dormantZone] -- or
+            // the two disagree about who is inside and take turns cancelling each other's countdown.
+            //
+            // The wheel itself is not fetched until the countdown actually fires: warning a captain for
+            // fifteen seconds must not cost a chunk load, though waking a ship may.
+            var report = reports[berthId]?.takeIf { now - it.lastSeen <= STALE_TICKS }
+
+            // NOT ours to judge unless this berth lives in the level currently ticking.
+            //
+            // `countdowns` is global and berth ids are bare block positions, but [PirateStore] is per-level
+            // SavedData and this manager is ticked once per LOADED LEVEL -- overworld, nether and end, every
+            // tick. So the nether's tick looks up an overworld berth id in the nether's store, finds
+            // nothing, and (in the first cut of this guard) REMOVED the countdown the overworld had just
+            // started. Every tick. The ring flickered between counting and dormant and the timer never
+            // advanced, at any distance, on any ship -- which is exactly what it looked like, and nothing
+            // whatsoever to do with the zone geometry I spent two rounds suspecting.
+            //
+            // `?: continue`, matching what `tickBoarders` and the old report-keyed guard always did.
+            val berth = PirateStore.get(level).berth(berthId) ?: continue
+            if (berth.state != PirateStore.BERTHED) {
                 iterator.remove()
                 continue
             }
-            val zone = zoneOf(level, berthId, report) ?: continue
+            val zone = dormantZone(level, berthId, berth)
             val trespass = trespasserIn(level, zone)
             // The scan (every 10 ticks) is what CANCELS an abandoned countdown; skipping a lone empty tick
             // here just lets the prompt lapse for a quarter second if someone dances on the boundary.
@@ -587,6 +719,15 @@ object PirateShips {
                     )
                 }
                 continue
+            }
+
+            // Zero. NOW the wheel is needed -- fetch it, loading its chunk if this site has been asleep.
+            if (report == null) {
+                report = materialiseDormant(level, berthId, berth, now)
+                if (report == null) {
+                    iterator.remove()
+                    continue
+                }
             }
 
             // A refused wake (cap, cooldown) retries in a couple of seconds rather than restarting the whole
@@ -1380,7 +1521,7 @@ object PirateShips {
                 (berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()
             ) * 0.5
         }
-        val radius = zoneRadius(level, halfDiag)
+        val radius = zoneRadius(halfDiag)
 
         // Read most-urgent-first: a ship in pursuit is pursuing whatever else is true of its berth --
         // and a BOARDED ship is every bit as engaged as a pursuing one, so it burns the same red.
@@ -1438,54 +1579,69 @@ object PirateShips {
      * the wheel would have. Note this only fixes the DRAWING: waking still needs the wheel to be ticking,
      * so the outer reaches of a very large ring are still drawn further than she can notice you from.
      */
+    /**
+     * The rings, exactly as the logic sees them.
+     *
+     * Walks the STORE and picks the source the same way [scanZones] does -- an AWAKE site (fresh report
+     * carrying a ship id) is drawn from its hull, everything else from its papers. Drawing it any other way
+     * was how the picture came to disagree with the mechanism: the old version preferred a live report
+     * whenever it had one, so a sleeping site's ring jumped between two centres as its wheel drifted in and
+     * out of [STALE_TICKS], and the wireframe reported a flicker that told you nothing about the bug.
+     *
+     * A wheel reporting from a hull that is not loaded (no ship id resolvable) falls through to the papers,
+     * which is the same answer with a steadier hand.
+     */
     fun zones(level: ServerLevel): List<Zone> {
         val now = level.gameTime
         val out = ArrayList<Zone>()
-        val live = HashSet<Long>()
-
-        for ((berthId, report) in reports) {
-            if (now - report.lastSeen > STALE_TICKS) continue
-            zoneOf(level, berthId, report)?.let {
-                out.add(it)
-                live.add(berthId)
-            }
-        }
 
         for ((berthId, berth) in PirateStore.get(level).allBerths) {
-            if (berthId in live) continue
             if (berth.state != PirateStore.BERTHED) continue
-            out.add(dormantZone(level, berthId, berth))
+            val report = reports[berthId]?.takeIf { now - it.lastSeen <= STALE_TICKS }
+            val awake = report?.takeIf { it.shipId != null }?.let { zoneOf(level, berthId, it) }
+            out.add(awake ?: dormantZone(level, berthId, berth))
         }
         return out
     }
 
     /**
-     * How far a site's zone reaches -- and it never promises more than it can deliver.
+     * How far a site's zone reaches. The configured size, full stop.
      *
-     * The size-scaled radius is what a captain asked for, but a dormant site can only NOTICE anyone while
-     * its wheel is ticking, and a wheel ticks only inside a player's simulation distance. On a large hull
-     * four times the half-diagonal reaches past that, so the outer band of the ring was decoration: you
-     * could cross it, watch the line go by, and nothing aboard would ever stir. Clamped, the ring means
-     * exactly one thing again -- inside it she wakes.
+     * This used to be clamped to the player's simulation distance, and the reason was sound at the time: a
+     * dormant site could only NOTICE anyone while its wheel was TICKING, and a wheel ticks only inside
+     * simulation distance. On a large hull the size-scaled radius reached well past that, so the outer band
+     * of the ring was decoration -- you could cross it, watch the line go by, and nothing aboard would stir.
+     * Clamping made the ring honest by shrinking it to what the mechanism could actually deliver.
      *
-     * A chunk of margin off the simulation edge, because a chunk that has only just come into range is a
-     * chunk whose block entities have not necessarily ticked yet, and a line drawn on that boundary would
-     * be true only most of the time.
+     * It also silently ate the setting. Raising `pirateZoneScale` did nothing on any ordinary simulation
+     * distance, because the clamp took the result straight back off again -- a lever that appeared broken
+     * rather than overridden, which is the worst kind.
+     *
+     * The clamp is gone because the mechanism changed underneath it: [scanZones] now finds sleeping sites
+     * in the PERSISTED store and measures them against the player directly, with no wheel and no loaded
+     * chunk involved at all. The ring is honest at any radius now, so it is drawn at the size that was asked
+     * for.
      */
-    private fun zoneRadius(level: ServerLevel, halfDiag: Double): Double {
+    private fun zoneRadius(halfDiag: Double): Double {
         val cfg = EurekaConfig.SERVER
-        val wanted = max(cfg.pirateZoneMinRadius, halfDiag * cfg.pirateZoneScale)
-        if (!cfg.pirateZoneClampToSimulationDistance) return wanted
-        val reach = ((level.server.playerList.simulationDistance - 1) * 16).toDouble()
-        // Never below the configured floor: a tiny simulation distance should shrink the ring, not delete it.
-        return wanted.coerceAtMost(max(reach, cfg.pirateZoneMinRadius))
+        return max(cfg.pirateZoneMinRadius, halfDiag * cfg.pirateZoneScale)
     }
 
-    /** A sleeping site's ring, drawn from its papers rather than from a wheel that is not ticking. */
+    /**
+     * A sleeping site's ring, drawn from its papers rather than from a wheel that is not ticking. THE
+     * definition of a dormant site's zone -- [scanZones], [tickCountdowns] and [zones] all read it, so they
+     * cannot disagree about where the line is.
+     *
+     * It reports COUNTING like [zoneOf] does. Leaving that out was a real bug and not a cosmetic one: a
+     * store-driven countdown drew the ring dormant-blue while it ran, so a site alternating between the two
+     * zone sources flashed between colours, and the wireframe stopped being usable as evidence for the very
+     * thing it was pointed at.
+     */
     private fun dormantZone(level: ServerLevel, berthId: Long, berth: PirateStore.Berth): Zone {
         val pos = BlockPos.of(berth.lastPos)
         val halfDiag = sqrt((berth.sizeX * berth.sizeX + berth.sizeZ * berth.sizeZ).toDouble()) * 0.5
-        return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, zoneRadius(level, halfDiag), ZoneState.DORMANT)
+        val state = if (berthId in countdowns) ZoneState.COUNTING else ZoneState.DORMANT
+        return Zone(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5, zoneRadius(halfDiag), state)
     }
 
     /**
@@ -1507,6 +1663,54 @@ object PirateShips {
     // region queries + debug
 
     fun chaseCount(): Int = chases.size
+
+    /**
+     * Remove every berth no wheel answers for, and say which. See `PirateCommand.prune` for what these are
+     * and why the test is drawn this narrowly.
+     *
+     * A berth survives if its last known wheel position holds a pirate wheel that either claims THIS berth
+     * or claims nothing yet. It is pruned only when that position holds no wheel at all, or a wheel that has
+     * gone on to claim a different site -- the exact fingerprint of a berth abandoned by the relocation bug.
+     *
+     * REGEN_WAIT sites are never touched: their ship is deliberately absent and due back at dawn.
+     */
+    fun prune(level: ServerLevel): List<String> {
+        val store = PirateStore.get(level)
+        val now = level.gameTime
+        val doomed = ArrayList<Pair<Long, String>>()
+
+        for ((berthId, berth) in store.allBerths) {
+            if (berth.state != PirateStore.BERTHED) continue
+            // A site that is reporting right now is alive by definition; do not load anything to ask again.
+            val live = reports[berthId]
+            if (live != null && now - live.lastSeen <= STALE_TICKS) continue
+            if (berthId in arming || berthId in countdowns) continue
+
+            val pos = BlockPos.of(berth.lastPos)
+            level.getChunk(pos.x shr 4, pos.z shr 4)
+            val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity
+
+            val why = when {
+                helm == null -> "no wheel at ${pos.toShortString()}"
+                helm.blockState.getValue(EurekaProperties.MARK) == HelmMark.NORMAL ->
+                    "wheel at ${pos.toShortString()} is not a pirate's"
+                helm.pirateBerth != null && helm.pirateBerth != berthId ->
+                    "wheel at ${pos.toShortString()} now answers to berth ${helm.pirateBerth}"
+                else -> null
+            } ?: continue
+
+            doomed.add(berthId to "berth $berthId: $why")
+        }
+
+        for ((berthId, _) in doomed) {
+            store.removeBerth(berthId)
+            reports.remove(berthId)
+            countdowns.remove(berthId)
+            vanished.remove(berthId)
+        }
+        if (doomed.isNotEmpty()) store.markDirty()
+        return doomed.map { it.second }
+    }
 
     /** One line per berth for /vs pirate list. */
     fun describe(level: ServerLevel): List<String> {

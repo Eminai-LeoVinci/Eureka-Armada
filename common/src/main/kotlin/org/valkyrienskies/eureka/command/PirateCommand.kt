@@ -70,6 +70,7 @@ object PirateCommand {
                         )
                     )
                     .then(literal("list").executes { list(it) })
+                    .then(literal("prune").executes { prune(it) })
                     .then(literal("arm").executes { arm(it) })
                     .then(literal("regen").executes { regen(it) })
                     .then(
@@ -148,6 +149,38 @@ object PirateCommand {
             ctx.source.sendSuccess({ Component.literal(line) }, false)
         }
         return lines.size
+    }
+
+    /**
+     * Drop the berths that no wheel answers for any more.
+     *
+     * These are the wreckage of a bug: a disassembly rebuilt the wheel's block entity as a new object, the
+     * manager mistook it for a rival copy claiming the same site, and the ship adopted a FRESH berth
+     * wherever she came apart -- leaving the old record behind, permanently BERTHED and drawing its dormant
+     * ring forever. Harmless but untidy, and they stack up one per teardown.
+     *
+     * The test is deliberately narrow, because the alternative is eating somebody's real pirate site. A
+     * berth is only pruned when its last known wheel position holds NO pirate wheel, or holds one that has
+     * since claimed a DIFFERENT berth -- which is precisely the shape a ghost has, and never the shape of a
+     * genuine sleeping site (whose wheel is exactly where the berth says it is). A site whose ship has
+     * sailed away is not touched, because `lastPos` follows the wheel.
+     *
+     * Loads each candidate's chunk to look. Run once, by hand, on a world that collected ghosts.
+     */
+    private fun prune(ctx: CommandContext<CommandSourceStack>): Int {
+        val level = ctx.source.level
+        val removed = PirateShips.prune(level)
+        if (removed.isEmpty()) {
+            ctx.source.sendSuccess({ Component.literal("No abandoned berths; every site has its wheel.") }, false)
+            return 0
+        }
+        for (line in removed) {
+            ctx.source.sendSuccess({ Component.literal(line) }, false)
+        }
+        ctx.source.sendSuccess(
+            { Component.literal("Pruned ${removed.size} abandoned berth(s).") }, false
+        )
+        return removed.size
     }
 
     /** Skip the countdown on the nearest loaded dormant berth: the caller is the intruder. */
