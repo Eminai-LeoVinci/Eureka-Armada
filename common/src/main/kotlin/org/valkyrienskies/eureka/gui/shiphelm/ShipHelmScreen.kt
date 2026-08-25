@@ -790,14 +790,26 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         }
 
         // Which of this hull's wheels you are standing at. A big ship carries several and they are identical
-        // to look at, so "Helm: 2/8" is the difference between giving an order and guessing. Right-aligned on
-        // the title strip, clear of the name and its Rename control; absent on a wheel that is not on a ship,
-        // because an unassembled wheel is not one of anything yet.
+        // to look at, so "Helm: 2/8" is the difference between giving an order and guessing.
+        //
+        // It sat right-aligned on the title strip at first and collided with the Rename control -- the ship
+        // name is variable-width, so there was never a safe amount of room there. Now it heads the crew
+        // column instead, where it belongs anyway: the book, Summon Crew and the crew dropdown are all
+        // per-wheel, and this says WHICH wheel. Absent on a wheel that is not on a ship, because an
+        // unassembled wheel is not one of anything yet.
         menu.helmNumber?.let { number ->
             val text = "Helm: $number"
-            guiGraphics.drawString(
-                font, text, PANEL_WIDTH - PANEL_RIGHT_MARGIN - font.width(text), titleLabelY, INFO_TEXT, false
-            )
+            val pose = guiGraphics.pose()
+            pose.pushMatrix()
+            pose.scale(HELM_NUMBER_SCALE, HELM_NUMBER_SCALE)
+            // Centred on the book's spine, which is also what Summon Crew is centred on, so the three read
+            // as one column. Pose is a 2D Matrix3x2fStack in 1.21.11, so the coordinates are divided by the
+            // scale rather than multiplied.
+            val width = font.width(text) * HELM_NUMBER_SCALE
+            val tx = (BOOK_X + (BOOK_W - width) / 2f) / HELM_NUMBER_SCALE
+            val ty = HELM_NUMBER_Y / HELM_NUMBER_SCALE
+            guiGraphics.drawString(font, text, Math.round(tx), Math.round(ty), INFO_TEXT, false)
+            pose.popMatrix()
         }
 
         val s = ship ?: return
@@ -1185,7 +1197,17 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
         /** The Crew & Operations book, centred in the column the HUD checkboxes used to fill. */
         private const val BOOK_X = 131
-        private const val BOOK_Y = 46
+
+        // Nudged down from 46 to clear a line above the book for the wheel's number. Summon and the crew
+        // dropdown both derive their Y from this, so the whole column moves together and keeps its spacing.
+        // Six pixels is as far as it can go: Summon's foot lands at 132 and DIVIDER2 sits at 138.
+        private const val BOOK_Y = 52
+
+        /** The wheel's number, on the line above the book. */
+        private const val HELM_NUMBER_Y = BOOK_Y - 7
+
+        /** Matches ShipHelmIconButton's own label scale, so "Helm: 6/6" reads at the same size as Summon Crew. */
+        private const val HELM_NUMBER_SCALE = 0.65f
         private const val BOOK_W = 48
         private const val BOOK_H = 56
 

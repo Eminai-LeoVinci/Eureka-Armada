@@ -1112,10 +1112,11 @@ object EurekaConfig {
         var restockMessages = true
 
         @JsonSchema(
-            description = "How long the restock receipt holds on the HUD, in seconds. Deliberately shorter " +
-                "than ordinary messages: it is a receipt, read once and then clutter. Default 2.0."
+            description = "How long the restock receipt holds on the HUD, in seconds. Still shorter than an " +
+                "ordinary message -- it is a receipt, read once and then clutter -- but two seconds proved " +
+                "too brief to read a line naming several chests. Default 3.5."
         )
-        var restockMessageSeconds = 2.0
+        var restockMessageSeconds = 3.5
 
         // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
         // the three carries its OWN four numbers, repeated below rather than scaled off one base arc.
