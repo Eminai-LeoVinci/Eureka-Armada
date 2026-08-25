@@ -143,24 +143,43 @@ object GunLabels {
 
     private const val GROUPS = "LRFB"
 
-    /** "L1 - D1" -> 10101, "R5 - D2" -> 20205; 0 for null/none/unparseable. Inverse of [decode]. */
+    // Bit-packed, because THE SLOT THIS TRAVELS IN IS A 16-BIT SHORT.
+    //
+    // It used to be packed decimally -- `layer * 10_000 + (group + 1) * 100 + number` -- which reads nicely
+    // and overflows a short the moment a ship has FOUR gun decks: `L1 - D4` is 40101, and a signed short
+    // stops at 32767. Past that the value arrives as noise, decodes to null, and the gun draws no name at
+    // all. Nobody hit it because nobody had built a four-decker yet; it was found while fixing the identical
+    // fault in the hold numbering, where the ceiling was low enough to hit immediately (see
+    // [org.valkyrienskies.eureka.ship.ShipBearing.packNumber], which fell over at `Engine: 14/35`).
+    //
+    // 5 + 2 + 7 bits = 14, so the largest value is 16383 and there is headroom to spare. The caps are 31
+    // decks, four groups and 127 guns per group per deck -- a first-rate carries perhaps sixty a side, so
+    // the gun cap is generous, and a hull outside any of these shows no name rather than a wrong one.
+    private const val NUMBER_BITS = 7
+    private const val NUMBER_MAX = (1 shl NUMBER_BITS) - 1
+    private const val GROUP_BITS = 2
+    private const val GROUP_MASK = (1 shl GROUP_BITS) - 1
+    private const val LAYER_SHIFT = NUMBER_BITS + GROUP_BITS
+    private const val LAYER_MAX = 31
+
+    /** "L1 - D1" -> a packed int; 0 for null/none/unparseable. Inverse of [decode]. */
     fun encode(label: String?): Int {
         if (label.isNullOrEmpty()) return 0
         val group = GROUPS.indexOf(label[0])
         if (group < 0) return 0
         val number = label.drop(1).takeWhile { it.isDigit() }.toIntOrNull() ?: return 0
         val layer = label.substringAfterLast('D', "").toIntOrNull() ?: return 0
-        if (number < 1 || number > 99 || layer < 1 || layer > 99) return 0
-        return layer * 10_000 + (group + 1) * 100 + number
+        if (number < 1 || number > NUMBER_MAX || layer < 1 || layer > LAYER_MAX) return 0
+        return (layer shl LAYER_SHIFT) or (group shl NUMBER_BITS) or number
     }
 
-    /** 10101 -> "L1 - D1"; null for 0 or anything [encode] cannot have produced. */
+    /** The packed int back to "L1 - D1"; null for 0 or anything [encode] cannot have produced. */
     fun decode(code: Int): String? {
         if (code <= 0) return null
-        val layer = code / 10_000
-        val group = (code / 100) % 100 - 1
-        val number = code % 100
-        if (layer < 1 || group !in GROUPS.indices || number < 1) return null
+        val layer = code ushr LAYER_SHIFT
+        val group = (code ushr NUMBER_BITS) and GROUP_MASK
+        val number = code and NUMBER_MAX
+        if (layer < 1 || layer > LAYER_MAX || group !in GROUPS.indices || number < 1) return null
         return format(GROUPS[group], number, layer)
     }
 
