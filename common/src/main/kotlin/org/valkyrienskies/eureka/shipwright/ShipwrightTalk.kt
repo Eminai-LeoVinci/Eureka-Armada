@@ -262,7 +262,7 @@ object ShipwrightTalk {
                 } ?: emptyList(),
                 // Quoted off the walk that was just done for the repair assessment, so the fee costs nothing
                 // extra to work out and can never disagree with the block count printed beside it.
-                fee = DismantleFee.quote(hull.blocks).map { ShipwrightMenu.Material(it.item, it.count, 0) }
+                fee = YardFee.quoteDismantle(hull.blocks).map { ShipwrightMenu.Material(it.item, it.count, 0) }
             )
         }
     }
@@ -550,13 +550,13 @@ object ShipwrightTalk {
         // Re-quoted here rather than trusted off the wire, and off the hull as she stands THIS instant --
         // the screen's figure was worked out when the book opened, and a broadside since would have made it
         // a lie in the captain's favour.
-        val fee = DismantleFee.quote(level, ship)
-        val short = DismantleFee.shortfall(player, fee)
+        val fee = YardFee.quoteDismantle(level, ship)
+        val short = YardFee.shortfall(player, fee)
         if (short.isNotEmpty()) {
             PathMessages.send(
                 player,
-                "Breaking her up costs " + DismantleFee.describe(fee) +
-                    ". You are short " + DismantleFee.describe(short) + ".",
+                "Breaking her up costs " + YardFee.describe(fee) +
+                    ". You are short " + YardFee.describe(short) + ".",
                 PathMessages.Kind.WARN
             )
             return
@@ -566,9 +566,9 @@ object ShipwrightTalk {
         // to salvage -- and charging for a job that did not happen is the one failure a captain would not
         // forgive.
         if (ShipSalvage.dismantle(level, player, ship) == null) return
-        DismantleFee.take(player, fee)
+        YardFee.take(player, fee)
         if (fee.isNotEmpty()) {
-            PathMessages.send(player, "The yard takes " + DismantleFee.describe(fee) + ".", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "The yard takes " + YardFee.describe(fee) + ".", PathMessages.Kind.GOOD)
         }
     }
 

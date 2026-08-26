@@ -75,6 +75,18 @@ class ShipwrightLedger : SavedData() {
          */
         val deliveries: MutableMap<Item, MutableList<ItemRun>> = LinkedHashMap()
     ) {
+        /**
+         * Whether the yard's build fee has been settled for this commission.
+         *
+         * The fee is taken UP FRONT -- before the first plank -- and materials arrive over as many trips as
+         * the captain needs, so the yard has to remember it has been paid or it would charge again on every
+         * handover. Persisted for that reason: a relog in the middle of fetching timber must not re-bill.
+         *
+         * Cleared when the ship is delivered ([spendMaterials]), so the next commission of the same plans
+         * owes its own fee. Forfeited if the plans are discarded, exactly as delivered materials are.
+         */
+        var feePaid: Boolean = false
+
         /** One hand-in: this many of this item, at this point in the queue. */
         class ItemRun(val item: Item, var count: Int)
 
@@ -387,6 +399,8 @@ class ShipwrightLedger : SavedData() {
         plans.delivered.clear()
         plans.deliveries.clear()
         plans.alteration = Alteration.NONE
+        // The fee bought THIS ship. Commissioning the same plans again is another job for the yard.
+        plans.feePaid = false
         setDirty()
     }
 
@@ -416,6 +430,9 @@ class ShipwrightLedger : SavedData() {
                 // every save until the ship costs nothing at all.
                 row.put(BASE_COST_KEY, writeTally(plans.baseCost))
                 row.put(DELIVERED_KEY, writeTally(plans.delivered))
+                // Written only when true, so plans that owe their fee -- which is every set on an older
+                // world -- cost nothing on disk and read back owing it.
+                if (plans.feePaid) row.putBoolean(FEE_PAID_KEY, true)
                 shelf.add(row)
             }
             entry.put(PLANS_KEY, shelf)
@@ -473,6 +490,7 @@ class ShipwrightLedger : SavedData() {
         private const val COST_KEY = "cost"
         private const val BASE_COST_KEY = "base_cost"
         private const val DELIVERED_KEY = "delivered"
+        private const val FEE_PAID_KEY = "fee_paid"
         private const val ITEM_KEY = "item"
         private const val COUNT_KEY = "count"
         private const val SALVAGE_KEY = "salvage"
@@ -530,6 +548,7 @@ class ShipwrightLedger : SavedData() {
                     // missing its lanterns because of something you did on a Tuesday.
                     val plans = Plans(shipName, template, base)
                     plans.delivered.putAll(readTally(row, DELIVERED_KEY))
+                    plans.feePaid = row.getBooleanOr(FEE_PAID_KEY, false)
                     library.plans[shipName] = plans
                 }
 

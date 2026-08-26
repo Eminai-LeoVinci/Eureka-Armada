@@ -83,7 +83,20 @@ object ShipwrightMenu {
          */
         val struck: List<Material> = emptyList(),
         /** Whether anything about these plans has been changed from the page as filed. */
-        val altered: Boolean = false
+        val altered: Boolean = false,
+        /**
+         * What the yard charges to build this hull, quoted off [blocks] -- the plans as DRAWN, so striking
+         * the decor off lowers the materials and not the fee. Empty when the world charges nothing or she
+         * is under one whole unit. [Material.needed] is the count owed and [Material.given] is always zero;
+         * the row is reused so the wire codec is too.
+         */
+        val fee: List<Material> = emptyList(),
+        /**
+         * Whether that fee has already been settled. The build fee is paid UP FRONT, before the first
+         * plank, so a commission part-way through its materials has paid it -- the card dims the line
+         * rather than dropping it, because what the ship cost is still worth reading.
+         */
+        val feePaid: Boolean = false
     ) {
         val given: Int get() = materials.sumOf { minOf(it.needed, it.given) }
         val ready: Boolean get() = materials.all { it.outstanding <= 0 }
@@ -294,7 +307,10 @@ object ShipwrightMenu {
                 struck = plans.alteration.struckOut(plans.baseCost).map { (item, needed) ->
                     materialOf(plans, item, needed, given = 0)
                 },
-                altered = !plans.alteration.isEmpty
+                altered = !plans.alteration.isEmpty,
+                // Quoted off the same count printed beside it on the card, so the two can never disagree.
+                fee = YardFee.quoteBuild(info.blocks).map { Material(it.item, it.count, 0) },
+                feePaid = plans.feePaid
             )
         }
         return Shelf(villager, library.slots, hasFreeBottle, rows)

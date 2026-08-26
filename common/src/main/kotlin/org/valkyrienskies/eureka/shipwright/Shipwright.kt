@@ -13,6 +13,7 @@ import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.bottle.ShipBottle
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.PlacementCheck
+import org.valkyrienskies.eureka.template.ShipManifest
 import org.valkyrienskies.eureka.template.ShipTemplate
 
 /**
@@ -248,10 +249,37 @@ object Shipwright {
     fun pay(level: ServerLevel, player: ServerPlayer, plans: ShipwrightLedger.Plans): Int {
         val ledger = ShipwrightLedger.get(level.server)
 
+        // The yard is paid before it takes a single plank. Everything below this block is the old
+        // materials-only handover, unchanged; this is the gate in front of it.
+        //
+        // Re-quoted here rather than trusted off the wire -- the screen's figure was worked out when the
+        // book opened, and the world's rates could have been reloaded since. Same rule as the dismantle.
+        var settled: List<YardFee.Line> = emptyList()
+        if (!plans.feePaid) {
+            val fee = YardFee.quoteBuild(blocksOf(level, plans))
+            val short = YardFee.shortfall(player, fee)
+            if (short.isNotEmpty()) {
+                // Nothing changes hands: not the fee, and not one plank of the materials. A yard holding a
+                // hull's worth of timber against an unpaid invoice is the half-state this ordering exists
+                // to prevent.
+                PathMessages.send(
+                    player,
+                    "Building '${plans.shipName}' costs " + YardFee.describe(fee) +
+                        " up front. You are short " + YardFee.describe(short) + ".",
+                    PathMessages.Kind.WARN
+                )
+                return 0
+            }
+            YardFee.take(player, fee)
+            plans.feePaid = true
+            ledger.setDirty()
+            settled = fee
+        }
+
         if (player.abilities.instabuild) {
             var granted = 0
             for ((item, owed) in plans.outstanding()) granted += ledger.deliver(plans, item, owed)
-            if (granted > 0) announce(player, plans, granted)
+            if (granted > 0 || settled.isNotEmpty()) announce(player, plans, granted, settled)
             return granted
         }
 
@@ -270,8 +298,23 @@ object Shipwright {
             taken += accepted
         }
 
-        if (taken > 0) announce(player, plans, taken)
+        // Said even when nothing was taken, if the fee just was: money changed hands, so silence is not an
+        // honest answer. Without a fee this stays as it was and a fruitless press says nothing.
+        if (taken > 0 || settled.isNotEmpty()) announce(player, plans, taken, settled)
         return taken
+    }
+
+    /**
+     * The block count a build fee is quoted against: the plans as DRAWN.
+     *
+     * The same measure the card prints beside the fee (`ShipwrightTalk.detailOf` reads it from the same
+     * manifest), so the number a captain is charged for and the number they are shown can never disagree.
+     * Missing plans quote nothing rather than throwing -- `build` refuses on the same absence a moment later
+     * with a message that actually explains itself.
+     */
+    private fun blocksOf(level: ServerLevel, plans: ShipwrightLedger.Plans): Int {
+        val template = ShipTemplate.find(level, plans.template) ?: return 0
+        return ShipManifest.of(template).blocks
     }
 
     /**
@@ -487,20 +530,35 @@ object Shipwright {
         return PlacementCheck.isClear(level, grown, skirt)
     }
 
-    private fun announce(player: ServerPlayer, plans: ShipwrightLedger.Plans, taken: Int) {
-        if (plans.ready) {
-            PathMessages.send(
-                player,
-                "'${plans.shipName}' is paid for -- ask for it built or bottled.",
-                PathMessages.Kind.GOOD
-            )
+    /**
+     * One line for one press of Give Materials, whatever happened in it.
+     *
+     * [settled] is the fee taken by THIS press, empty when it was already paid or the yard builds free. It
+     * leads the sentence when there is one, because a captain watching emeralds leave their pack should be
+     * told so first and in the same breath as what the emeralds bought.
+     */
+    private fun announce(
+        player: ServerPlayer,
+        plans: ShipwrightLedger.Plans,
+        taken: Int,
+        settled: List<YardFee.Line>
+    ) {
+        val progress = "${(plans.progress * 100).toInt()}% paid"
+        val message = if (settled.isEmpty()) {
+            // Word for word what the yard has always said when no money is involved.
+            if (plans.ready) "'${plans.shipName}' is paid for -- ask for it built or bottled."
+            else "Handed over $taken items -- '${plans.shipName}' is $progress."
         } else {
-            PathMessages.send(
-                player,
-                "Handed over $taken items -- '${plans.shipName}' is ${(plans.progress * 100).toInt()}% paid.",
-                PathMessages.Kind.GOOD
-            )
+            val paid = "The yard takes " + YardFee.describe(settled) + " -- "
+            when {
+                plans.ready -> paid + "'${plans.shipName}' is paid for in full, ask for it built or bottled."
+                // The fee is in and the captain arrived with nothing the hull needs. Rare, but it is the
+                // one case where the old code's silence would have swallowed a payment.
+                taken <= 0 -> paid + "nothing on you that it needs yet."
+                else -> paid + "handed over $taken items, '${plans.shipName}' is $progress."
+            }
         }
+        PathMessages.send(player, message, PathMessages.Kind.GOOD)
     }
 
     /**

@@ -1468,6 +1468,61 @@ object EurekaConfig {
         var shipwrightDismantleFeeCount2 = 0
         // endregion
 
+        // region Commissioning a ship
+        // The build fee. Priced exactly as the dismantle fee is, off the size of the hull, and defaulting to
+        // the same numbers -- a shipwright's labour is a shipwright's labour whichever direction it runs in.
+        //
+        // Charged UP FRONT, which is the one place the two differ. A dismantle is paid for after the hull is
+        // gone, because charging for a job that did not happen is unforgivable; a build is paid for before
+        // the first plank changes hands, so the yard never sits on a hull's worth of timber against an
+        // unpaid invoice. Once paid it is not charged again however many trips the materials take, and it
+        // is owed afresh the next time the same plans are commissioned.
+        //
+        // Quoted off the plans as DRAWN. Striking the decor off lowers the materials owed and not the fee:
+        // the count on the card is the count in the quote, and a hull is the same size to build whatever a
+        // captain decides to leave out of it.
+        //
+        // Paid out of the captain's own pockets. Two items are provided because one currency is a rule and
+        // two is an economy -- leave the second blank for the ordinary case.
+
+        @JsonSchema(
+            description = "How many blocks of hull one unit of the build fee covers. A hull is charged one " +
+                "unit per WHOLE multiple and never rounds up, so at the default 1000 a 2999-block ship pays " +
+                "2 and a 19,879-block ship pays 19. 0 or less makes building free. Default 1000."
+        )
+        var shipwrightBuildFeeBlocks = 1000
+
+        @JsonSchema(
+            description = "Hulls smaller than this many blocks are built for nothing -- a rowboat is not " +
+                "worth a shipwright's invoice. Default 1000, which lines up with the unit size so the first " +
+                "unit is also the first charge. Set it to 0 to charge for EVERYTHING: a 30-block raft still " +
+                "owes nothing by the unit maths, so it pays the minimum of one unit instead."
+        )
+        var shipwrightBuildFeeFreeBelow = 1000
+
+        @JsonSchema(
+            description = "The item a build fee is paid in. Blank charges nothing -- which is what a world " +
+                "wanting the old materials-only shipwright sets. Default minecraft:emerald."
+        )
+        var shipwrightBuildFeeItem = "minecraft:emerald"
+
+        @JsonSchema(
+            description = "How many of shipwrightBuildFeeItem one unit costs. Default 1."
+        )
+        var shipwrightBuildFeeCount = 1
+
+        @JsonSchema(
+            description = "A SECOND item charged alongside the first, for worlds that want a build to cost " +
+                "more than one currency. Blank -- the default -- charges only the first."
+        )
+        var shipwrightBuildFeeItem2 = ""
+
+        @JsonSchema(
+            description = "How many of shipwrightBuildFeeItem2 one unit costs. Default 0."
+        )
+        var shipwrightBuildFeeCount2 = 0
+        // endregion
+
         // region Ship damage repercussions
         // Integrity = the ship's current block count as a percentage of its count at assembly, so 100 is
         // pristine and the numbers below are integrity thresholds, not damage amounts. Maintained live: every

@@ -212,10 +212,20 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             )
             x += BTN_W + 4
         } else {
+            // The build fee is taken at THIS press, before any material moves, so this is the button that
+            // greys when a captain cannot afford it -- not Build, which by then is already paid for.
+            //
+            // And it says so. While the fee is outstanding the button is asking for EMERALDS, not timber,
+            // and calling that "Give Materials" would be the yard taking money under the wrong name. Once
+            // settled it goes back to what it does for the rest of the commission. A hull the world builds
+            // for nothing never shows the fee wording at all.
+            val owesFee = !row.feePaid && row.fee.isNotEmpty()
             addRenderableWidget(
-                ShipHelmButton(x, y, BTN_W, BTN_H, PAY_TEXT, font) { act(ShipwrightMenu.Action.PAY) }
+                ShipHelmButton(x, y, WIDE_BTN_W, BTN_H, if (owesFee) PAY_FEE_TEXT else PAY_TEXT, font) {
+                    act(ShipwrightMenu.Action.PAY)
+                }.also { it.active = !owesFee || canPayFee(row.fee) }
             )
-            x += BTN_W + 4
+            x += WIDE_BTN_W + 4
         }
 
         addRenderableWidget(
@@ -239,11 +249,11 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         // Greyed rather than hidden without a blank blueprint to write on, the same courtesy Bottle gets:
         // the option exists, and the reason it cannot be taken is worth saying.
         addRenderableWidget(
-            ShipHelmButton(ax, alterY, BTN_W, BTN_H, TAKE_PAGE_TEXT, font) {
+            ShipHelmButton(ax, alterY, WIDE_BTN_W, BTN_H, TAKE_PAGE_TEXT, font) {
                 act(ShipwrightMenu.Action.TAKE_BLUEPRINT)
             }.also { it.active = shelf.hasBlankBlueprint }
         )
-        ax += BTN_W + 4
+        ax += WIDE_BTN_W + 4
 
         // Only on an altered page. On an unaltered one "save as new" would file a duplicate and "reset"
         // would do nothing -- two buttons whose whole answer is that there was nothing to do.
@@ -385,7 +395,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
                         openVessel = null
                         scroll = 0
                     }
-                }.also { it.active = canPayFee(hull) }
+                }.also { it.active = canPayFee(hull.fee) }
             )
         }
 
@@ -1015,7 +1025,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             left + 8, top + 20, TEXT
         )
 
-        drawFee(guiGraphics, hull)
+        drawFee(guiGraphics, hull.fee, DISMANTLE_FEE_TEXT)
 
         val line = when {
             hull.plansName == null -> NO_MATCH.string
@@ -1140,6 +1150,8 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
             Component.literal("${fmt(row.blocks)} blocks  -  ${fmt(row.items)} items  -  ${row.materials.size} kinds"),
             left + 8, top + 20, TEXT
         )
+        // The right half of that same row, exactly where a hull in the yard states its dismantle fee.
+        drawFee(guiGraphics, row.fee, BUILD_FEE_TEXT, row.feePaid)
         small(
             guiGraphics,
             Component.literal("${vessel(row)}  -  ${fmtKg(row.mass)}  -  top speed ${"%.1f".format(row.topSpeed)} m/s~"),
@@ -1638,21 +1650,28 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
      * The count is drawn as text ahead of the icon rather than as the stack's corner decoration: a stack
      * badge is for what you are holding, and this is a price.
      */
-    private fun drawFee(guiGraphics: GuiGraphics, hull: ShipwrightMenu.Vessel) {
-        if (hull.fee.isEmpty()) return
+    private fun drawFee(
+        guiGraphics: GuiGraphics,
+        fee: List<ShipwrightMenu.Material>,
+        label: Component,
+        settled: Boolean = false
+    ) {
+        if (fee.isEmpty()) return
         val y = top + 20
         var x = left + PANEL_W - 8
 
-        for (line in hull.fee.asReversed()) {
+        for (line in fee.asReversed()) {
             x -= ICON
             guiGraphics.renderItem(ItemStack(line.item), x, y)
             val count = Component.literal(line.needed.toString())
             x -= (font.width(count) * SMALL).toInt() + 2
-            small(guiGraphics, count, x, y + 5, TEXT)
+            // A settled fee greys to match its own label: still legible as what the ship cost, no longer
+            // reading as something owed. Only the build fee is ever paid ahead of the job.
+            small(guiGraphics, count, x, y + 5, if (settled) DIM else TEXT)
             x -= 3
         }
-        x -= (font.width(DISMANTLE_FEE_TEXT) * SMALL).toInt()
-        small(guiGraphics, DISMANTLE_FEE_TEXT, x, y + 5, DIM)
+        x -= (font.width(label) * SMALL).toInt()
+        small(guiGraphics, label, x, y + 5, DIM)
     }
 
     /**
@@ -1660,11 +1679,11 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
      * than accept a click and refuse -- the same courtesy the Bottle button pays with [Shelf.hasFreeBottle].
      * The server re-quotes and re-checks regardless; this only decides how the button looks.
      */
-    private fun canPayFee(hull: ShipwrightMenu.Vessel): Boolean {
-        if (hull.fee.isEmpty()) return true
+    private fun canPayFee(fee: List<ShipwrightMenu.Material>): Boolean {
+        if (fee.isEmpty()) return true
         val player = Minecraft.getInstance().player ?: return true
         if (player.abilities.instabuild) return true
-        for (line in hull.fee) {
+        for (line in fee) {
             var held = 0
             for (slot in 0 until player.inventory.containerSize) {
                 val stack = player.inventory.getItem(slot)
@@ -1763,6 +1782,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private val ORIGINALLY_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_originally")
         private val SAVE_AS_NEW_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_save_as_new")
         private val TAKE_PAGE_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_take_blueprint")
+        private val PAY_FEE_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_pay_fee")
         private val NO_BLANK_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_no_blank")
         private val RESET_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_reset")
         private val NAME_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_name_prompt")
@@ -1770,6 +1790,8 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private val ANY_KIND_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_any_kind")
         private val DISMANTLE_FEE_TEXT: Component =
             Component.translatable("gui.vs_eureka.shipwright_dismantle_fee")
+        private val BUILD_FEE_TEXT: Component =
+            Component.translatable("gui.vs_eureka.shipwright_build_fee")
         private val REALLY_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_really")
         private val DISMISS_TEXT: Component = Component.translatable("gui.vs_eureka.shipwright_dismiss")
         private val DISMISS_ALL_TEXT: Component =
@@ -1839,6 +1861,15 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
         private const val BAR_W = 70
         private const val BAR_H = 6
         private const val BTN_W = 56
+        /**
+         * For the two labels that do not fit in [BTN_W]: "Give Materials" and "Take Blueprint".
+         *
+         * The alternative was [ShipHelmButton]'s marquee, which is right for a captain's ship name and wrong
+         * for a fixed label -- a button that never sits still is a button you read twice. 78 leaves 72 of
+         * inner room against LABEL_PAD, comfortably past both, and both rows still finish well clear of the
+         * panel edge: Give Materials sits beside Delete alone, and Take Blueprint's row tops out at Reset.
+         */
+        private const val WIDE_BTN_W = 78
         private const val BACK_W = 40
         private const val BTN_H = 16
         private const val SMALL = 0.7f

@@ -12,18 +12,23 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 
 /**
- * What a shipwright charges to break a ship up.
+ * What a shipwright charges for a job: breaking a ship up, or building one.
  *
- * Scrapping a raft should be free and scrapping a first-rate should be a decision, so the fee is by the
- * SIZE of the hull: one unit per whole multiple of [EurekaConfig.Server.shipwrightDismantleFeeBlocks], which
- * at the default 1000 makes a 999-block ship free and a 19,879-block ship cost 19. The assembly ceiling is
- * 50,000, so the most any ship can ever cost is 50 of whatever the yard takes.
+ * Both are priced the same way and differ only in which config keys they read, so the maths, the pocket
+ * search and the wording live here once. Scrapping a raft should be free and scrapping a first-rate should
+ * be a decision, so the fee is by the SIZE of the hull: one unit per whole multiple of the configured block
+ * count, which at the default 1000 makes a 999-block ship free and a 19,879-block ship cost 19. The assembly
+ * ceiling is 50,000, so the most any ship can ever cost is 50 of whatever the yard takes.
  *
- * ## Counted off the hull as it stands, not off her papers
- * The count is [ShipRepair.bounds] -- a real walk of the shipyard, the same measure the repair assessment
- * and the templates use -- and never the plans, never `assembledBlocks`, never a manifest. A ship shot half
- * to pieces IS half a ship, and quoting her at the size she was launched at would charge a captain for
- * planks that are already at the bottom of the sea.
+ * ## The two jobs are counted from different places, deliberately
+ * A DISMANTLE is quoted off [ShipRepair.bounds] -- a real walk of the shipyard, the same measure the repair
+ * assessment and the templates use -- and never the plans, never `assembledBlocks`, never a manifest. A ship
+ * shot half to pieces IS half a ship, and quoting her at the size she was launched at would charge a captain
+ * for planks that are already at the bottom of the sea.
+ *
+ * A BUILD has no hull to walk, so it is quoted off the plans' own block count -- the same figure printed
+ * beside the fee on the card, so the two can never disagree. It is the hull as DRAWN: a captain who strikes
+ * the decor off still pays for a hull of that size, because the shipwright's labour is the same either way.
  *
  * Cargo is not hull and is not counted. The coal in her engines and the wheat in her hold are counted by
  * weight nowhere and handed straight back on the claim list anyway; billing for them would be charging a
@@ -34,47 +39,80 @@ import org.valkyrienskies.eureka.EurekaConfig
  * Taking the fee out of a hull that is about to be broken up means taking it out of the claim list the
  * captain is about to be handed -- money in one pocket and out of the other, with a scary confirmation in
  * between.
+ *
+ * ## When each is taken
+ * The dismantle fee is taken AFTER the hull is gone, because charging for a job that did not happen is the
+ * one failure a captain would not forgive. The build fee is taken BEFORE the first plank changes hands --
+ * see [org.valkyrienskies.eureka.shipwright.Shipwright.pay] -- so the yard never sits on a hull's worth of
+ * timber against an unpaid invoice.
  */
-object DismantleFee {
+object YardFee {
 
     /** One item and the number of it owed. */
     class Line(val item: Item, val count: Int)
 
     /**
-     * The bill for a hull of [blocks] blocks. Empty when the yard charges nothing, when the hull is under
-     * the free threshold, or when the configured item does not exist.
+     * The bill for a hull of [blocks] blocks, against one job's rates.
      *
-     * Two separate numbers, because they answer two separate questions. `feeFreeBelow` is where a shipwright
-     * stops waving the job through; `feeBlocks` is what a unit of work is worth after that. They default to
-     * the same 1000 so the first unit is also the first charge, which is the intuitive reading -- but a
-     * world that sets the free line to 0 is saying "everything costs something", and a 30-block raft would
+     * Two separate numbers, because they answer two separate questions. [freeBelow] is where a shipwright
+     * stops waving the job through; [per] is what a unit of work is worth after that. They default to the
+     * same 1000 so the first unit is also the first charge, which is the intuitive reading -- but a world
+     * that sets the free line to 0 is saying "everything costs something", and a 30-block raft would
      * otherwise owe nothing at all by the unit maths. So past the free line the bill is at least ONE unit.
      *
      * It never rounds UP: 1278 blocks is one unit, not two. A captain should not pay for a thousand planks
      * they do not have.
      */
-    fun quote(blocks: Int): List<Line> {
-        val cfg = EurekaConfig.SERVER
-        val per = cfg.shipwrightDismantleFeeBlocks
+    private fun quote(
+        blocks: Int,
+        per: Int,
+        freeBelow: Int,
+        item1: String,
+        count1: Int,
+        item2: String,
+        count2: Int
+    ): List<Line> {
         if (per <= 0 || blocks <= 0) return emptyList()
-        if (blocks < cfg.shipwrightDismantleFeeFreeBelow) return emptyList()
+        if (blocks < freeBelow) return emptyList()
         val units = (blocks / per).coerceAtLeast(1)
 
         val lines = ArrayList<Line>(2)
-        itemOf(cfg.shipwrightDismantleFeeItem)?.let { item ->
-            val each = cfg.shipwrightDismantleFeeCount
-            if (each > 0) lines.add(Line(item, units * each))
-        }
-        itemOf(cfg.shipwrightDismantleFeeItem2)?.let { item ->
-            val each = cfg.shipwrightDismantleFeeCount2
-            if (each > 0) lines.add(Line(item, units * each))
-        }
+        itemOf(item1)?.let { item -> if (count1 > 0) lines.add(Line(item, units * count1)) }
+        itemOf(item2)?.let { item -> if (count2 > 0) lines.add(Line(item, units * count2)) }
         return lines
     }
 
+    /** The bill to break up a hull of [blocks] blocks. Empty when the yard breaks her up for nothing. */
+    fun quoteDismantle(blocks: Int): List<Line> {
+        val cfg = EurekaConfig.SERVER
+        return quote(
+            blocks,
+            cfg.shipwrightDismantleFeeBlocks,
+            cfg.shipwrightDismantleFeeFreeBelow,
+            cfg.shipwrightDismantleFeeItem,
+            cfg.shipwrightDismantleFeeCount,
+            cfg.shipwrightDismantleFeeItem2,
+            cfg.shipwrightDismantleFeeCount2
+        )
+    }
+
     /** The bill for [ship] as she stands right now. Null bounds -- shipyard chunks unreadable -- is free. */
-    fun quote(level: ServerLevel, ship: LoadedServerShip): List<Line> =
-        quote(ShipRepair.bounds(level, ship)?.blocks ?: 0)
+    fun quoteDismantle(level: ServerLevel, ship: LoadedServerShip): List<Line> =
+        quoteDismantle(ShipRepair.bounds(level, ship)?.blocks ?: 0)
+
+    /** The bill to build a hull of [blocks] blocks, off the plans as drawn. Empty when the yard builds free. */
+    fun quoteBuild(blocks: Int): List<Line> {
+        val cfg = EurekaConfig.SERVER
+        return quote(
+            blocks,
+            cfg.shipwrightBuildFeeBlocks,
+            cfg.shipwrightBuildFeeFreeBelow,
+            cfg.shipwrightBuildFeeItem,
+            cfg.shipwrightBuildFeeCount,
+            cfg.shipwrightBuildFeeItem2,
+            cfg.shipwrightBuildFeeCount2
+        )
+    }
 
     /**
      * What [player] is short, line by line. Empty means they can pay.

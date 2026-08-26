@@ -193,6 +193,9 @@ object ShipwrightNetworkingFabric {
             for (material in row.materials) writeMaterial(buf, material)
             buf.writeVarInt(row.struck.size)
             for (material in row.struck) writeMaterial(buf, material)
+            buf.writeVarInt(row.fee.size)
+            for (material in row.fee) writeMaterial(buf, material)
+            buf.writeBoolean(row.feePaid)
         }
 
         buf.writeVarInt(shelf.vessels.size)
@@ -263,9 +266,15 @@ object ShipwrightNetworkingFabric {
             repeat(buf.readVarInt()) { readMaterial(buf)?.let { materials.add(it) } }
             val struck = ArrayList<ShipwrightMenu.Material>()
             repeat(buf.readVarInt()) { readMaterial(buf)?.let { struck.add(it) } }
+            val fee = ArrayList<ShipwrightMenu.Material>()
+            repeat(buf.readVarInt()) { readMaterial(buf)?.let { fee.add(it) } }
+            val feePaid = buf.readBoolean()
+            // Named from here on. The positional call was already eleven arguments deep and two of them
+            // were lists of the same type; the next person to append a field should not have to count.
             ShipwrightMenu.Row(
-                shipName, width, height, length, blocks,
-                materials.sumOf { it.needed }, mass, topSpeed, profile, materials, struck, altered
+                shipName = shipName, width = width, height = height, length = length, blocks = blocks,
+                items = materials.sumOf { it.needed }, mass = mass, topSpeed = topSpeed, profile = profile,
+                materials = materials, struck = struck, altered = altered, fee = fee, feePaid = feePaid
             )
         }
         val vessels = List(buf.readVarInt()) {
