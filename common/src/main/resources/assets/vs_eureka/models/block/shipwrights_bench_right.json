@@ -1,21 +1,22 @@
 {
     "parent":  "block/block",
     "textures":  {
-                     "1":  "vs_eureka:block/shipwrights_bench/carpentry_station",
-                     "3":  "vs_eureka:block/shipwrights_bench/crafting_table_color5",
-                     "pivot":  "vs_eureka:block/shipwrights_bench/grindstone_pivot",
-                     "round":  "vs_eureka:block/shipwrights_bench/grindstone_round",
-                     "side":  "vs_eureka:block/shipwrights_bench/grindstone_side",
-                     "leg":  "vs_eureka:block/shipwrights_bench/dark_oak_log",
-                     "bottom":  "vs_eureka:block/shipwrights_bench/stonecutter_bottom",
-                     "top":  "vs_eureka:block/shipwrights_bench/anvil_top",
-                     "4_side":  "vs_eureka:block/shipwrights_bench/stonecutter_side",
-                     "saw":  "vs_eureka:block/shipwrights_bench/stonecutter_saw",
-                     "body":  "vs_eureka:block/shipwrights_bench/anvil",
-                     "south":  "vs_eureka:block/shipwrights_bench/smithing_table_front",
-                     "west":  "vs_eureka:block/shipwrights_bench/smithing_table_side",
-                     "up":  "vs_eureka:block/shipwrights_bench/smithing_table_top",
-                     "down":  "vs_eureka:block/shipwrights_bench/smithing_table_bottom",
+                     "crafting_table_color5":  "vs_eureka:block/shipwrights_bench/crafting_table_color5",
+                     "carpentry_station":  "vs_eureka:block/shipwrights_bench/carpentry_station",
+                     "grindstone_pivot":  "vs_eureka:block/shipwrights_bench/grindstone_pivot",
+                     "grindstone_round":  "vs_eureka:block/shipwrights_bench/grindstone_round",
+                     "grindstone_side":  "vs_eureka:block/shipwrights_bench/grindstone_side",
+                     "dark_oak_log":  "vs_eureka:block/shipwrights_bench/dark_oak_log",
+                     "stonecutter_bottom":  "vs_eureka:block/shipwrights_bench/stonecutter_bottom",
+                     "stonecutter_top":  "vs_eureka:block/shipwrights_bench/stonecutter_top",
+                     "stonecutter_side":  "vs_eureka:block/shipwrights_bench/stonecutter_side",
+                     "stonecutter_saw":  "vs_eureka:block/shipwrights_bench/stonecutter_saw",
+                     "anvil":  "vs_eureka:block/shipwrights_bench/anvil",
+                     "anvil_top":  "vs_eureka:block/shipwrights_bench/anvil_top",
+                     "smithing_table_front":  "vs_eureka:block/shipwrights_bench/smithing_table_front",
+                     "smithing_table_side":  "vs_eureka:block/shipwrights_bench/smithing_table_side",
+                     "smithing_table_top":  "vs_eureka:block/shipwrights_bench/smithing_table_top",
+                     "smithing_table_bottom":  "vs_eureka:block/shipwrights_bench/smithing_table_bottom",
                      "particle":  "vs_eureka:block/shipwrights_bench/carpentry_station"
                  },
     "elements":  [
@@ -47,7 +48,7 @@
                                                                 1.875,
                                                                 8
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -56,7 +57,7 @@
                                                                3.625,
                                                                8.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -65,7 +66,7 @@
                                                                 2.5,
                                                                 8
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -74,7 +75,7 @@
                                                                4,
                                                                8.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -83,7 +84,7 @@
                                                              8.125,
                                                              7
                                                          ],
-                                                  "texture":  "#3"
+                                                  "texture":  "#crafting_table_color5"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -92,7 +93,7 @@
                                                                8,
                                                                8.5
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 }
                                    }
                      },
@@ -124,7 +125,7 @@
                                                                 1.25,
                                                                 8
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -133,7 +134,7 @@
                                                                3.25,
                                                                8.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -142,7 +143,7 @@
                                                                 0.625,
                                                                 8
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -151,7 +152,7 @@
                                                                2.875,
                                                                8.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -160,7 +161,7 @@
                                                              0,
                                                              8.25
                                                          ],
-                                                  "texture":  "#3"
+                                                  "texture":  "#crafting_table_color5"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -169,7 +170,7 @@
                                                                0.625,
                                                                8.625
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 }
                                    }
                      },
@@ -192,7 +193,7 @@
                                                                 7,
                                                                 8.875
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -201,7 +202,7 @@
                                                                9,
                                                                7.875
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -210,7 +211,7 @@
                                                                 7.25,
                                                                 8.875
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -219,7 +220,7 @@
                                                                9,
                                                                8.125
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -228,7 +229,7 @@
                                                              7.25,
                                                              7.875
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  180
                                               },
                                        "down":  {
@@ -238,7 +239,7 @@
                                                                2.25,
                                                                9
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  180
                                                 }
                                    }
@@ -262,7 +263,7 @@
                                                                 6.625,
                                                                 6.375
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -271,7 +272,7 @@
                                                                7.625,
                                                                9.5
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -280,7 +281,7 @@
                                                                 6.125,
                                                                 8
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -289,7 +290,7 @@
                                                                2,
                                                                9.875
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -298,7 +299,7 @@
                                                              8.5,
                                                              3.125
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  180
                                               },
                                        "down":  {
@@ -308,7 +309,7 @@
                                                                8.5,
                                                                4.75
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  180
                                                 }
                                    }
@@ -332,7 +333,7 @@
                                                                 8.75,
                                                                 9
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -341,7 +342,7 @@
                                                                8.75,
                                                                1.625
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -350,7 +351,7 @@
                                                                 0.125,
                                                                 9.25
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -359,7 +360,7 @@
                                                                8.75,
                                                                2.125
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -368,7 +369,7 @@
                                                              0.625,
                                                              8.75
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  180
                                               },
                                        "down":  {
@@ -378,7 +379,7 @@
                                                                0.75,
                                                                9
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  180
                                                 }
                                    }
@@ -402,7 +403,7 @@
                                                                 2.25,
                                                                 9
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -411,7 +412,7 @@
                                                                6.125,
                                                                9.125
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -420,7 +421,7 @@
                                                                 4.875,
                                                                 9
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -429,7 +430,7 @@
                                                                8,
                                                                9.125
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -438,7 +439,7 @@
                                                              5.5,
                                                              4.375
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  180
                                               },
                                        "down":  {
@@ -448,7 +449,7 @@
                                                                5.75,
                                                                4.5
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  180
                                                 }
                                    }
@@ -481,7 +482,7 @@
                                                                 6.875,
                                                                 8.625
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -490,7 +491,7 @@
                                                                5.5,
                                                                6.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -499,7 +500,7 @@
                                                                 7.25,
                                                                 8.625
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -508,7 +509,7 @@
                                                                7.5,
                                                                4.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -517,7 +518,7 @@
                                                              4.75,
                                                              6.75
                                                          ],
-                                                  "texture":  "#3"
+                                                  "texture":  "#crafting_table_color5"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -526,7 +527,7 @@
                                                                5.125,
                                                                8.25
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 }
                                    }
                      },
@@ -549,7 +550,7 @@
                                                                 8.625,
                                                                 8.625
                                                             ],
-                                                     "texture":  "#3",
+                                                     "texture":  "#crafting_table_color5",
                                                      "rotation":  270
                                                  },
                                        "up":  {
@@ -559,7 +560,7 @@
                                                              8.375,
                                                              3.75
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  270
                                               },
                                        "south":  {
@@ -569,7 +570,7 @@
                                                                 0.625,
                                                                 8.75
                                                             ],
-                                                     "texture":  "#3",
+                                                     "texture":  "#crafting_table_color5",
                                                      "rotation":  90
                                                  },
                                        "down":  {
@@ -579,7 +580,7 @@
                                                                1.125,
                                                                8.875
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  270
                                                 },
                                        "west":  {
@@ -589,7 +590,7 @@
                                                                8.125,
                                                                7.375
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 },
                                        "east":  {
@@ -599,7 +600,7 @@
                                                                8.375,
                                                                4.375
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 }
                                    }
@@ -623,7 +624,7 @@
                                                                 8.75,
                                                                 6.75
                                                             ],
-                                                     "texture":  "#3",
+                                                     "texture":  "#crafting_table_color5",
                                                      "rotation":  270
                                                  },
                                        "up":  {
@@ -633,7 +634,7 @@
                                                              6,
                                                              4.375
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  270
                                               },
                                        "south":  {
@@ -643,7 +644,7 @@
                                                                 8.875,
                                                                 1.125
                                                             ],
-                                                     "texture":  "#3",
+                                                     "texture":  "#crafting_table_color5",
                                                      "rotation":  90
                                                  },
                                        "down":  {
@@ -653,7 +654,7 @@
                                                                6,
                                                                6.375
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  270
                                                 },
                                        "west":  {
@@ -663,7 +664,7 @@
                                                                4.875,
                                                                8.25
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 },
                                        "east":  {
@@ -673,7 +674,7 @@
                                                                8.375,
                                                                4.125
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 }
                                    }
@@ -706,7 +707,7 @@
                                                                 8.625,
                                                                 8.625
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -715,7 +716,7 @@
                                                                8.375,
                                                                3.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -724,7 +725,7 @@
                                                                 0.625,
                                                                 8.75
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -733,7 +734,7 @@
                                                                1.125,
                                                                8.875
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -742,7 +743,7 @@
                                                              8.125,
                                                              7.375
                                                          ],
-                                                  "texture":  "#3"
+                                                  "texture":  "#crafting_table_color5"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -751,7 +752,7 @@
                                                                8.375,
                                                                4.375
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 }
                                    }
                      },
@@ -783,7 +784,7 @@
                                                                 8.75,
                                                                 6.75
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -792,7 +793,7 @@
                                                                6,
                                                                4.375
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -801,7 +802,7 @@
                                                                 8.875,
                                                                 1.125
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -810,7 +811,7 @@
                                                                6,
                                                                6.375
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -819,7 +820,7 @@
                                                              4.875,
                                                              8.25
                                                          ],
-                                                  "texture":  "#3"
+                                                  "texture":  "#crafting_table_color5"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -828,7 +829,7 @@
                                                                8.375,
                                                                4.125
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 }
                                    }
                      },
@@ -860,7 +861,7 @@
                                                                8.625,
                                                                8.75
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -869,7 +870,7 @@
                                                                 1.625,
                                                                 8.875
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -878,7 +879,7 @@
                                                                9.25,
                                                                8.25
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -887,7 +888,7 @@
                                                                 8.875,
                                                                 1.625
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "up":  {
                                                   "uv":  [
@@ -896,7 +897,7 @@
                                                              8.625,
                                                              8.25
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  270
                                               },
                                        "down":  {
@@ -906,7 +907,7 @@
                                                                8.625,
                                                                8.5
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 }
                                    }
@@ -939,7 +940,7 @@
                                                                1.125,
                                                                0
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "north":  {
                                                      "uv":  [
@@ -948,7 +949,7 @@
                                                                 0.5,
                                                                 0
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -957,7 +958,7 @@
                                                                1.125,
                                                                0
                                                            ],
-                                                    "texture":  "#3"
+                                                    "texture":  "#crafting_table_color5"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -966,7 +967,7 @@
                                                                 0.5,
                                                                 0
                                                             ],
-                                                     "texture":  "#3"
+                                                     "texture":  "#crafting_table_color5"
                                                  },
                                        "up":  {
                                                   "uv":  [
@@ -975,7 +976,7 @@
                                                              7,
                                                              3.25
                                                          ],
-                                                  "texture":  "#3",
+                                                  "texture":  "#crafting_table_color5",
                                                   "rotation":  270
                                               },
                                        "down":  {
@@ -985,7 +986,7 @@
                                                                6.125,
                                                                7.5
                                                            ],
-                                                    "texture":  "#3",
+                                                    "texture":  "#crafting_table_color5",
                                                     "rotation":  90
                                                 }
                                    }
@@ -994,12 +995,12 @@
                          "from":  [
                                       6.8000000000000007,
                                       14,
-                                      -0.9
+                                      -1.9
                                   ],
                          "to":  [
                                     15.8,
                                     19,
-                                    8.1
+                                    7.1
                                 ],
                          "rotation":  {
                                           "angle":  0,
@@ -1007,7 +1008,7 @@
                                           "origin":  [
                                                          -0.19999999999999929,
                                                          14,
-                                                         -5
+                                                         -6
                                                      ]
                                       },
                          "faces":  {
@@ -1018,8 +1019,7 @@
                                                                 16,
                                                                 16
                                                             ],
-                                                     "texture":  "#4_side",
-                                                     "cullface":  "north"
+                                                     "texture":  "#stonecutter_side"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -1028,8 +1028,7 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#4_side",
-                                                    "cullface":  "east"
+                                                    "texture":  "#stonecutter_side"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -1038,8 +1037,7 @@
                                                                 16,
                                                                 16
                                                             ],
-                                                     "texture":  "#4_side",
-                                                     "cullface":  "south"
+                                                     "texture":  "#stonecutter_side"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -1048,8 +1046,7 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#4_side",
-                                                    "cullface":  "west"
+                                                    "texture":  "#stonecutter_side"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -1058,7 +1055,7 @@
                                                              16,
                                                              16
                                                          ],
-                                                  "texture":  "#top"
+                                                  "texture":  "#stonecutter_top"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -1067,20 +1064,19 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#bottom",
-                                                    "cullface":  "down"
+                                                    "texture":  "#stonecutter_bottom"
                                                 }
                                    }
                      },
                      {
                          "from":  [
                                       6.8000000000000007,
-                                      19,
+                                      18.7,
                                       3.5
                                   ],
                          "to":  [
                                     15.8,
-                                    23,
+                                    22.7,
                                     3.5
                                 ],
                          "rotation":  {
@@ -1088,7 +1084,7 @@
                                           "axis":  "y",
                                           "origin":  [
                                                          1.8000000000000007,
-                                                         0,
+                                                         -0.3,
                                                          -9
                                                      ]
                                       },
@@ -1100,7 +1096,7 @@
                                                                 15,
                                                                 16
                                                             ],
-                                                     "texture":  "#saw",
+                                                     "texture":  "#stonecutter_saw",
                                                      "tintindex":  0
                                                  },
                                        "south":  {
@@ -1110,7 +1106,7 @@
                                                                 1,
                                                                 16
                                                             ],
-                                                     "texture":  "#saw",
+                                                     "texture":  "#stonecutter_saw",
                                                      "tintindex":  0
                                                  }
                                    }
@@ -1143,7 +1139,7 @@
                                                                 4,
                                                                 16
                                                             ],
-                                                     "texture":  "#leg"
+                                                     "texture":  "#dark_oak_log"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -1152,7 +1148,7 @@
                                                                6,
                                                                9
                                                            ],
-                                                    "texture":  "#leg"
+                                                    "texture":  "#dark_oak_log"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -1161,7 +1157,7 @@
                                                                 14,
                                                                 16
                                                             ],
-                                                     "texture":  "#leg"
+                                                     "texture":  "#dark_oak_log"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -1170,7 +1166,7 @@
                                                                10,
                                                                16
                                                            ],
-                                                    "texture":  "#leg"
+                                                    "texture":  "#dark_oak_log"
                                                 },
                                        "down":  {
                                                     "uv":  [
@@ -1179,8 +1175,7 @@
                                                                14,
                                                                10
                                                            ],
-                                                    "texture":  "#leg",
-                                                    "cullface":  "down"
+                                                    "texture":  "#dark_oak_log"
                                                 }
                                    }
                      },
@@ -1212,7 +1207,7 @@
                                                                 14,
                                                                 16
                                                             ],
-                                                     "texture":  "#leg"
+                                                     "texture":  "#dark_oak_log"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -1221,7 +1216,7 @@
                                                                6,
                                                                9
                                                            ],
-                                                    "texture":  "#leg"
+                                                    "texture":  "#dark_oak_log"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -1230,7 +1225,7 @@
                                                                 4,
                                                                 16
                                                             ],
-                                                     "texture":  "#leg"
+                                                     "texture":  "#dark_oak_log"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -1239,7 +1234,7 @@
                                                                10,
                                                                16
                                                            ],
-                                                    "texture":  "#leg"
+                                                    "texture":  "#dark_oak_log"
                                                 },
                                        "down":  {
                                                     "uv":  [
@@ -1248,8 +1243,7 @@
                                                                4,
                                                                10
                                                            ],
-                                                    "texture":  "#leg",
-                                                    "cullface":  "down"
+                                                    "texture":  "#dark_oak_log"
                                                 }
                                    }
                      },
@@ -1281,7 +1275,7 @@
                                                                 8,
                                                                 6
                                                             ],
-                                                     "texture":  "#pivot"
+                                                     "texture":  "#grindstone_pivot"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -1290,7 +1284,7 @@
                                                                6,
                                                                6
                                                            ],
-                                                    "texture":  "#pivot"
+                                                    "texture":  "#grindstone_pivot"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -1299,7 +1293,7 @@
                                                                 8,
                                                                 6
                                                             ],
-                                                     "texture":  "#pivot"
+                                                     "texture":  "#grindstone_pivot"
                                                  },
                                        "up":  {
                                                   "uv":  [
@@ -1308,7 +1302,7 @@
                                                              10,
                                                              6
                                                          ],
-                                                  "texture":  "#pivot"
+                                                  "texture":  "#grindstone_pivot"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -1317,7 +1311,7 @@
                                                                10,
                                                                6
                                                            ],
-                                                    "texture":  "#pivot"
+                                                    "texture":  "#grindstone_pivot"
                                                 }
                                    }
                      },
@@ -1349,7 +1343,7 @@
                                                                 8,
                                                                 6
                                                             ],
-                                                     "texture":  "#pivot"
+                                                     "texture":  "#grindstone_pivot"
                                                  },
                                        "south":  {
                                                      "uv":  [
@@ -1358,7 +1352,7 @@
                                                                 8,
                                                                 6
                                                             ],
-                                                     "texture":  "#pivot"
+                                                     "texture":  "#grindstone_pivot"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -1367,7 +1361,7 @@
                                                                6,
                                                                6
                                                            ],
-                                                    "texture":  "#pivot"
+                                                    "texture":  "#grindstone_pivot"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -1376,7 +1370,7 @@
                                                              10,
                                                              6
                                                          ],
-                                                  "texture":  "#pivot"
+                                                  "texture":  "#grindstone_pivot"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -1385,7 +1379,7 @@
                                                                10,
                                                                6
                                                            ],
-                                                    "texture":  "#pivot"
+                                                    "texture":  "#grindstone_pivot"
                                                 }
                                    }
                      },
@@ -1417,7 +1411,7 @@
                                                                 8,
                                                                 12
                                                             ],
-                                                     "texture":  "#round"
+                                                     "texture":  "#grindstone_round"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -1426,7 +1420,7 @@
                                                                12,
                                                                12
                                                            ],
-                                                    "texture":  "#side"
+                                                    "texture":  "#grindstone_side"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -1435,7 +1429,7 @@
                                                                 8,
                                                                 12
                                                             ],
-                                                     "texture":  "#round"
+                                                     "texture":  "#grindstone_round"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -1444,7 +1438,7 @@
                                                                12,
                                                                12
                                                            ],
-                                                    "texture":  "#side"
+                                                    "texture":  "#grindstone_side"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -1453,8 +1447,7 @@
                                                              8,
                                                              12
                                                          ],
-                                                  "texture":  "#round",
-                                                  "cullface":  "up"
+                                                  "texture":  "#grindstone_round"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -1463,7 +1456,7 @@
                                                                8,
                                                                12
                                                            ],
-                                                    "texture":  "#round"
+                                                    "texture":  "#grindstone_round"
                                                 }
                                    }
                      }

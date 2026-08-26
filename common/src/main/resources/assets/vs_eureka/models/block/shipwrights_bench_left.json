@@ -1,21 +1,22 @@
 {
     "parent":  "block/block",
     "textures":  {
-                     "1":  "vs_eureka:block/shipwrights_bench/carpentry_station",
-                     "3":  "vs_eureka:block/shipwrights_bench/crafting_table_color5",
-                     "pivot":  "vs_eureka:block/shipwrights_bench/grindstone_pivot",
-                     "round":  "vs_eureka:block/shipwrights_bench/grindstone_round",
-                     "side":  "vs_eureka:block/shipwrights_bench/grindstone_side",
-                     "leg":  "vs_eureka:block/shipwrights_bench/dark_oak_log",
-                     "bottom":  "vs_eureka:block/shipwrights_bench/stonecutter_bottom",
-                     "top":  "vs_eureka:block/shipwrights_bench/anvil_top",
-                     "4_side":  "vs_eureka:block/shipwrights_bench/stonecutter_side",
-                     "saw":  "vs_eureka:block/shipwrights_bench/stonecutter_saw",
-                     "body":  "vs_eureka:block/shipwrights_bench/anvil",
-                     "south":  "vs_eureka:block/shipwrights_bench/smithing_table_front",
-                     "west":  "vs_eureka:block/shipwrights_bench/smithing_table_side",
-                     "up":  "vs_eureka:block/shipwrights_bench/smithing_table_top",
-                     "down":  "vs_eureka:block/shipwrights_bench/smithing_table_bottom",
+                     "crafting_table_color5":  "vs_eureka:block/shipwrights_bench/crafting_table_color5",
+                     "carpentry_station":  "vs_eureka:block/shipwrights_bench/carpentry_station",
+                     "grindstone_pivot":  "vs_eureka:block/shipwrights_bench/grindstone_pivot",
+                     "grindstone_round":  "vs_eureka:block/shipwrights_bench/grindstone_round",
+                     "grindstone_side":  "vs_eureka:block/shipwrights_bench/grindstone_side",
+                     "dark_oak_log":  "vs_eureka:block/shipwrights_bench/dark_oak_log",
+                     "stonecutter_bottom":  "vs_eureka:block/shipwrights_bench/stonecutter_bottom",
+                     "stonecutter_top":  "vs_eureka:block/shipwrights_bench/stonecutter_top",
+                     "stonecutter_side":  "vs_eureka:block/shipwrights_bench/stonecutter_side",
+                     "stonecutter_saw":  "vs_eureka:block/shipwrights_bench/stonecutter_saw",
+                     "anvil":  "vs_eureka:block/shipwrights_bench/anvil",
+                     "anvil_top":  "vs_eureka:block/shipwrights_bench/anvil_top",
+                     "smithing_table_front":  "vs_eureka:block/shipwrights_bench/smithing_table_front",
+                     "smithing_table_side":  "vs_eureka:block/shipwrights_bench/smithing_table_side",
+                     "smithing_table_top":  "vs_eureka:block/shipwrights_bench/smithing_table_top",
+                     "smithing_table_bottom":  "vs_eureka:block/shipwrights_bench/smithing_table_bottom",
                      "particle":  "vs_eureka:block/shipwrights_bench/carpentry_station"
                  },
     "elements":  [
@@ -47,7 +48,7 @@
                                                                 0.25,
                                                                 0
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -56,7 +57,7 @@
                                                                1.5,
                                                                0
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -65,7 +66,7 @@
                                                                 0.25,
                                                                 0
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -74,7 +75,7 @@
                                                                1.5,
                                                                0
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -83,7 +84,7 @@
                                                              8.25,
                                                              10.125
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -92,7 +93,7 @@
                                                                0,
                                                                11.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -124,7 +125,7 @@
                                                                 12.25,
                                                                 9.25
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -133,7 +134,7 @@
                                                                11.875,
                                                                2.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -142,7 +143,7 @@
                                                                 12.25,
                                                                 9.375
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -151,7 +152,7 @@
                                                                11.875,
                                                                2.875
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -160,7 +161,7 @@
                                                              10.5,
                                                              10.25
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -169,7 +170,7 @@
                                                                10.5,
                                                                10.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -201,7 +202,7 @@
                                                                 1.5,
                                                                 11.75
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -210,7 +211,7 @@
                                                                12.5,
                                                                3.375
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -219,7 +220,7 @@
                                                                 11.875,
                                                                 2.625
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -228,7 +229,7 @@
                                                                12.5,
                                                                3.5
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -237,7 +238,7 @@
                                                              7.75,
                                                              10.125
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -246,7 +247,7 @@
                                                                8,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -278,7 +279,7 @@
                                                                 12.25,
                                                                 3.25
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -287,7 +288,7 @@
                                                                1,
                                                                11.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -296,7 +297,7 @@
                                                                 12.25,
                                                                 9.125
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -305,7 +306,7 @@
                                                                1.25,
                                                                11.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -314,7 +315,7 @@
                                                              10.375,
                                                              9.75
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -323,7 +324,7 @@
                                                                10.375,
                                                                10.25
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -355,7 +356,7 @@
                                                                 10.25,
                                                                 11.625
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -364,7 +365,7 @@
                                                                0.875,
                                                                10.5
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -373,7 +374,7 @@
                                                                 11.625,
                                                                 10.25
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -382,7 +383,7 @@
                                                                1.5,
                                                                10.5
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -391,7 +392,7 @@
                                                              0.25,
                                                              11.625
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -400,7 +401,7 @@
                                                                0.5,
                                                                11.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -432,7 +433,7 @@
                                                                 7.625,
                                                                 11.625
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -441,7 +442,7 @@
                                                                1.5,
                                                                10
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -450,7 +451,7 @@
                                                                 11.625,
                                                                 10
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -459,7 +460,7 @@
                                                                1.5,
                                                                10.25
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -468,7 +469,7 @@
                                                              11.25,
                                                              11.5
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -477,7 +478,7 @@
                                                                11.5,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -509,7 +510,7 @@
                                                                 3.375,
                                                                 11.125
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -518,7 +519,7 @@
                                                                7.125,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -527,7 +528,7 @@
                                                                 4.25,
                                                                 11.125
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -536,7 +537,7 @@
                                                                7.375,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -545,7 +546,7 @@
                                                              4.25,
                                                              10.875
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -554,7 +555,7 @@
                                                                11,
                                                                2
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -586,7 +587,7 @@
                                                                 11.625,
                                                                 4
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -595,7 +596,7 @@
                                                                5.125,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -604,7 +605,7 @@
                                                                 11.625,
                                                                 4.25
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -613,7 +614,7 @@
                                                                6.875,
                                                                11.625
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -622,7 +623,7 @@
                                                              10.75,
                                                              4.25
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -631,7 +632,7 @@
                                                                10.5,
                                                                11
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -663,7 +664,7 @@
                                                                 11.625,
                                                                 3.75
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -672,7 +673,7 @@
                                                                0.875,
                                                                10.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -681,7 +682,7 @@
                                                                 4.125,
                                                                 11.375
                                                             ],
-                                                     "texture":  "#1"
+                                                     "texture":  "#carpentry_station"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -690,7 +691,7 @@
                                                                1.5,
                                                                10.75
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -699,7 +700,7 @@
                                                              11.25,
                                                              11
                                                          ],
-                                                  "texture":  "#1"
+                                                  "texture":  "#carpentry_station"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -708,7 +709,7 @@
                                                                11.25,
                                                                11.25
                                                            ],
-                                                    "texture":  "#1"
+                                                    "texture":  "#carpentry_station"
                                                 }
                                    }
                      },
@@ -740,8 +741,7 @@
                                                                 16,
                                                                 16
                                                             ],
-                                                     "texture":  "#south",
-                                                     "cullface":  "north"
+                                                     "texture":  "#smithing_table_front"
                                                  },
                                        "east":  {
                                                     "uv":  [
@@ -750,8 +750,7 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#west",
-                                                    "cullface":  "east"
+                                                    "texture":  "#smithing_table_side"
                                                 },
                                        "south":  {
                                                      "uv":  [
@@ -760,8 +759,7 @@
                                                                 16,
                                                                 16
                                                             ],
-                                                     "texture":  "#south",
-                                                     "cullface":  "south"
+                                                     "texture":  "#smithing_table_front"
                                                  },
                                        "west":  {
                                                     "uv":  [
@@ -770,8 +768,7 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#west",
-                                                    "cullface":  "west"
+                                                    "texture":  "#smithing_table_side"
                                                 },
                                        "up":  {
                                                   "uv":  [
@@ -780,8 +777,7 @@
                                                              16,
                                                              16
                                                          ],
-                                                  "texture":  "#up",
-                                                  "cullface":  "up"
+                                                  "texture":  "#smithing_table_top"
                                               },
                                        "down":  {
                                                     "uv":  [
@@ -790,8 +786,7 @@
                                                                16,
                                                                16
                                                            ],
-                                                    "texture":  "#down",
-                                                    "cullface":  "down"
+                                                    "texture":  "#smithing_table_bottom"
                                                 }
                                    }
                      }
