@@ -7,7 +7,6 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer
 import net.minecraft.client.renderer.state.CameraRenderState
-import net.minecraft.client.renderer.texture.OverlayTexture
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.phys.Vec3
 import org.joml.Quaternionf
@@ -78,7 +77,8 @@ class ShipHelmBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         )
         // The wheel model isn't centred on its own origin.
         poseStack.translate(-0.5, -0.625, -0.25)
-        collector.submitBlock(poseStack, wheelState, state.lightCoords, OverlayTexture.NO_OVERLAY, 0)
+        // Pre-baked quads, not submitBlock -- see VirtualBlockRenderCache (one entry per wood x mark state).
+        VirtualBlockRenderCache.submit(collector, poseStack, wheelState, state.lightCoords)
         poseStack.popPose()
     }
 }

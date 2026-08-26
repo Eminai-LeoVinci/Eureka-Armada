@@ -7,7 +7,6 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer
 import net.minecraft.client.renderer.state.CameraRenderState
-import net.minecraft.client.renderer.texture.OverlayTexture
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.phys.Vec3
 import org.joml.Quaternionf
@@ -116,7 +115,9 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         // Undo the trunnion, and half a block more on z: the barrel model is authored shifted +8 units
         // backward so the muzzle swell stays inside vanilla's [-16, 32] element range.
         poseStack.translate(-0.5, -1.0, -0.8125)
-        collector.submitBlock(poseStack, barrelState, state.lightCoords, OverlayTexture.NO_OVERLAY, 0)
+        // Pre-baked quads, not submitBlock: a broadside of guns re-traversing the barrel model per frame
+        // was ~11% of the render thread. See VirtualBlockRenderCache.
+        VirtualBlockRenderCache.submit(collector, poseStack, barrelState, state.lightCoords)
         poseStack.popPose()
     }
 
