@@ -11,6 +11,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.resources.Identifier
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.path.PathMessages
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.cos
 import kotlin.math.sin
@@ -87,16 +88,23 @@ object PathHud {
     }
 
     /**
-     * Queue an event message.
+     * Queue an event message, unless this player has switched its [topic] off.
      *
-     * [seconds] overrides how long this one holds; 0 -- the default for everything that does not ask -- means
-     * the player's own `pathMessageSeconds`. A restock report is deliberately short: it is a receipt, useful
-     * for the moment it takes to read and clutter afterwards, and it fires often enough that leaving it up
-     * for six seconds would push everything else off the HUD.
+     * The filter lives HERE rather than in the packet handler, for two reasons. The route-visibility lines
+     * are written straight to this HUD by the keybinds and never cross the wire at all, so a handler-side
+     * gate would miss them. And [prompt] needs the same gate, which a gate on the incoming packet would
+     * have to duplicate.
+     *
+     * [topic] is required, with no default, precisely because there are only three call sites in the tree:
+     * making it explicit turns "forgot to tag the new one" into a compile error rather than a message that
+     * silently cannot be switched off.
+     *
+     * [seconds] overrides how long this one holds; 0 -- what every caller passes now -- means the player's
+     * own `messageSeconds`.
      */
-    @JvmOverloads
-    fun add(text: Component, argb: Int, seconds: Float = 0.0f) {
-        val configured = EurekaConfig.CLIENT.pathMessageSeconds
+    fun add(text: Component, argb: Int, topic: PathMessages.Topic, seconds: Float = 0.0f) {
+        if (!topic.shown) return
+        val configured = EurekaConfig.CLIENT.messageSeconds
         val held = if (seconds > 0.0f) seconds.toDouble() else configured
         val life = (held.coerceIn(0.5, 30.0) * 1000.0).toLong()
         entries.add(Entry(text, argb, System.currentTimeMillis(), life))
@@ -104,7 +112,8 @@ object PathHud {
     }
 
     /** Set (or refresh) the single prompt line. Call every tick while the prompt should be up. */
-    fun prompt(text: Component) {
+    fun prompt(text: Component, topic: PathMessages.Topic) {
+        if (!topic.shown) return
         promptText = text
         promptUntilMs = System.currentTimeMillis() + PROMPT_LINGER_MS
     }

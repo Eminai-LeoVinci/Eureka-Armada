@@ -70,9 +70,6 @@ object CrewStations {
                 other.setChanged()
             }
         }
-        logger.info(
-            "[crew] station healed ship=${ship.id} -> ${chosen.blockPos} ('${chosen.helmName?.string ?: "(unnamed)"}')"
-        )
         return chosen
     }
 
@@ -91,11 +88,6 @@ object CrewStations {
             }
         }
         val holder = level.getBlockEntity(station) as? ShipHelmBlockEntity
-        logger.info(
-            "[crew] station ship=${ship.id} at $station holds=" +
-                if (holder == null) "NOT A HELM (${level.getBlockState(station).block})"
-                else "'${holder.helmName?.string ?: "(unnamed)"}'"
-        )
     }
 
     /**

@@ -79,7 +79,7 @@ object ShipFollows {
         // returns early for one), so it cannot steer itself anywhere and the pursuit is over.
         if (ArmadaShipControl.get(ship)?.isChild == true) {
             release(ship, stopShip = false)
-            ShipCrew.tell(level, ship, "Pursuit ended -- this ship is part of an armada now.", PathMessages.Kind.WARN)
+            ShipCrew.tell(level, ship, "Pursuit ended -- this ship is part of an armada now.", PathMessages.Kind.WARN, PathMessages.Topic.FOLLOW_BINDING)
             return
         }
 
@@ -131,12 +131,12 @@ object ShipFollows {
             1 -> ShipCrew.tell(
                 level, ship,
                 if (mutual) "Circling with '${ShipCrew.name(leader)}'." else "Circling '${ShipCrew.name(leader)}'.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_STATUS
             )
             -1 -> ShipCrew.tell(
                 level, ship,
                 "'${ShipCrew.name(leader)}' is under way -- resuming pursuit.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_STATUS
             )
         }
 
@@ -152,12 +152,12 @@ object ShipFollows {
             ShipCrew.tell(
                 level, ship,
                 "Lost '$name' -- too far astern to keep up. Breaking off.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.FOLLOW_STATUS
             )
             ShipCrew.tell(
                 level, leader,
                 "'${ShipCrew.name(ship)}' has fallen behind and broken off.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.FOLLOW_STATUS
             )
         }
     }
@@ -198,9 +198,15 @@ object ShipFollows {
     }
 
     /** End a pursuit that can no longer be flown, bring the ship up, and tell whoever is aboard. */
-    private fun breakOff(level: ServerLevel, ship: LoadedServerShip, follower: ShipFollower, message: String) {
+    private fun breakOff(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        follower: ShipFollower,
+        message: String,
+        topic: PathMessages.Topic = PathMessages.Topic.FOLLOW_STATUS
+    ) {
         release(ship, stopShip = true)
-        ShipCrew.tell(level, ship, message, PathMessages.Kind.ERROR)
+        ShipCrew.tell(level, ship, message, PathMessages.Kind.ERROR, topic)
     }
 
     /**
@@ -256,11 +262,11 @@ object ShipFollows {
         val existing = followers[own.id]
         if (existing != null && existing.leaderId == target.id) {
             release(own, stopShip = true)
-            ShipCrew.tell(level, own, "Broke off pursuit of '${ShipCrew.name(target)}'.", PathMessages.Kind.GOOD)
+            ShipCrew.tell(level, own, "Broke off pursuit of '${ShipCrew.name(target)}'.", PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_BINDING)
             ShipCrew.tell(
                 level, target,
                 "'${ShipCrew.name(own)}' is no longer following you.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_BINDING
             )
             return
         }
@@ -290,16 +296,16 @@ object ShipFollows {
         val control = own.getAttachment(EurekaShipControl::class.java) ?: return
 
         val leaderName = ShipCrew.name(target)
-        PathMessages.send(player, "In pursuit of '$leaderName' -- coming alongside.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "In pursuit of '$leaderName' -- coming alongside.", PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_BINDING)
         ShipCrew.tellOthers(
             level, own, player,
             "This ship is now in pursuit of '$leaderName'.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.FOLLOW_BINDING
         )
         ShipCrew.tell(
             level, target,
             "'${ShipCrew.name(own)}' is following you.",
-            PathMessages.Kind.WARN
+            PathMessages.Kind.WARN, PathMessages.Topic.FOLLOW_BINDING
         )
 
         // Worth saying once rather than leaving someone watching a ship that isn't moving. The follow owns the
@@ -308,7 +314,7 @@ object ShipFollows {
             PathMessages.send(
                 player,
                 "This ship has little power -- it may not be able to keep up.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.FOLLOW_BINDING
             )
         }
     }
@@ -459,6 +465,9 @@ object ShipFollows {
         return false
     }
 
+    // Refusals only, every one of them -- so this defaults to ALWAYS and its callers say nothing about
+    // topics at all. That is the refusal rule doing its work: a captain who has silenced every follow
+    // report still gets told why a follow would not bind.
     private fun fail(player: ServerPlayer, message: String) =
         PathMessages.send(player, message, PathMessages.Kind.ERROR)
 

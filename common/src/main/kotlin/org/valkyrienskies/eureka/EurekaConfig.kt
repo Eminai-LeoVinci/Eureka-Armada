@@ -6,6 +6,24 @@ object EurekaConfig {
     @JvmField
     val CLIENT = Client()
 
+    // Which REPORTS this player wants on the HUD, written to the config file as "clientMessages".
+    //
+    // Every key is one subcategory of thing-that-happened, and every one defaults ON: these switches are
+    // for a captain who has learned what their own ship sounds like, not a wall of opt-ins for somebody
+    // who has just installed the mod. The case they exist for is a boarding action with a full crew,
+    // where death lines alone bury everything else being said at the time.
+    //
+    // Nothing here can silence a REFUSAL. A line explaining why an order did not happen carries
+    // PathMessages.Topic.ALWAYS and is addressed by no key below -- a captain who turned off "the guns
+    // are laid" still gets told the guns would not lay, because the alternative is a dead button and no
+    // way to find out why. See PathMessages.Topic, which is where a topic and its key are married.
+    //
+    // CLIENT-side, like the timer that governs how long they hold: a streamer quiets their own screen
+    // without touching anybody else's. On a dedicated server this block is read and then never consulted
+    // -- the same inert copy the "client" block above is, and for the same reason.
+    @JvmField
+    val MESSAGES = Messages()
+
     // The BASE settings block, written to the config file as "server". It holds every knob that is NOT
     // per-category, and there are three kinds of those:
     //
@@ -188,10 +206,15 @@ object EurekaConfig {
         var crewNameplateRange = 48.0
 
         @JsonSchema(
-            description = "Seconds each path message stays on screen before fading. Messages stack rather " +
-                "than overwriting one another, so a burst of them is all readable. Default 6.0."
+            description = "Seconds EVERY Armada message stays on screen before fading -- crew, gunnery, " +
+                "stores, pirates, the shipwright, all of it. Messages stack rather than overwriting one " +
+                "another, so a burst of them is all readable. Was 6.0 and per-feature: the restock receipt " +
+                "carried its own 3.5 because six seconds of chest names is clutter, and once one message " +
+                "had its own answer the rest wanted one too. One number instead, at the shorter value -- " +
+                "raise it if you would rather read than glance. Which messages appear at all is the " +
+                "clientMessages block. Default 3.5."
         )
-        var pathMessageSeconds = 6.0
+        var messageSeconds = 3.5
 
         @JsonSchema(
             description = "Seconds SHIFT+R or SHIFT+P must be HELD for the destructive half of the key -- " +
@@ -211,6 +234,270 @@ object EurekaConfig {
                 "way. Default true."
         )
         var hotkeysNeedSneak = true
+    }
+
+    /**
+     * Per-subcategory switches for the things the mod REPORTS. See the KDoc on [MESSAGES].
+     *
+     * Grouped by what the message is about, not by where in the code it comes from, because "I do not want
+     * to hear about crew deaths" is a sentence about crew deaths and not about `CrewRegistrationsFabric`.
+     * How long each one holds is [Client.messageSeconds]; whether it appears at all is here.
+     */
+    class Messages {
+
+        // region Crew
+        @JsonSchema(
+            description = "Report when a hand signs on or is paid off, and what the articles then muster. " +
+                "The confirmation for a deliberate act, so it is mostly worth having -- turn it off if you " +
+                "recruit in batches and would rather read the crew menu once than forty lines in a row. " +
+                "Default true."
+        )
+        var crewRecruiting = true
+
+        @JsonSchema(
+            description = "Report when a crew member is lost and their berth falls vacant. This is the one " +
+                "that fires HARDEST, and it fires worst in a boarding action -- a dozen hands can go in as " +
+                "many seconds, one line each, on top of everything else being said at the time. Turning it " +
+                "off loses the line and never the berth: the articles are kept either way and the crew menu " +
+                "still reads true. Default true."
+        )
+        var crewDeaths = true
+
+        @JsonSchema(
+            description = "Report a berth bought with a Heart of the Sea, and the new size of the largest " +
+                "crew you can muster. Rare and deliberate -- the refusal when the articles are already " +
+                "full is a separate line and always shows. Default true."
+        )
+        var crewBerths = true
+
+        @JsonSchema(
+            description = "Report the result of a muster: who came aboard, who was already there, who was " +
+                "paid off for want of a berth. One line at the end of an assembly, a summon or a bottle " +
+                "coming out, not one per hand. Default true."
+        )
+        var crewMuster = true
+
+        @JsonSchema(
+            description = "Report a crew member changing duty -- to the guns, to the fire watch, off duty " +
+                "-- and being locked or unlocked against bulk orders. One line per villager, so a captain " +
+                "re-organising a full crew from the manifest is the case for turning it off. Default true."
+        )
+        var crewDuties = true
+
+        @JsonSchema(
+            description = "Report the fire party putting fires out. Fires come in bursts, and this is one " +
+                "line per pass to EVERYONE aboard -- so on a ship taking incendiary fire it is the second " +
+                "noisiest thing after the deaths themselves. Default true."
+        )
+        var crewFireBrigade = true
+
+        @JsonSchema(
+            description = "Report the crew nameplates being marked on or off with the crew key. Default true."
+        )
+        var crewMarkers = true
+
+        @JsonSchema(
+            description = "Report a crew standing down into the articles -- which happens three different " +
+                "ways: a ship disassembled, a ship bottled, or a hull broken up by a shipwright. Its own " +
+                "key rather than one of the three above, because it is the same event whichever door it " +
+                "came through. Default true."
+        )
+        var crewStandDown = true
+        // endregion
+
+        // region Gunnery
+        @JsonSchema(
+            description = "Report a broadside going off: how many guns spoke of how many, and how many " +
+                "stood unmanned. Sent to the whole deck, so a passenger on a fighting ship hears every " +
+                "volley. Default true."
+        )
+        var gunneryBroadside = true
+
+        @JsonSchema(
+            description = "Report the Fire at Will standing order being given or lifted. Twice a battle at " +
+                "most, and it is a standing order -- worth knowing it is still standing. Default true."
+        )
+        var gunneryFireAtWill = true
+
+        @JsonSchema(
+            description = "Report gunners taking or leaving their stations, one line per villager. Manning " +
+                "a two-decker in one order is the case for turning this off. Default true."
+        )
+        var gunneryStations = true
+
+        @JsonSchema(
+            description = "Report a battery being laid to an elevation or set to a powder measure. One " +
+                "line per bulk order, not per gun. Default true."
+        )
+        var gunneryOrders = true
+
+        @JsonSchema(
+            description = "Report a gunner standing down because the gun they served is gone. Fires when a " +
+                "battery is shot away, which is exactly when the HUD is busiest. Default true."
+        )
+        var gunneryGunLost = true
+        // endregion
+
+        // region Stores
+        @JsonSchema(
+            description = "Report what a restock or refuel actually moved -- how many guns were loaded " +
+                "with what, or how many engines were stoked. The first line of the receipt; the second is " +
+                "storesReceipts. Default true."
+        )
+        var storesResults = true
+
+        @JsonSchema(
+            description = "Show the second line of a restock: which numbered chests the stock came out of " +
+                "and went back into. Replaces the old server-side restockMessages, which switched receipts " +
+                "off for a whole world at once -- a HUD is a per-player thing, so the switch belongs where " +
+                "the reading happens. A captain who knows their own hold plan is the case for turning it " +
+                "off. Default true."
+        )
+        var storesReceipts = true
+        // endregion
+
+        // region Pirates
+        @JsonSchema(
+            description = "Report a pirate taking up the chase, and losing it again. Default true."
+        )
+        var piratesPursuit = true
+
+        @JsonSchema(
+            description = "Report the turns of a fight for a pirate hull: her crew wiped, her wheel open " +
+                "to be taken, a fresh crew mustered, her wheel finally given out. Default true."
+        )
+        var piratesConquest = true
+
+        @JsonSchema(
+            description = "Show the countdown while your ship sits inside a sleeping pirate's water. It is " +
+                "a running prompt rather than a one-shot, so it refreshes every tick you stay. Turning it " +
+                "off does not stop them waking -- it stops the warning. Default true."
+        )
+        var piratesZones = true
+        // endregion
+
+        // region Following another ship
+        @JsonSchema(
+            description = "Report a ship being put into pursuit of another, or breaking off. Told to both " +
+                "decks, so the ship being followed hears it too. Default true."
+        )
+        var followBinding = true
+
+        @JsonSchema(
+            description = "Report how a pursuit is going: coming alongside, circling a stopped leader, " +
+                "falling astern, losing contact. Default true."
+        )
+        var followStatus = true
+        // endregion
+
+        // region Recorded routes
+        @JsonSchema(
+            description = "Report a route recording starting, saving or being discarded. Default true."
+        )
+        var routesRecording = true
+
+        @JsonSchema(
+            description = "Report a ship flying a route: engaging, holding at a recorded stop, being " +
+                "released, resuming after a world reload. Default true."
+        )
+        var routesReplay = true
+
+        @JsonSchema(
+            description = "Report routes being shown or hidden with the route key. Default true."
+        )
+        var routesVisibility = true
+        // endregion
+
+        // region Cruise control
+        @JsonSchema(
+            description = "Report cruise control and auto-pilot being engaged and disengaged. Default true."
+        )
+        var cruiseStatus = true
+        // endregion
+
+        // region Shipwright
+        @JsonSchema(
+            description = "Report plans being filed, discarded, or saved beside the original. Default true."
+        )
+        var shipwrightPlans = true
+
+        @JsonSchema(
+            description = "Report materials handed to a shipwright, the fee taken, and how much of the " +
+                "bill is settled. Fires once per handover, and a hull is paid for over many trips. " +
+                "Default true."
+        )
+        var shipwrightMaterials = true
+
+        @JsonSchema(
+            description = "Report a commissioned ship being built beside the bench or handed over bottled. " +
+                "Default true."
+        )
+        var shipwrightDelivery = true
+
+        @JsonSchema(
+            description = "Report plans being altered, reset, or drawn up onto a fresh page, and materials " +
+                "handed back when a row is struck off. Default true."
+        )
+        var shipwrightAlterations = true
+        // endregion
+
+        // region Repair
+        @JsonSchema(
+            description = "Report materials handed over toward a repair, and how much of it they cover. " +
+                "Default true."
+        )
+        var repairProgress = true
+
+        @JsonSchema(
+            description = "Report a hull mended, and how many blocks went back into her. Default true."
+        )
+        var repairComplete = true
+
+        @JsonSchema(
+            description = "Report a partial repair: what the pot covered, and how much of the hull is " +
+                "still wanting. Default true."
+        )
+        var repairPartial = true
+        // endregion
+
+        // region Salvage
+        @JsonSchema(
+            description = "Report a hull broken up: how many kinds are waiting to be claimed, and what is " +
+                "being kept whole rather than counted. Default true."
+        )
+        var salvageDismantle = true
+
+        @JsonSchema(
+            description = "Report salvage carried aboard or thrown back into the sea, one line per claim. " +
+                "Clearing a long claim list is the case for turning it off. Default true."
+        )
+        var salvageClaims = true
+        // endregion
+
+        // region Ship bottles
+        @JsonSchema(
+            description = "Report a bottle being marked with a ship's wheel. Default true."
+        )
+        var bottleMarking = true
+
+        @JsonSchema(
+            description = "Report a ship going into the bottle, and her crew standing down with her. " +
+                "Default true."
+        )
+        var bottleCapture = true
+
+        @JsonSchema(
+            description = "Report a ship coming back out of the bottle. Default true."
+        )
+        var bottleRelease = true
+        // endregion
+
+        // region Blueprints
+        @JsonSchema(
+            description = "Report a blueprint being drafted from a ship's wheel. Default true."
+        )
+        var blueprintDrafting = true
+        // endregion
     }
 
     /**
@@ -1105,19 +1392,10 @@ object EurekaConfig {
         var crewPassagePearls = 1
 
         // region Cannons
-        @JsonSchema(
-            description = "Show the two-line receipt after a restock or refuel -- how many guns were loaded, " +
-                "and which numbered chests the stock came out of and went back into. Turn off for a quieter " +
-                "HUD; the restock itself is unaffected. Default true."
-        )
-        var restockMessages = true
-
-        @JsonSchema(
-            description = "How long the restock receipt holds on the HUD, in seconds. Still shorter than an " +
-                "ordinary message -- it is a receipt, read once and then clutter -- but two seconds proved " +
-                "too brief to read a line naming several chests. Default 3.5."
-        )
-        var restockMessageSeconds = 3.5
+        // The restock receipt used to be switched here, world-wide, with its own duration beside it. Both
+        // moved to the client: `clientMessages.storesResults` and `.storesReceipts` for whether the two
+        // lines appear, and `client.messageSeconds` for how long they hold. A HUD is a per-player thing,
+        // and an operator deciding what every captain reads was the wrong shape for it.
 
         // A gunner picks how much powder goes behind the ball at the breech -- 1x, 2x or 3x -- and each of
         // the three carries its OWN four numbers, repeated below rather than scaled off one base arc.

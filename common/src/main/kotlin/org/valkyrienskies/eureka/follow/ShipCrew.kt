@@ -38,9 +38,20 @@ object ShipCrew {
         return level.players().filter { standingOn(it) in group }
     }
 
-    /** Send [message] to everyone aboard [ship]. Does nothing when the decks are empty. */
-    fun tell(level: ServerLevel, ship: LoadedServerShip, message: String, kind: PathMessages.Kind) {
-        for (player in aboard(level, ship)) PathMessages.send(player, message, kind)
+    /**
+     * Send [message] to everyone aboard [ship]. Does nothing when the decks are empty.
+     *
+     * [topic] carries no default on purpose: a line sent to a whole deck is the single loudest thing this
+     * mod can do, so every caller is made to say what it is about rather than falling into always-on.
+     */
+    fun tell(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        message: String,
+        kind: PathMessages.Kind,
+        topic: PathMessages.Topic
+    ) {
+        for (player in aboard(level, ship)) PathMessages.send(player, message, kind, topic)
     }
 
     /**
@@ -48,16 +59,21 @@ object ShipCrew {
      *
      * The player who gave the order gets told what they just did; their shipmates get told what happened to
      * their ship. Same event, and the two readings deserve different sentences.
+     *
+     * Pass the SAME [topic] the captain's own line carries. A message that appears for the person who gave
+     * the order and vanishes for the passenger standing next to them is harder to explain than either
+     * behaviour on its own -- so the audience is not a thing the switches know about.
      */
     fun tellOthers(
         level: ServerLevel,
         ship: LoadedServerShip,
         except: ServerPlayer,
         message: String,
-        kind: PathMessages.Kind
+        kind: PathMessages.Kind,
+        topic: PathMessages.Topic
     ) {
         for (player in aboard(level, ship)) {
-            if (player.uuid != except.uuid) PathMessages.send(player, message, kind)
+            if (player.uuid != except.uuid) PathMessages.send(player, message, kind, topic)
         }
     }
 

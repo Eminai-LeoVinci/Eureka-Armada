@@ -207,13 +207,13 @@ object ShipSalvage {
         PathMessages.send(
             player,
             "'${survey.shipName}' is broken up -- $kinds kinds waiting to be claimed.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_DISMANTLE
         )
         if (survey.keepsakes.isNotEmpty()) {
             PathMessages.send(
                 player,
                 "${survey.keepsakes.size} items are being kept whole rather than counted.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_DISMANTLE
             )
         }
         if (crewReport.stood > 0) {
@@ -221,7 +221,7 @@ object ShipSalvage {
             PathMessages.send(
                 player,
                 "${crewReport.stood} $crew stood down into the articles.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.CREW_STAND_DOWN
             )
         }
         return survey

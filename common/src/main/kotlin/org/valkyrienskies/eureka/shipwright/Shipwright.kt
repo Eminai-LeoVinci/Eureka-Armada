@@ -96,7 +96,7 @@ object Shipwright {
         PathMessages.send(
             player,
             "$told -- ${library.plans.size} of ${library.slots} sets of plans.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_PLANS
         )
         return true
     }
@@ -136,7 +136,7 @@ object Shipwright {
         plans.alteration = Alteration.NONE
         plans.deliveries.clear()
 
-        PathMessages.send(player, "Filed '$chosen' beside the original.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Filed '$chosen' beside the original.", PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_PLANS)
         return null
     }
 
@@ -206,7 +206,7 @@ object Shipwright {
             PathMessages.send(player, "No room in your pack for the page.", PathMessages.Kind.WARN)
             return false
         }
-        PathMessages.send(player, "Drawn up: '${plans.shipName}', as altered.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Drawn up: '${plans.shipName}', as altered.", PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_ALTERATIONS)
         return true
     }
 
@@ -360,7 +360,7 @@ object Shipwright {
         PathMessages.send(
             player,
             "'${plans.shipName}' is built and waiting -- assemble it at its wheel.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_DELIVERY
         )
         return true
     }
@@ -488,7 +488,7 @@ object Shipwright {
         PathMessages.send(
             player,
             "The shipwright hands over '$bottleName', bottled.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_DELIVERY
         )
         return true
     }
@@ -558,7 +558,7 @@ object Shipwright {
                 else -> paid + "handed over $taken items, '${plans.shipName}' is $progress."
             }
         }
-        PathMessages.send(player, message, PathMessages.Kind.GOOD)
+        PathMessages.send(player, message, PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_MATERIALS)
     }
 
     /**

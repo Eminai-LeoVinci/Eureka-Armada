@@ -353,7 +353,7 @@ object ShipwrightTalk {
                     PathMessages.send(
                         player,
                         "The shipwright discards the plans for '$shipName'.",
-                        PathMessages.Kind.WARN
+                        PathMessages.Kind.WARN, PathMessages.Topic.SHIPWRIGHT_PLANS
                     )
                 }
             }
@@ -377,7 +377,7 @@ object ShipwrightTalk {
             ShipwrightMenu.Action.RESET_ALTERATION -> {
                 if (!plans.alteration.isEmpty) {
                     refund(level, player, plans) { plans.alteration = Alteration.NONE }
-                    PathMessages.send(player, "The plans are as drawn again.", PathMessages.Kind.GOOD)
+                    PathMessages.send(player, "The plans are as drawn again.", PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_ALTERATIONS)
                 }
             }
             ShipwrightMenu.Action.SAVE_AS_NEW -> {
@@ -446,7 +446,7 @@ object ShipwrightTalk {
             PathMessages.send(
                 player,
                 "Your pack is full -- $stuck materials stay on the bench.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.SHIPWRIGHT_ALTERATIONS
             )
         }
         return true
@@ -568,7 +568,7 @@ object ShipwrightTalk {
         if (ShipSalvage.dismantle(level, player, ship) == null) return
         YardFee.take(player, fee)
         if (fee.isNotEmpty()) {
-            PathMessages.send(player, "The yard takes " + YardFee.describe(fee) + ".", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "The yard takes " + YardFee.describe(fee) + ".", PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_DISMANTLE)
         }
     }
 
@@ -605,7 +605,7 @@ object ShipwrightTalk {
                         player,
                         if (kinds > 0) "$kinds kept items thrown back into the sea."
                         else "There was nothing left on that list.",
-                        if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                        if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS
                     )
                 }
                 action == ShipwrightMenu.Action.CLAIM_ALL -> Salvaging.claimKeepsakes(ledger, player, pile)
@@ -619,7 +619,7 @@ object ShipwrightTalk {
                         player,
                         if (name != null) "$name thrown back into the sea."
                         else "There was nothing left to throw away.",
-                        if (name != null) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                        if (name != null) PathMessages.Kind.WARN else PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS
                     )
                 }
                 else -> Salvaging.claimKeepsake(ledger, player, pile, index)
@@ -634,7 +634,7 @@ object ShipwrightTalk {
                 player,
                 if (kinds > 0) "$kinds kinds thrown back into the sea."
                 else "There was nothing left on that list.",
-                if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                if (kinds > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS
             )
             return
         }
@@ -663,7 +663,7 @@ object ShipwrightTalk {
                 player,
                 if (had > 0) "$had $name thrown back into the sea."
                 else "There was none of that left to throw away.",
-                if (had > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+                if (had > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS
             )
         } else {
             Salvaging.claimOne(ledger, player, pile, cargoSide, item, useShulkers)
@@ -736,7 +736,7 @@ object ShipwrightTalk {
 
         if (player.abilities.instabuild) {
             for ((item, owed) in bill.outstanding()) ledger.deliverRepair(bill, item, owed)
-            PathMessages.send(player, "The shipwright has all it needs.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "The shipwright has all it needs.", PathMessages.Kind.GOOD, PathMessages.Topic.REPAIR_PROGRESS)
             return
         }
 
@@ -754,7 +754,7 @@ object ShipwrightTalk {
         }
 
         if (taken == 0) {
-            PathMessages.send(player, "Nothing on you that it needs.", PathMessages.Kind.WARN)
+            PathMessages.send(player, "Nothing on you that it needs.", PathMessages.Kind.WARN, PathMessages.Topic.REPAIR_PROGRESS)
         } else if (bill.ready) {
             PathMessages.send(player, "The shipwright has all it needs.", PathMessages.Kind.GOOD)
         } else {
@@ -802,7 +802,7 @@ object ShipwrightTalk {
         PathMessages.send(
             player,
             "Room for another set of plans -- ${ledger.libraryOf(player.uuid).slots} in all.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_PLANS
         )
         openShelf(level, player, villager)
     }

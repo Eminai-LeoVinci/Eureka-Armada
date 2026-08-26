@@ -116,7 +116,7 @@ object Blueprint {
             return null
         }
 
-        PathMessages.send(player, "Drafted a blueprint of '$shipName'.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Drafted a blueprint of '$shipName'.", PathMessages.Kind.GOOD, PathMessages.Topic.BLUEPRINT_DRAFTING)
         return page
     }
 

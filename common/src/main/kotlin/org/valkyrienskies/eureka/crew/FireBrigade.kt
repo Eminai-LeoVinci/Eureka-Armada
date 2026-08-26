@@ -290,7 +290,7 @@ object FireBrigade {
             ShipCrew.tell(
                 level, ship,
                 "Fire party put out $count fire${if (count == 1) "" else "s"}.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.CREW_FIRE_BRIGADE
             )
         }
     }

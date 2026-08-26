@@ -120,7 +120,7 @@ object ShipBottle {
         // GOOD, not PROMPT: the prompt channel is a single slot meant to be re-sent every tick while a key is
         // held, and it expires a quarter second after its last refresh. This is said once and needs to survive
         // long enough to walk away on.
-        PathMessages.send(player, "Marked '$shipName' -- throw the bottle to take it.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Marked '$shipName' -- throw the bottle to take it.", PathMessages.Kind.GOOD, PathMessages.Topic.BOTTLE_MARKING)
         return true
     }
 
@@ -327,14 +327,14 @@ object ShipBottle {
         }
 
         val bottled = bottleOf(templateName, shipName)
-        PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "'$shipName' is in the bottle.", PathMessages.Kind.GOOD, PathMessages.Topic.BOTTLE_CAPTURE)
         // The crew's fate is said out loud, not just logged. Silence here once meant eighty villagers falling
         // out of the sky with nobody the wiser until the death messages started; a captain who bottles a
         // crewed ship should see the articles close over them -- and a count of zero with crew aboard is the
         // one outcome that must never again pass without a word.
         if (crewReport.stood > 0) {
             val crew = if (crewReport.stood == 1) "crew member" else "crew"
-            PathMessages.send(player, "${crewReport.stood} $crew stood down into the articles.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "${crewReport.stood} $crew stood down into the articles.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_STAND_DOWN)
         } else if (crewReport.berthedAboard > 0) {
             PathMessages.send(
                 player,
@@ -485,7 +485,7 @@ object ShipBottle {
             helmEntity.assemble(player, placed, holdEntities = false)
             // Said out loud on purpose: a hull resting on the ground looks exactly like a pile of blocks, so
             // "it came out" and "it came out as a ship" are indistinguishable without being told which.
-            PathMessages.send(player, "$shipName is afloat again.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "$shipName is afloat again.", PathMessages.Kind.GOOD, PathMessages.Topic.BOTTLE_RELEASE)
         }
 
         // Put the sea back. The hull has moved to the shipyard by now, so every one of these is air again, and

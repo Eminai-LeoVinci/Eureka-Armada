@@ -6,6 +6,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import net.minecraft.core.Direction
 import net.minecraft.network.chat.Component
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.player.Player
 import org.joml.*
 import org.valkyrienskies.core.api.VsBeta
@@ -18,6 +20,7 @@ import org.valkyrienskies.core.api.world.PhysLevel
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBody
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.mod.api.SeatedControllingPlayer
 import org.valkyrienskies.mod.common.util.toJOMLD
 import kotlin.math.*
@@ -1475,13 +1478,23 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
      */
     private fun showCruiseStatus(sets: Int = automatedSets()) {
         val autoPilot = sets >= 2
-        val cruiseKey = when {
-            isCruising && autoPilot -> "hud.vs_eureka.start_autopilot"
-            isCruising -> "hud.vs_eureka.start_cruising"
-            autoPilot -> "hud.vs_eureka.stop_autopilot"
-            else -> "hud.vs_eureka.stop_cruising"
+        // English inlined rather than a translation key, because this now goes through PathMessages, which
+        // carries a String. Resolving a mod key server-side returns the key itself on a dedicated server --
+        // MC's Language only ever loads minecraft's -- and every other message in this mod is a literal for
+        // exactly that reason. The four hud.vs_eureka.*_cruising keys are retired with this change.
+        val line = when {
+            isCruising && autoPilot -> "Auto-Pilot enabled"
+            isCruising -> "Cruise control enabled"
+            autoPilot -> "Auto-Pilot disabled"
+            else -> "Cruise control disabled"
         }
-        seatedPlayer?.displayClientMessage(Component.translatable(cruiseKey), true)
+        val seated = seatedPlayer as? ServerPlayer ?: return
+        // Four of this function's six callers run on the PHYSICS thread (see physTick), and the HUD send
+        // reads Fabric's declared-channel set. Hop to the game thread rather than reason about whether
+        // that set is safe to touch mid-tick: a status line is worth exactly zero tempo.
+        (seated.level() as? ServerLevel)?.server?.execute {
+            PathMessages.send(seated, line, PathMessages.Kind.GOOD, PathMessages.Topic.CRUISE_STATUS)
+        }
     }
 
     // Clears any locked turn-cruise orbit. Called on EVERY cruise-end path (toggle off, opposite-input

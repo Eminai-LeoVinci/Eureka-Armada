@@ -110,17 +110,8 @@ object CrewOperations {
      * about a roster: a captain looking at their own cargo has not asked anybody to do anything.
      */
     fun requestStores(level: ServerLevel, player: ServerPlayer, helm: Long) {
-        val station = CrewManifest.stationAt(level, player, helm)
-        if (station == null) {
-            // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
-            storesLog.info("[stores] helm {} refused: stationAt (reach, crew station, or pirate gate)", helm)
-            return
-        }
-        val ship = CrewStations.shipOf(level, station)
-        if (ship == null) {
-            storesLog.info("[stores] helm {} refused: no ship under the wheel", helm)
-            return
-        }
+        val station = CrewManifest.stationAt(level, player, helm) ?: return
+        val ship = CrewStations.shipOf(level, station) ?: return
         pushStores(level, player, station, ship)
     }
 
@@ -146,11 +137,11 @@ object CrewOperations {
         if (on) {
             ShipCrew.tellOthers(
                 level, op.ship, player,
-                "${ShipCrew.name(op.ship)}'s guns are free to fire.", PathMessages.Kind.WARN
+                "${ShipCrew.name(op.ship)}'s guns are free to fire.", PathMessages.Kind.WARN, PathMessages.Topic.GUNNERY_FIRE_AT_WILL
             )
-            PathMessages.send(player, "Fire at will -- the gun crews will lay their own.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "Fire at will -- the gun crews will lay their own.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_FIRE_AT_WILL)
         } else {
-            PathMessages.send(player, "Cease fire.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "Cease fire.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_FIRE_AT_WILL)
         }
         pushStores(op)
     }
@@ -227,7 +218,7 @@ object CrewOperations {
                 PathMessages.send(player, "No one to release from ${scopeName(side, layer).lowercase()}.", PathMessages.Kind.GOOD)
             } else {
                 val who = if (released == 1) "gunner" else "gunners"
-                PathMessages.send(player, "${scopeName(side, layer)}: $released $who released.", PathMessages.Kind.GOOD)
+                PathMessages.send(player, "${scopeName(side, layer)}: $released $who released.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS)
                 CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
                 pushStores(op)
             }
@@ -246,12 +237,12 @@ object CrewOperations {
                 PathMessages.send(
                     player,
                     "${scopeName(side, layer)}: $released stood down, $manned still manned.",
-                    PathMessages.Kind.GOOD
+                    PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS
                 )
                 CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
                 pushStores(op)
             } else {
-                PathMessages.send(player, "${scopeName(side, layer)} already musters $manned gunners.", PathMessages.Kind.GOOD)
+                PathMessages.send(player, "${scopeName(side, layer)} already musters $manned gunners.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS)
             }
             return
         }
@@ -306,7 +297,7 @@ object CrewOperations {
         PathMessages.send(
             player,
             "${scopeName(side, layer)}: $assigned seated, ${manned + assigned} of ${scope.size} guns manned.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS
         )
         val gripes = buildList {
             if (away > 0) add("$away couldn't be reached")
@@ -362,7 +353,7 @@ object CrewOperations {
             if (released == 0) {
                 PathMessages.send(player, "No fire watch to release.", PathMessages.Kind.GOOD)
             } else {
-                PathMessages.send(player, "Fire watch: $released released.", PathMessages.Kind.GOOD)
+                PathMessages.send(player, "Fire watch: $released released.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES)
                 CrewManifest.sender(player, CrewManifest.build(level, player, op.station))
                 pushStores(op)
             }
@@ -375,7 +366,7 @@ object CrewOperations {
             val onWatch = berths.count { it.duty == CrewDuty.FIREFIGHTER }
             var short = (total - onWatch).coerceAtLeast(0)
             if (short == 0) {
-                PathMessages.send(player, "The fire watch already musters $onWatch.", PathMessages.Kind.GOOD)
+                PathMessages.send(player, "The fire watch already musters $onWatch.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES)
                 return
             }
             var added = 0
@@ -388,7 +379,7 @@ object CrewOperations {
                 short--
                 added++
             }
-            PathMessages.send(player, "Fire watch: $added posted, ${onWatch + added} on watch.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "Fire watch: $added posted, ${onWatch + added} on watch.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES)
             if (short > 0) {
                 PathMessages.send(player, "No more idle crew to post.", PathMessages.Kind.WARN)
             }
@@ -415,7 +406,7 @@ object CrewOperations {
         }
 
         val kept = if (lockedWatch == 0) "" else ", $lockedWatch locked kept"
-        PathMessages.send(player, "Fire watch: $posted posted$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Fire watch: $posted posted$kept.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES)
         if (posted < total - lockedWatch) {
             PathMessages.send(player, "Only $posted unlocked crew to post.", PathMessages.Kind.WARN)
         }
@@ -661,7 +652,7 @@ object CrewOperations {
         val degrees = EurekaProperties.elevationDegrees(clamped)
         val skipped = guns.size - laid
         val kept = if (skipped == 0) "" else " ($skipped locked kept)"
-        PathMessages.send(player, "${scopeName(side, layer)} laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "${scopeName(side, layer)} laid to ${formatDegrees(degrees)} -- $laid guns$kept.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_ORDERS)
     }
 
     /**
@@ -699,7 +690,7 @@ object CrewOperations {
 
         val skipped = guns.size - set
         val kept = if (skipped == 0) "" else " ($skipped locked kept)"
-        PathMessages.send(player, "${scopeName(side, layer)} set to ${charge.powder}x power -- $set guns$kept.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "${scopeName(side, layer)} set to ${charge.powder}x power -- $set guns$kept.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_ORDERS)
     }
 
     /** Set one gunner's cannon to a powder charge, from their card. The card's own optimism confirms here. */
@@ -911,18 +902,26 @@ object CrewOperations {
         }
 
         fun send(player: ServerPlayer) {
-            if (parts.isEmpty() || !EurekaConfig.SERVER.restockMessages) return
+            if (parts.isEmpty()) return
+            // The server-side restockMessages gate and the per-message 3.5s are both gone: whether this
+            // line appears is now the reader's own STORES_RECEIPTS switch, and how long it holds is the
+            // one timer every message obeys. A HUD is a per-player thing, so both belong on the client.
             PathMessages.send(
                 player, parts.joinToString("  |  "),
-                PathMessages.Kind.GOOD, EurekaConfig.SERVER.restockMessageSeconds
+                PathMessages.Kind.GOOD, PathMessages.Topic.STORES_RECEIPTS
             )
         }
     }
 
-    /** The first line of a restock. Same gate and same short life as the receipt it precedes. */
+    /**
+     * The first line of a restock: what was actually moved.
+     *
+     * Its own topic, separate from the receipt below it. The two answer different questions -- "sixty
+     * guns were loaded" and "here is which chests that came out of" -- and a captain who knows their own
+     * hold plan wants the second silenced and the first kept.
+     */
     private fun report(player: ServerPlayer, message: String) {
-        if (!EurekaConfig.SERVER.restockMessages) return
-        PathMessages.send(player, message, PathMessages.Kind.GOOD, EurekaConfig.SERVER.restockMessageSeconds)
+        PathMessages.send(player, message, PathMessages.Kind.GOOD, PathMessages.Topic.STORES_RESULTS)
     }
 
     private fun gate(level: ServerLevel, player: ServerPlayer, helm: Long): Op? {
@@ -931,9 +930,6 @@ object CrewOperations {
         val ship = CrewStations.shipOf(level, station) ?: return null
         return Op(level, player, station, crewId, ship)
     }
-
-    // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
-    private val storesLog by org.valkyrienskies.mod.util.logger()
 
     /**
      * Note an order's settings on the SHIP -- the terminal memory the next book-open seeds from. Recorded

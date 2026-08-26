@@ -597,7 +597,7 @@ object CrewManifest {
         // setDuty clears any station with the old duty; the seat has to follow the paperwork.
         CrewLedger.get(level.server).setDuty(villager, duty)
         GunStations.unseat(level, villager)
-        PathMessages.send(player, orderFor(berth.name, duty), PathMessages.Kind.GOOD)
+        PathMessages.send(player, orderFor(berth.name, duty), PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES)
 
         sender(player, build(level, player, station))
         detailFor(level, player, station, villager)?.let { detailSender(player, it) }
@@ -623,7 +623,7 @@ object CrewManifest {
             if (berth.station != null || berth.stationLabel != null) {
                 ledger.clearStation(villager)
                 GunStations.unseat(level, villager)
-                PathMessages.send(player, "${berth.name} stands down from the guns.", PathMessages.Kind.GOOD)
+                PathMessages.send(player, "${berth.name} stands down from the guns.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS)
             }
             sender(player, build(level, player, station))
             detailFor(level, player, station, villager)?.let { detailSender(player, it) }
@@ -666,7 +666,7 @@ object CrewManifest {
 
         ledger.setStation(villager, gunPos, label)
         if (GunStations.stationNow(level, villager, gun.blockPos)) {
-            PathMessages.send(player, "${berth.name} takes station at $label.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "${berth.name} takes station at $label.", PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_STATIONS)
         } else {
             // Loudly, and with the books put back -- a binding that half-happened is what made the first
             // round of this feature undiagnosable.
@@ -708,7 +708,7 @@ object CrewManifest {
         }
         val name = dismiss(level, player, station, villager) ?: return
         val crewName = station.helmName?.string ?: "the articles"
-        PathMessages.send(player, "Paid off $name from $crewName.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Paid off $name from $crewName.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING)
         sender(player, build(level, player, station))
     }
 
@@ -729,7 +729,7 @@ object CrewManifest {
             player,
             if (locked) "${berth.name} is locked in -- orders will pass them over."
             else "${berth.name} is unlocked.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.CREW_DUTIES
         )
         sender(player, build(level, player, station))
         detailFor(level, player, station, villager)?.let { detailSender(player, it) }

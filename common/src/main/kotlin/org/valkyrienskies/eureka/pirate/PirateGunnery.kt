@@ -23,9 +23,6 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  */
 object PirateGunnery {
 
-    // DEV ONLY: the [gunnery] census trace -- strip with the ROADMAP 6c sweep.
-    private val log by org.valkyrienskies.mod.util.logger()
-
     /**
      * One chase's gunnery bookkeeping. It lives ON the [PirateShips.PirateChase] and nowhere else, so
      * the guns go quiet by the same door the pursuit does: chase retired, state gone, nothing to leak.
@@ -35,8 +32,6 @@ object PirateGunnery {
         var targetShip: Long = 0L
         var nextScanAt: Long = 0L
         var nextShotAt: Long = 0L
-        /** DEV ONLY: throttle for the [census] trace. */
-        var nextCensusAt: Long = 0L
     }
 
     /**
@@ -64,10 +59,7 @@ object PirateGunnery {
             state.nextScanAt = now + SCAN_INTERVAL
             state.targetShip = pickTarget(level, pirate, chase.leaderId)
         }
-        if (state.targetShip == 0L) {
-            census(level, pirate, state, now, whyNoTarget(level, pirate))
-            return
-        }
+        if (state.targetShip == 0L) return
         if (now < state.nextShotAt) return
 
         val target = level.shipObjectWorld.loadedShips.getById(state.targetShip)
@@ -83,21 +75,10 @@ object PirateGunnery {
             return
         }
 
-        var guns = 0
-        var manned = 0
-        var lastRefusal: String? = null
         for (gun in ShipGuns.aboard(level, pirate)) {
-            guns++
-            if (gun.readyAt > now) {
-                lastRefusal = "cooling"
-                continue
-            }
+            if (gun.readyAt > now) continue
             val gunner = GunnerMounts.gunnerAt(level, gun.blockPos)
-            if (gunner == null || !gunner.isAlive) {
-                lastRefusal = "no living gunner mounted"
-                continue
-            }
-            manned++
+            if (gunner == null || !gunner.isAlive) continue
             val aim = AutoGunnery.aimFor(level, gun, target) ?: fallback
             val refusal = AutoGunnery.fireAt(
                 level, gun, aim, cfg.pirateCannonJitterBlocks,
@@ -108,82 +89,13 @@ object PirateGunnery {
                 state.nextShotAt = now + cfg.pirateCannonStaggerTicks.toLong().coerceAtLeast(1L)
                 return
             }
-            lastRefusal = refusal.string
             // This gun could not take the shot (off the bore line, or dry) -- ask the next one.
         }
         // Nobody could bear this tick -- the hull is still turning. No point walking every breech again
         // for a few ticks; the ship's own manoeuvre is what changes the answer.
         state.nextShotAt = now + IDLE_RETRY_TICKS
-        val hullRange = shipCentre(pirate)?.let { AutoGunnery.hullDistanceSq(target, it) }
-            ?.let { Math.sqrt(it) } ?: -1.0
-        census(
-            level, pirate, state, now,
-            "$guns guns, $manned manned, none fired at %.0fm (last: %s)"
-                .format(hullRange, lastRefusal ?: "no guns aboard")
-        )
     }
 
-    /** DEV ONLY: "no target" has several authors; name the one that applies, with the numbers. */
-    private fun whyNoTarget(level: ServerLevel, pirate: LoadedServerShip): String {
-        val own = ArmadaGroup.idsOf(level, pirate)
-        val centre = shipCentre(pirate) ?: return "no target: this hull has no centre (unloaded?)"
-        var crewed = 0
-        var nearestSq = Double.MAX_VALUE
-        for (candidate in level.shipObjectWorld.loadedShips) {
-            if (candidate.id in own || candidate.chunkClaimDimension != level.dimensionId) continue
-            if (PirateShips.isPirate(candidate.id)) continue
-            if (playersAboard(level, candidate).isEmpty()) continue
-            val nearest = AutoGunnery.hullDistanceSq(candidate, centre) ?: continue
-            crewed++
-            if (nearest < nearestSq) nearestSq = nearest
-        }
-        if (crewed > 0) {
-            return "no target: nearest crewed hull is %.1f blocks off, engage range %.1f"
-                .format(Math.sqrt(nearestSq), EurekaConfig.SERVER.pirateCannonEngageRange)
-        }
-
-        // DEV ONLY: nobody qualified, and "no player aboard anything" is not a believable answer while a
-        // captain is circling in plain sight -- so say what was actually looked at. Ship by ship: who was
-        // skipped and why, how far off it was, and what VS2 thinks each player is standing on.
-        val roll = StringBuilder("no target. loaded hulls:")
-        var listed = 0
-        for (candidate in level.shipObjectWorld.loadedShips) {
-            if (listed++ >= 6) {
-                roll.append(" ...")
-                break
-            }
-            val centreOf = shipCentre(candidate)
-            val dist = centreOf?.distanceTo(centre) ?: -1.0
-            val why = when {
-                candidate.id in own -> "own"
-                candidate.chunkClaimDimension != level.dimensionId -> "otherDim"
-                PirateShips.isPirate(candidate.id) -> "pirate"
-                else -> "crew=${playersAboard(level, candidate).size}"
-            }
-            roll.append(" [%d %s %.0fm]".format(candidate.id, why, dist))
-        }
-        roll.append(" | players:")
-        for (player in level.players()) {
-            roll.append(
-                " [%s on=%s %.0fm]".format(
-                    player.name.string, ShipCrew.standingOn(player)?.toString() ?: "ground",
-                    player.position().distanceTo(centre)
-                )
-            )
-        }
-        return roll.toString()
-    }
-
-    /**
-     * DEV ONLY: a throttled one-liner saying why a pursuing pirate is not shooting. Silence had four
-     * possible authors -- no target, no gunners, dry magazines, nothing bearing -- and no way to tell
-     * them apart from the deck. Strip with the ROADMAP 6c sweep.
-     */
-    private fun census(level: ServerLevel, pirate: LoadedServerShip, state: State, now: Long, why: String) {
-        if (now < state.nextCensusAt) return
-        state.nextCensusAt = now + CENSUS_INTERVAL
-        log.info("[gunnery] ship {}: {}", pirate.id, why)
-    }
 
     /**
      * The enemy: a loaded hull, not of this armada, not a fellow pirate, with a PLAYER aboard, whose
@@ -301,8 +213,6 @@ object PirateGunnery {
     /** How long to sit out after a walk of the batteries found nobody bearing. */
     private const val IDLE_RETRY_TICKS = 10L
 
-    /** DEV ONLY: how often the silence census may speak -- twice a second is plenty to read. */
-    private const val CENSUS_INTERVAL = 40L
 
     /** VS2's per-face influence default, mirrored server-side -- the same margin the chase wakes on. */
     private const val INFLUENCE_MARGIN = 2.0

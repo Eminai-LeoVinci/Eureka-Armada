@@ -126,7 +126,7 @@ object ShipFoundering {
                 if (tickWreck(level, ship, control, y)) {
                     watches.remove(ship.id)
                     grounded.remove(ship.id)
-                    logger.info("[wreck] ship {} broke up where she lay", ship.id)
+                    logger.debug("ship {} broke up where she lay", ship.id)
                 }
                 continue
             }
@@ -148,7 +148,6 @@ object ShipFoundering {
 
             if (scuttle(level, ship)) {
                 watches.remove(ship.id)
-                logger.info("[foundering] ship {} came to rest and broke up", ship.id)
             }
         }
 
@@ -209,8 +208,8 @@ object ShipFoundering {
             return false
         }
         if (wreck) {
-            logger.info(
-                "[wreck] ship {} laid down: rolled {} degrees, buried {}% (cap {} blocks)",
+            logger.debug(
+                "ship {} laid down: rolled {} degrees, buried {}% (cap {} blocks)",
                 shipId, roll, (fraction * 100).toInt(), maxSink
             )
         }
@@ -259,8 +258,8 @@ object ShipFoundering {
             wheels++
         }
         if (wheels > 0 || gunners > 0) {
-            logger.info(
-                "[wreck] ship {} went ungoverned at {}%: {} wheel(s) broken, {} gunner(s) cut loose",
+            logger.debug(
+                "ship {} went ungoverned at {}%: {} wheel(s) broken, {} gunner(s) cut loose",
                 ship.id, ShipIntegrity.integrityPercent(control), wheels, gunners
             )
         }
@@ -308,8 +307,8 @@ object ShipFoundering {
         val shotDown = control.pirateHelms < 1 && ShipIntegrity.freefall(control)
         if (shotDown && !control.wrecked) {
             control.wrecked = true
-            logger.info(
-                "[wreck] ship {} shot down at {}% integrity",
+            logger.debug(
+                "ship {} shot down at {}% integrity",
                 ship.id, ShipIntegrity.integrityPercent(control)
             )
         }
@@ -317,7 +316,7 @@ object ShipFoundering {
         if (control.wrecked && control.helms >= 1 && !shotDown) {
             control.wrecked = false
             grounded.remove(ship.id)
-            logger.info("[wreck] ship {} answers a wheel again; she is a ship, not a wreck", ship.id)
+            logger.debug("ship {} answers a wheel again; she is a ship, not a wreck", ship.id)
         }
 
         return control.wrecked
@@ -354,8 +353,8 @@ object ShipFoundering {
             if (control.founderInWater && control.founderRamp < 1.0) return false
 
             grounded[ship.id] = level.gameTime + (cfg.wreckGroundTimerSeconds * 20.0).toLong()
-            logger.info(
-                "[wreck] ship {} touched down at y={}; she comes apart in {}s",
+            logger.debug(
+                "ship {} touched down at y={}; she comes apart in {}s",
                 ship.id, y.toInt(), cfg.wreckGroundTimerSeconds
             )
             return false

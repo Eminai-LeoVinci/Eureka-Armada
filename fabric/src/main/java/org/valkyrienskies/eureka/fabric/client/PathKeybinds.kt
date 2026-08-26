@@ -16,6 +16,7 @@ import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.path.ClientPathState
+import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.mod.client.ShipGamepad
 import kotlin.math.max
 
@@ -413,7 +414,7 @@ object PathKeybinds {
             if (gesture.fired) return 1.0f
 
             val progress = gesture.held.toFloat() / holdTicks()
-            if (progress >= PROMPT_AT) PathHud.prompt(Component.literal(prompt))
+            if (progress >= PROMPT_AT) PathHud.prompt(Component.literal(prompt), PathMessages.Topic.ALWAYS)
             return if (progress >= RING_AT) progress else 0.0f
         }
 
@@ -471,7 +472,10 @@ object PathKeybinds {
             val name = ClientPathState.routes[local]?.name ?: "this route"
             // Just the route name: hiding a line obviously doesn't stop the ship flying it, and saying so every
             // time was noise.
-            PathHud.add(Component.literal(if (shown) "Showing '$name'" else "Hid '$name'"), SHOW_ARGB)
+            PathHud.add(
+                Component.literal(if (shown) "Showing '$name'" else "Hid '$name'"),
+                SHOW_ARGB, PathMessages.Topic.ROUTES_VISIBILITY
+            )
             return
         }
 
@@ -494,7 +498,7 @@ object PathKeybinds {
             Component.literal(
                 if (hiding) "All routes hidden" else "Showing ${ClientPathState.routes.size} route(s)"
             ),
-            SHOW_ARGB
+            SHOW_ARGB, PathMessages.Topic.ROUTES_VISIBILITY
         )
     }
 

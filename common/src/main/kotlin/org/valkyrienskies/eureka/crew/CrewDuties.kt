@@ -108,11 +108,11 @@ object CrewDuties {
 
         val unmanned = guns.size - manned.size
         val note = if (unmanned > 0) " $unmanned unmanned." else ""
-        ShipCrew.tellOthers(level, ship, player, "${ShipCrew.name(ship)} is firing.", PathMessages.Kind.WARN)
+        ShipCrew.tellOthers(level, ship, player, "${ShipCrew.name(ship)} is firing.", PathMessages.Kind.WARN, PathMessages.Topic.GUNNERY_BROADSIDE)
         PathMessages.send(
             player,
             "Fire! ${ready.size} of ${guns.size} gun${if (guns.size == 1) "" else "s"}.$note",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.GUNNERY_BROADSIDE
         )
     }
 

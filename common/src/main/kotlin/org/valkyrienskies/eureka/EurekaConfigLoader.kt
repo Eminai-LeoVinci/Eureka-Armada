@@ -68,6 +68,13 @@ object EurekaConfigLoader {
             tree.get("client")?.takeIf { !it.isMissingNode && !it.isNull }?.let {
                 mapper.readerForUpdating(EurekaConfig.CLIENT).readValue<Any>(it)
             }
+            // Updated IN PLACE like every block above it, which matters more here than elsewhere:
+            // PathMessages.Topic holds a lambda per constant reading these fields, so a block that was
+            // replaced rather than updated would leave every one of those lambdas pointing at the
+            // pre-load object for the rest of the session.
+            tree.get("clientMessages")?.takeIf { !it.isMissingNode && !it.isNull }?.let {
+                mapper.readerForUpdating(EurekaConfig.MESSAGES).readValue<Any>(it)
+            }
             LOGGER.info("Loaded Eureka config from {}", CONFIG_FILE.toAbsolutePath())
 
             // Re-write so newly-added fields flow into the file and obsolete fields drop out.
@@ -119,6 +126,7 @@ object EurekaConfigLoader {
         CONFIG_FILE.parent?.let { Files.createDirectories(it) }
         val wrapper = linkedMapOf(
             "client" to EurekaConfig.CLIENT,
+            "clientMessages" to EurekaConfig.MESSAGES,
             "server" to EurekaConfig.SERVER,
             "serverBoat" to EurekaConfig.BOAT,
             "serverAirship" to EurekaConfig.AIRSHIP,

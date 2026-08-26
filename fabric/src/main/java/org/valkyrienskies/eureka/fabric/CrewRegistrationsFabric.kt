@@ -144,7 +144,10 @@ object CrewRegistrationsFabric {
         ledger.payOff(villager.uuid)
         ledger.clearTombstone(villager.uuid)
         server.playerList.getPlayer(crew?.captain ?: return)?.let {
-            PathMessages.send(it, "$name is lost. Their berth is free again.", PathMessages.Kind.WARN)
+            PathMessages.send(
+                it, "$name is lost. Their berth is free again.",
+                PathMessages.Kind.WARN, PathMessages.Topic.CREW_DEATHS
+            )
         }
     }
 

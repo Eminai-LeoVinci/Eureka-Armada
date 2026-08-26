@@ -140,7 +140,7 @@ object ShipCrews {
             PathMessages.send(
                 player,
                 "Paid off $paidOff, a ${professionName(villager)}, from ${existing.name}.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING
             )
             return
         }
@@ -149,7 +149,7 @@ object ShipCrews {
             PathMessages.send(
                 player,
                 "That one already sails with ${existing.name}, under another captain.",
-                PathMessages.Kind.ERROR
+                PathMessages.Kind.ERROR, PathMessages.Topic.CREW_RECRUITING
             )
             return
         }
@@ -197,7 +197,7 @@ object ShipCrews {
             player,
             "Signed on $name, a ${professionName(villager)}, " +
                 "to $crewName. Crew: ${signed + 1}/$slots.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING
         )
     }
 
@@ -315,7 +315,7 @@ object ShipCrews {
                 player,
                 "Signed on $hired ${if (hired == 1) "hand" else "hands"} to $crewName. " +
                     "Crew: $signed/$slots.$tail",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING
             )
             skipped.isEmpty() -> PathMessages.send(
                 player,
@@ -382,7 +382,7 @@ object ShipCrews {
             player,
             "This wheel kept no crew of yours, so they are now $generated. " +
                 "Rename them from the crew menu, and pick them from the helm's crew list.",
-            PathMessages.Kind.WARN
+            PathMessages.Kind.WARN, PathMessages.Topic.CREW_RECRUITING
         )
         return crew
     }
@@ -563,12 +563,11 @@ object ShipCrews {
         }
         // Any wheel still pointing at them now points at nothing, which resolves to "no crew" everywhere and
         // needs no sweep of its own -- see CrewLedger.bindingFor.
-        logger.info("[crew] disband crew='$name' berths=${berths.size} destroyed=$destroyed away=$unreachable")
         PathMessages.send(
             player,
             if (unreachable == 0) "$name are gone -- $destroyed struck off the articles."
             else "$name are gone -- $destroyed struck off, $unreachable will be when their chunks load.",
-            PathMessages.Kind.WARN
+            PathMessages.Kind.WARN, PathMessages.Topic.CREW_RECRUITING
         )
         CrewRoll.sender(player, CrewRoll.build(player, wheel))
     }
@@ -630,7 +629,7 @@ object ShipCrews {
             PathMessages.send(
                 player,
                 "This wheel now keeps ${ShipCrew.name(ship)}'s articles. Sign your crew on.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING
             )
         }
         // A wheel that is NOT the station opens the station's book without comment. It used to say the
@@ -688,7 +687,8 @@ object ShipCrews {
         }
         player.sendSystemMessage(msg)
 
-        PathMessages.send(player, "Crew: ${crew.size}/$slots aboard ${ShipCrew.name(ship)}.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "Crew: ${crew.size}/$slots aboard ${ShipCrew.name(ship)}.",
+            PathMessages.Kind.GOOD, PathMessages.Topic.CREW_MARKERS)
     }
 
     // endregion
@@ -707,7 +707,7 @@ object ShipCrews {
      */
     private fun markCrewOnDeck(level: ServerLevel, player: ServerPlayer) {
         if (CrewMarkers.clearIfShowing(player)) {
-            PathMessages.send(player, "Crew markers off.", PathMessages.Kind.GOOD)
+            PathMessages.send(player, "Crew markers off.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_MARKERS)
             return
         }
 
@@ -745,7 +745,7 @@ object ShipCrews {
         PathMessages.send(
             player,
             "Marked ${crew.size} crew aboard ${ShipCrew.name(ship)}.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.CREW_MARKERS
         )
     }
 

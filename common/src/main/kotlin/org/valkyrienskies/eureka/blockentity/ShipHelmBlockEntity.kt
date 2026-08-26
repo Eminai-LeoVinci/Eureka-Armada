@@ -1309,7 +1309,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         }
 
         if (blockPositions == null) {
-            player?.displayClientMessage(Component.translatable("gui.vs_eureka.too_big", EurekaConfig.SERVER.maxShipBlocks), true)
+            // `info.`, not `gui.` -- the key is defined under info in all four lang files and nowhere
+            // under gui, so this asked for a key that does not exist and drew the raw string. On the
+            // commonest assembly refusal there is. Fixed here rather than by adding the gui key, which
+            // would need four edits and leave two near-identical keys for the next person to pick wrong.
+            player?.displayClientMessage(Component.translatable("info.vs_eureka.too_big", EurekaConfig.SERVER.maxShipBlocks), true)
             logger.warn("Failed to assemble to large of a ship for ${player?.name?.string ?: "a scripted assembly"}")
             return
         }
@@ -1536,7 +1540,6 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                         val slug = wheelNameAtAssembly ?: built.slug
                         if (slug != null) wheel.noteShipSlug(slug)
                     }
-                    logger.info("[name] assembly ship={} master='{}' wiped={} adopted={}", namedId, master, wiped, adopted)
                 }
             }
 
@@ -1752,7 +1755,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 PathMessages.send(
                     sailor,
                     "${report.stood} $who back on the articles. They muster when $shipTitle sails again.",
-                    PathMessages.Kind.GOOD
+                    PathMessages.Kind.GOOD, PathMessages.Topic.CREW_STAND_DOWN
                 )
             }
         }

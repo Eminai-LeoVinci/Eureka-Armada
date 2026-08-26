@@ -252,7 +252,7 @@ object ShipwrightYard {
                 PathMessages.send(
                     player,
                     "'$slug' is mended -- ${outcome.placed} blocks put back.",
-                    PathMessages.Kind.GOOD
+                    PathMessages.Kind.GOOD, PathMessages.Topic.REPAIR_COMPLETE
                 )
             }
             outcome.placed <= 0 -> PathMessages.send(
@@ -265,7 +265,7 @@ object ShipwrightYard {
                 player,
                 "'$slug' patched keel-up -- ${outcome.placed} blocks put back, " +
                     "${outcome.remaining} still wanting more materials.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.REPAIR_PARTIAL
             )
         }
         return true

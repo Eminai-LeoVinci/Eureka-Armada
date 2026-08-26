@@ -465,7 +465,7 @@ object PathNetworkingFabric {
         // Point `:common`'s feedback at the stacking HUD, but only for players whose client actually declared
         // the channel -- sending to one that didn't is an error, not a no-op. Anyone else keeps the action bar,
         // which is the whole reason PathMessages has a fallback.
-        PathMessages.sender = { player, text, kind, seconds ->
+        PathMessages.sender = { player, text, kind, topic, seconds ->
             if (ServerPlayNetworking.canSend(player, MESSAGE_TYPE)) {
                 val buf = FriendlyByteBuf(Unpooled.buffer())
                 buf.writeByte(kind.ordinal)
@@ -473,6 +473,12 @@ object PathNetworkingFabric {
                 // 0 means "hold it for however long the player configured"; anything else is this line
                 // asking to be more perishable than the default.
                 buf.writeFloat(seconds.toFloat())
+                // APPENDED after the three fields an older build wrote, never inserted among them. The
+                // channel id has not changed, so canSend is true for a client on an older jar, and the
+                // payload codec is an opaque byte array that never checks a length -- so an old client
+                // simply reads three fields and ignores the trailing byte. Insert it in the middle
+                // instead and a version mismatch garbles the text rather than degrading gracefully.
+                buf.writeByte(topic.ordinal)
                 ServerPlayNetworking.send(player, MessagePayload(toArray(buf)))
             } else {
                 player.displayClientMessage(Component.literal(text).withStyle(kind.formatting), true)
@@ -842,7 +848,7 @@ object PathNetworkingFabric {
                 decodeCrewRoster(payload.data)
             } catch (t: Throwable) {
                 org.slf4j.LoggerFactory.getLogger("vs_eureka")
-                    .error("[crew] client crew-roster DECODE failed on {} bytes", payload.data.size, t)
+                    .error("Crew-roster payload failed to decode on {} bytes", payload.data.size, t)
                 return@registerGlobalReceiver
             }
             context.client().execute { CrewManifestScreen.acceptCrewRoster(roster) }
@@ -853,7 +859,7 @@ object PathNetworkingFabric {
                 decodeCrewList(payload.data)
             } catch (t: Throwable) {
                 org.slf4j.LoggerFactory.getLogger("vs_eureka")
-                    .error("[crew] client crew-list DECODE failed on {} bytes", payload.data.size, t)
+                    .error("Crew-list payload failed to decode on {} bytes", payload.data.size, t)
                 return@registerGlobalReceiver
             }
             context.client().execute {
@@ -871,7 +877,7 @@ object PathNetworkingFabric {
                 decodeStores(payload.data)
             } catch (t: Throwable) {
                 org.slf4j.LoggerFactory.getLogger("vs_eureka")
-                    .error("[stores] client DECODE failed on {} bytes", payload.data.size, t)
+                    .error("Stores payload failed to decode on {} bytes", payload.data.size, t)
                 return@registerGlobalReceiver
             }
             context.client().execute {
@@ -890,9 +896,18 @@ object PathNetworkingFabric {
             val kind = PathMessages.Kind.entries.getOrElse(buf.readByte().toInt()) { PathMessages.Kind.GOOD }
             val text = buf.readUtf()
             val seconds = buf.readFloat()
+            // Read defensively, so the channel survives a version mismatch in BOTH directions: an older
+            // server writes nothing here and `isReadable` is false, and an ordinal from some other build's
+            // enum falls through getOrElse. Either way the answer is ALWAYS -- a message nobody can
+            // classify is a message that shows, which is the safe way for this to fail.
+            val topic = if (buf.isReadable) {
+                PathMessages.Topic.entries.getOrElse(buf.readByte().toInt()) { PathMessages.Topic.ALWAYS }
+            } else {
+                PathMessages.Topic.ALWAYS
+            }
             context.client().execute {
-                if (kind == PathMessages.Kind.PROMPT) PathHud.prompt(Component.literal(text))
-                else PathHud.add(Component.literal(text), kind.argb, seconds)
+                if (kind == PathMessages.Kind.PROMPT) PathHud.prompt(Component.literal(text), topic)
+                else PathHud.add(Component.literal(text), kind.argb, topic, seconds)
             }
         }
     }

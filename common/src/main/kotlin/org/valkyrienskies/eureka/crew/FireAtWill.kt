@@ -82,7 +82,8 @@ object FireAtWill {
             control.fireAtWillTarget = 0L
             ShipCrew.tell(
                 level, ship,
-                "${ShipCrew.name(ship)} is going down -- the guns fall silent.", PathMessages.Kind.WARN
+                "${ShipCrew.name(ship)} is going down -- the guns fall silent.",
+                PathMessages.Kind.WARN, PathMessages.Topic.GUNNERY_FIRE_AT_WILL
             )
             return
         }

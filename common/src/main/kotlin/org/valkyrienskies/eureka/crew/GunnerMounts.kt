@@ -59,10 +59,6 @@ import java.util.UUID
  */
 object GunnerMounts {
 
-    // DEV ONLY: the [gunner] trace lines below are the diagnostic harness for the mount machinery --
-    // strip with the ROADMAP 6c sweep.
-    private val log by org.valkyrienskies.mod.util.logger()
-
     /** The mark: this mob is a gun's crew. Rides entity NBT, so it rides templates. */
     const val GUNNER_TAG = "vs_eureka_gunner"
 
@@ -145,10 +141,6 @@ object GunnerMounts {
         // instead of reading "disassembled build" and releasing.
         if (PirateHelm.shipHasPirateWheel(level, ship)) mob.addTag(PirateShips.CREW_TAG)
         station(level, mob, gunRear, stand)
-        log.info(
-            "[gunner] posted {} at gun {} -- tags {}",
-            mob.type.description.string, gunRear.toShortString(), mob.tags
-        )
         return null
     }
 
@@ -157,12 +149,11 @@ object GunnerMounts {
      * doors -- disassembly and a destroyed gun -- both arrive here via [reconcile]; nothing else releases
      * a gunner.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun release(level: ServerLevel, mob: Mob, reason: String) {
-        log.info(
-            "[gunner] RELEASED {} at ({}, {}, {}): {}",
-            mob.type.description.string,
-            "%.1f".format(mob.x), "%.1f".format(mob.y), "%.1f".format(mob.z), reason
-        )
+        // [reason] is unread since the gunner trace came out, and kept anyway: it is the only place the
+        // two legitimate doors above are named at the call site, and a caller that has to say WHY it is
+        // cutting a gunner loose is a caller that has thought about whether it should.
         posts.remove(mob.uuid)
         for (tag in mob.tags.filter { it == GUNNER_TAG || it.startsWith(GUN_TAG_PREFIX) }.toList()) {
             mob.removeTag(tag)
@@ -279,13 +270,7 @@ object GunnerMounts {
             val gun = nearestUnmannedGun(level, ship, mob)
             if (gun != null) {
                 retag(mob, gun.blockPos)
-                standFor(level, gun.blockPos)?.let {
-                    station(level, mob, gun.blockPos, it)
-                    log.info(
-                        "[gunner] {} took the gun at {} aboard ship {}",
-                        mob.type.description.string, gun.blockPos.toShortString(), ship.id
-                    )
-                }
+                standFor(level, gun.blockPos)?.let { station(level, mob, gun.blockPos, it) }
             } else {
                 release(level, mob, "no unmanned gun left aboard its ship")
             }

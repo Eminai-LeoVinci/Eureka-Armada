@@ -114,7 +114,7 @@ object CrewEggs {
     fun tell(player: ServerPlayer?, refusal: String?, trade: String) {
         val target = player ?: return
         if (refusal == null) {
-            PathMessages.send(target, "A $trade takes up the post.", PathMessages.Kind.GOOD)
+            PathMessages.send(target, "A $trade takes up the post.", PathMessages.Kind.GOOD, PathMessages.Topic.CREW_RECRUITING)
         } else {
             PathMessages.send(target, refusal, PathMessages.Kind.ERROR)
         }

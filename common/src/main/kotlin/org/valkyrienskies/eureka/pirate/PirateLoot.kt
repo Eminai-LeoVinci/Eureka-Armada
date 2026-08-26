@@ -105,11 +105,6 @@ object PirateLoot {
                 else -> Unit
             }
         }
-        log.info(
-            "[loot] stocked {} containers of {} block entities in the hull box ({})",
-            filled, candidates.size,
-            byKind.entries.joinToString(", ") { "${it.key}=${it.value}" }.ifEmpty { "none" }
-        )
     }
 
     /**
@@ -173,7 +168,7 @@ object PirateLoot {
     private fun stacksOf(level: ServerLevel, id: String, entry: LootEntry): List<ItemStack> {
         val item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(id)).orElse(null)
         if (item == null) {
-            log.warn("[loot] no such item '{}' in table entry; skipped", id)
+            log.warn("Loot table names no such item '{}' in table entry; skipped", id)
             return emptyList()
         }
         var count = rollCount(level, entry)

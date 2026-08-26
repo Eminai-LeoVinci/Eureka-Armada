@@ -70,7 +70,7 @@ object CrewBerths {
         PathMessages.send(
             serverPlayer,
             "Another berth signed for -- you can now muster ${current + 1} crew on a ship.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.CREW_BERTHS
         )
         return InteractionResult.SUCCESS
     }

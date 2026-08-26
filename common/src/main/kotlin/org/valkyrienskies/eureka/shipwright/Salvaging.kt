@@ -127,7 +127,7 @@ object Salvaging {
             return
         }
         ledger.takeKeepsake(player.uuid, pile, index)
-        PathMessages.send(player, "${kept.hoverName.string} carried aboard.", PathMessages.Kind.GOOD)
+        PathMessages.send(player, "${kept.hoverName.string} carried aboard.", PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS)
     }
 
     /**
@@ -252,9 +252,9 @@ object Salvaging {
             carried > 0 && left > 0 -> PathMessages.send(
                 player,
                 "Carried $carried aboard -- $left still waiting with the salvage.",
-                PathMessages.Kind.GOOD
+                PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS
             )
-            carried > 0 -> PathMessages.send(player, "Carried $carried aboard.", PathMessages.Kind.GOOD)
+            carried > 0 -> PathMessages.send(player, "Carried $carried aboard.", PathMessages.Kind.GOOD, PathMessages.Topic.SALVAGE_CLAIMS)
             left > 0 -> PathMessages.send(
                 player,
                 "No room in your pack -- all $left are still with the salvage.",

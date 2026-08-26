@@ -261,9 +261,6 @@ object PirateShips {
             )
         )
 
-        logger.info(
-            "[pirates] adopted berth at {} ({}, {} crew, {} guns)", pos, templateId, crew.size, guns
-        )
         return berthId
     }
 
@@ -489,16 +486,13 @@ object PirateShips {
 
             val zone = dormantZone(level, berthId, berth)
             if (trespasserIn(level, zone) == null) {
-                // Only interesting when a countdown was actually running: that is the flicker, and this
-                // says which of trespasserIn's three tests dropped it.
-                if (countdowns.remove(berthId) != null) explainNoTrespass(level, berthId, zone)
+                countdowns.remove(berthId)
                 continue
             }
             if (countdowns.putIfAbsent(
                     berthId, now + EurekaConfig.SERVER.pirateCountdownSeconds * 20L
                 ) == null
             ) {
-                logger.info("[pirates] berth {} countdown STARTED (zone r={})", berthId, zone.radius.toInt())
             }
         }
     }
@@ -522,14 +516,12 @@ object PirateShips {
         level.getChunk(pos.x shr 4, pos.z shr 4)
 
         val helm = level.getBlockEntity(pos) as? ShipHelmBlockEntity ?: run {
-            logger.info("[pirates] berth $berthId has no wheel at ${pos.toShortString()}; countdown dropped")
             return null
         }
         if (helm.blockState.getValue(EurekaProperties.MARK) != HelmMark.PIRATE) return null
 
         val report = Report(pos, level.getLoadedShipManagingPos(pos)?.id, now, helm)
         reports[berthId] = report
-        logger.info("[pirates] woke dormant berth $berthId at ${pos.toShortString()} out of the store")
         return report
     }
 
@@ -610,35 +602,6 @@ object PirateShips {
      * VS2's own per-face default -- the same server-side stand-in for the client influence border that
      * carries a thrown bottle with a moving deck.
      */
-    /**
-     * Say why nobody counted as inside [zone], for the one case that matters: a countdown that had started
-     * and has just been dropped. That is the flicker, and it is invisible from outside -- [trespasserIn]
-     * fails three separate tests and returns the same null for all of them.
-     *
-     * Prints one line per LOADED ship with each test's answer, so the log says whether the ring missed the
-     * hull, the player left the hull's influence, or the ship was skipped as a pirate's. DEV ONLY, and it
-     * only ever fires on a real cancellation, so a settled zone is silent.
-     */
-    private fun explainNoTrespass(level: ServerLevel, berthId: Long, zone: Zone) {
-        val dimension = level.dimensionId
-        val players = level.players().filter { it.isAlive && !it.isSpectator }
-        val detail = StringBuilder()
-        for (ship in level.shipObjectWorld.loadedShips) {
-            if (ship.chunkClaimDimension != dimension) continue
-            val box = ship.worldAABB
-            val aboard = players.count { withinInfluence(it, box) }
-            detail.append(
-                " [ship=${ship.id} touches=${zone.touches(box)} aboard=$aboard pirate=${ship.id in chases}]"
-            )
-        }
-        if (detail.isEmpty()) detail.append(" (no loaded ships in this dimension at all)")
-        logger.info(
-            "[pirates] berth {} countdown CANCELLED -- zone r={} at ({}, {}, {}); players={};{}",
-            berthId, zone.radius.toInt(), zone.x.toInt(), zone.y.toInt(), zone.z.toInt(),
-            players.size, detail
-        )
-    }
-
     private fun trespasserIn(level: ServerLevel, zone: Zone): Trespass? {
         val players = level.players().filter { it.isAlive && !it.isSpectator }
         if (players.isEmpty()) return null
@@ -715,7 +678,7 @@ object PirateShips {
                     PathMessages.send(
                         player,
                         "The pirates have spotted your ship -- ${seconds}s to get clear.",
-                        PathMessages.Kind.PROMPT
+                        PathMessages.Kind.PROMPT, PathMessages.Topic.PIRATES_ZONES
                     )
                 }
                 continue
@@ -777,7 +740,6 @@ object PirateShips {
 
         lastAssemblyAt = now
         arming[berthId] = Arming(leaderId, playerId, now + ARM_PATIENCE_TICKS)
-        logger.info("[pirates] berth {} waking (leader ship {})", BlockPos.of(berthId), leaderId)
 
         // holdEntities = true: the world-freeze is exactly what carries the deck crew through the swap.
         report.helm.assemble(null, knownBlocks = null, holdEntities = true)
@@ -813,7 +775,6 @@ object PirateShips {
             // assembly took; the re-acquire machinery then hunts instead of the chase dying on the spot.
             val target = order.leaderId?.let { world.loadedShips.getById(it) }
             if (target == null) {
-                logger.info("[pirates] {} awake; trespasser gone, hunting", BlockPos.of(berthId))
                 continue
             }
             bind(level, pirate, target, chase)
@@ -834,7 +795,6 @@ object PirateShips {
                 lingerUntil = now + lingerTicks(),
                 bornAt = now
             )
-            logger.info("[pirates] adopted awake pirate (ship {}), lingering", shipId)
         }
     }
 
@@ -869,7 +829,6 @@ object PirateShips {
                 // refused and the countdown looped at zero with nothing to show for it. Letting go is
                 // safe: [adoptAwake] picks the pursuit straight back up if she ever reports again.
                 if (!fresh && now - (report?.lastSeen ?: 0L) > HELM_LOST_TICKS) {
-                    logger.info("[pirates] chase for ship {} retired -- unloaded and silent", shipId)
                     iterator.remove()
                 }
                 continue
@@ -929,7 +888,7 @@ object PirateShips {
                     // avoiding, so she is removed instead -- blocks and all, the way a bottled hull is
                     // emptied. Her berth generates a fresh ship in its own time, which is a far better end
                     // than a permanent unassemblable wreck welded to somebody's roof.
-                    logger.info("[pirates] ship {} wedged at stand-down -- removed rather than merged", shipId)
+                    logger.debug("ship {} wedged at stand-down -- removed rather than merged", shipId)
                     if (control.pathFollowing) control.pathRelease(true)
                     VSShipAssembler.deleteShip(level, pirate, true, false)
                     iterator.remove()
@@ -961,8 +920,8 @@ object PirateShips {
                     ShipFollows.stopShip(pirate)
                     control.pathRelease(true)
                     chase.standingDown = true
-                    logger.info(
-                        "[pirates] {} beyond stand-down range; disassembling (wheel {},{},{} " +
+                    logger.debug(
+                        "{} beyond stand-down range; disassembling (wheel {},{},{} " +
                             "helmPos {} shipId {} nearest player {}m range {})",
                         shipId,
                         wheel.x.toInt(), wheel.y.toInt(), wheel.z.toInt(),
@@ -999,7 +958,7 @@ object PirateShips {
             // the deck-standers-only channel ShipFollows uses misses a captain hovering beside their ship.
             if (chase.leaderId != null) {
                 world.loadedShips.getById(chase.leaderId!!)?.let { oldLeader ->
-                    tellNear(level, oldLeader, "'${ShipCrew.name(pirate)}' has fallen astern.")
+                    tellNear(level, oldLeader, "'${ShipCrew.name(pirate)}' has fallen astern.", PathMessages.Topic.PIRATES_PURSUIT)
                 }
                 chase.leaderId = null
             }
@@ -1019,7 +978,6 @@ object PirateShips {
 
             control.pathRelease(true)
             chase.standingDown = true
-            logger.info("[pirates] {} linger expired; standing down", shipId)
         }
     }
 
@@ -1068,7 +1026,6 @@ object PirateShips {
 
         val shipId = report?.shipId
         if (shipId == null) {
-            logger.info("[pirates] wheel broken on dormant berth {}; site regenerates next dawn", BlockPos.of(berthId))
             return
         }
         chases.remove(shipId)
@@ -1098,9 +1055,9 @@ object PirateShips {
             }
         }
         if (boarded) {
-            logger.info("[pirates] wheel broken on ship {}; conquest window open", shipId)
+            logger.debug("wheel broken on ship {}; conquest window open", shipId)
         } else {
-            logger.info("[pirates] wheel broken on ship {} with nobody aboard; she goes down where she is", shipId)
+            logger.debug("wheel broken on ship {} with nobody aboard; she goes down where she is", shipId)
         }
     }
 
@@ -1125,8 +1082,11 @@ object PirateShips {
             if (control != null && control.helms >= 1) {
                 iterator.remove()
                 store.markDirty()
-                tellNear(level, loaded, "The vessel answers to a new wheel -- she is yours.")
-                logger.info("[pirates] ship {} claimed", shipId)
+                tellNear(
+                    level, loaded, "The vessel answers to a new wheel -- she is yours.",
+                    PathMessages.Topic.PIRATES_CONQUEST
+                )
+                logger.debug("ship {} claimed", shipId)
                 continue
             }
 
@@ -1153,7 +1113,7 @@ object PirateShips {
             // Unclaimed is the same verdict conquer reaches when nobody was aboard at all, just arrived at
             // slowly: her wheel is gone, nobody came, and a sound-looking hull is going down regardless.
             control.wrecked = true
-            logger.info("[pirates] ship {} unclaimed; cut loose to go down as a wreck", shipId)
+            logger.debug("ship {} unclaimed; cut loose to go down as a wreck", shipId)
         }
     }
 
@@ -1215,7 +1175,7 @@ object PirateShips {
         // new key is the new wheel's position, so a site can wander by up to half a hull per regeneration
         // -- bounded, and the price of never needing a worldgen hook.
         store.removeBerth(berthId)
-        logger.info("[pirates] site {} regenerated as {}", origin.toShortString(), name)
+        logger.debug("site {} regenerated as {}", origin.toShortString(), name)
         return null
     }
 
@@ -1291,7 +1251,6 @@ object PirateShips {
                 val dz = raider.z - centre.z
                 if (dx * dx + dy * dy + dz * dz > OVERBOARD_RANGE * OVERBOARD_RANGE) {
                     raider.discard()
-                    logger.info("[pirates] a crew hand lost overboard at berth {}", BlockPos.of(berthId))
                     continue
                 }
                 living++
@@ -1321,8 +1280,11 @@ object PirateShips {
                 berth.crewRespawnAt = now + respawnTicks()
                 store.markDirty()
                 setMark(level, helm, HelmMark.TAKEN)
-                tellAround(level, centre, "The pirate crew is dead -- their wheel can be taken.")
-                logger.info("[pirates] berth {} crew wiped; wheel TAKEN", BlockPos.of(berthId))
+                tellAround(
+                    level, centre, "The pirate crew is dead -- their wheel can be taken.",
+                    PathMessages.Topic.PIRATES_CONQUEST
+                )
+                logger.debug("berth {} crew wiped; wheel TAKEN", BlockPos.of(berthId))
                 continue
             }
 
@@ -1343,8 +1305,7 @@ object PirateShips {
             berth.crewRespawnAt = -1L
             store.markDirty()
             setMark(level, helm, HelmMark.PIRATE)
-            tellAround(level, centre, "A fresh pirate crew has taken the deck!")
-            logger.info("[pirates] berth {} crew respawned ({})", BlockPos.of(berthId), spawned.size)
+            tellAround(level, centre, "A fresh pirate crew has taken the deck!", PathMessages.Topic.PIRATES_CONQUEST)
         }
     }
 
@@ -1398,19 +1359,27 @@ object PirateShips {
 
         val centre = helmWorldCentre(level, pos)
         level.destroyBlock(pos, false)
-        tellAround(level, centre, "The pirate ship is beaten -- her wheel has given out!")
-        logger.info("[pirates] berth {} shot down at {}% integrity", report.helmPos, ShipIntegrity.integrityPercent(control))
+        tellAround(
+            level, centre, "The pirate ship is beaten -- her wheel has given out!",
+            PathMessages.Topic.PIRATES_CONQUEST
+        )
+        logger.debug("berth {} shot down at {}% integrity", report.helmPos, ShipIntegrity.integrityPercent(control))
         return true
     }
 
-    private fun tellAround(level: ServerLevel, centre: Vector3d, message: String) {
+    private fun tellAround(
+        level: ServerLevel,
+        centre: Vector3d,
+        message: String,
+        topic: PathMessages.Topic
+    ) {
         for (player in level.players()) {
             if (!player.isAlive || player.isSpectator) continue
             val dx = player.x - centre.x
             val dy = player.y - centre.y
             val dz = player.z - centre.z
             if (dx * dx + dy * dy + dz * dz <= EARSHOT * EARSHOT) {
-                PathMessages.send(player, message, PathMessages.Kind.WARN)
+                PathMessages.send(player, message, PathMessages.Kind.WARN, topic)
             }
         }
     }
@@ -1439,10 +1408,13 @@ object PirateShips {
         when (val refusal = ShipFollows.bind(level, pirate, target, ownerId = null)) {
             null -> {
                 chase.leaderId = target.id
-                tellNear(level, target, "Pirates! '${ShipCrew.name(pirate)}' is in pursuit.")
+                tellNear(
+                    level, target, "Pirates! '${ShipCrew.name(pirate)}' is in pursuit.",
+                    PathMessages.Topic.PIRATES_PURSUIT
+                )
             }
             ShipFollows.BindRefusal.NOT_READY -> Unit // wheel not up yet; the pursuit watch retries
-            else -> logger.info("[pirates] bind refused: {}", refusal)
+            else -> logger.debug("bind refused: {}", refusal)
         }
     }
 
@@ -1452,7 +1424,12 @@ object PirateShips {
      * -- a captain hovering in the air beside their own ship watching the pirate come about hears nothing
      * from a deck-standers-only channel.
      */
-    private fun tellNear(level: ServerLevel, ship: LoadedServerShip, message: String) {
+    private fun tellNear(
+        level: ServerLevel,
+        ship: LoadedServerShip,
+        message: String,
+        topic: PathMessages.Topic
+    ) {
         val box = ship.worldAABB
         val cx = (box.minX() + box.maxX()) * 0.5
         val cy = (box.minY() + box.maxY()) * 0.5
@@ -1464,7 +1441,7 @@ object PirateShips {
             val dz = player.z - cz
             val near = dx * dx + dy * dy + dz * dz <= EARSHOT * EARSHOT
             if (near || withinInfluence(player, box)) {
-                PathMessages.send(player, message, PathMessages.Kind.WARN)
+                PathMessages.send(player, message, PathMessages.Kind.WARN, topic)
             }
         }
     }

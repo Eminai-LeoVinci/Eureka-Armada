@@ -70,7 +70,7 @@ object ShipPaths {
             if (ship == null) {
                 recorders.remove(shipId)
                 KeelAnchor.forget(shipId)
-                tell(level, recorder.playerId, "Recording lost -- the ship unloaded.", error = true)
+                tell(level, recorder.playerId, "Recording lost -- the ship unloaded.", error = true, topic = PathMessages.Topic.ROUTES_RECORDING)
                 continue
             }
             if (ship.chunkClaimDimension != dimension) continue
@@ -108,7 +108,7 @@ object ShipPaths {
                     level, recorder.playerId,
                     "Recording cancelled -- route passed ${EurekaConfig.SERVER.pathMaxPoints} points " +
                         "without closing the loop.",
-                    error = true
+                    error = true, topic = PathMessages.Topic.ROUTES_RECORDING
                 )
             }
         }
@@ -127,7 +127,7 @@ object ShipPaths {
         )
 
         if (control == null) {
-            tell(level, recorder.playerId, "That route was too short or too tangled to save.", error = true)
+            tell(level, recorder.playerId, "That route was too short or too tangled to save.", error = true, topic = PathMessages.Topic.ROUTES_RECORDING)
             return
         }
 
@@ -165,7 +165,7 @@ object ShipPaths {
             level, recorder.playerId,
             "Route '${path.name}' saved: ${path.length.toInt()} blocks, " +
                 "${path.control.size / 3} points$recorded.",
-            error = false
+            error = false, topic = PathMessages.Topic.ROUTES_RECORDING
         )
     }
 
@@ -196,7 +196,7 @@ object ShipPaths {
 
         if (!follower.tick(keel, keelLocal, control, ship.velocity.length())) {
             release(ship, stopShip = true)
-            tell(level, follower.playerId, "Stopped following -- the ship lost its course.", error = true)
+            tell(level, follower.playerId, "Stopped following -- the ship lost its course.", error = true, topic = PathMessages.Topic.ROUTES_REPLAY)
             return
         }
 
@@ -223,10 +223,10 @@ object ShipPaths {
             tell(
                 level, follower.playerId,
                 "Holding on '${follower.path.name}' for ${follower.dwellSecondsLeft()}s.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.ROUTES_REPLAY
             )
         } else if (follower.dwellJustEnded) {
-            tell(level, follower.playerId, "Under way again on '${follower.path.name}'.", PathMessages.Kind.GOOD)
+            tell(level, follower.playerId, "Under way again on '${follower.path.name}'.", PathMessages.Kind.GOOD, PathMessages.Topic.ROUTES_REPLAY)
         }
     }
 
@@ -292,7 +292,7 @@ object ShipPaths {
             // The distance is in the message on purpose: "blocked" is a judgement made from two numbers, and
             // when it is wrong the only useful thing anyone can tell you afterwards is how far out it was.
             "'${follower.path.name}' is blocked ${error.roundToInt()}m off its line -- stopped there.",
-            error = true
+            error = true, topic = PathMessages.Topic.ROUTES_REPLAY
         )
         return true
     }
@@ -334,7 +334,7 @@ object ShipPaths {
             tell(
                 level, follower.playerId,
                 "You have the wheel -- '${follower.path.name}' released.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.ROUTES_REPLAY
             )
             return true
         }
@@ -348,7 +348,7 @@ object ShipPaths {
             tell(
                 level, follower.playerId,
                 "Keep $what to stop following '${follower.path.name}'…",
-                PathMessages.Kind.PROMPT
+                PathMessages.Kind.PROMPT, PathMessages.Topic.ROUTES_REPLAY
             )
         }
         return false
@@ -436,7 +436,7 @@ object ShipPaths {
             tell(
                 level, binding.ownerId,
                 "'${path.name}' was dropped on load -- the ship has no course to steer from.",
-                PathMessages.Kind.ERROR
+                PathMessages.Kind.ERROR, PathMessages.Topic.ROUTES_REPLAY
             )
             return
         }
@@ -476,7 +476,7 @@ object ShipPaths {
             level, binding.ownerId,
             if (stillThere) "Resumed '${path.name}' (${mode.label}) where the ship left off."
             else "Resumed '${path.name}' (${mode.label}) -- the ship had drifted, so it is re-acquiring the line.",
-            PathMessages.Kind.GOOD
+            PathMessages.Kind.GOOD, PathMessages.Topic.ROUTES_REPLAY
         )
     }
 
@@ -554,7 +554,8 @@ object ShipPaths {
         ok(
             player,
             "Recording. Fly the route and come back here to close the loop " +
-                "(hold SHIFT+R to discard)."
+                "(hold SHIFT+R to discard).",
+            PathMessages.Topic.ROUTES_RECORDING
         )
     }
 
@@ -562,7 +563,7 @@ object ShipPaths {
     fun cancelRecording(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to cancel its recording.")
         val recorder = recorders.remove(ship.id) ?: return fail(player, "This ship isn't recording a route.")
-        ok(player, "Recording discarded (${recorder.length.toInt()} blocks).")
+        ok(player, "Recording discarded (${recorder.length.toInt()} blocks).", PathMessages.Topic.ROUTES_RECORDING)
     }
 
     /**
@@ -646,7 +647,7 @@ object ShipPaths {
             requested.isReplay -> ", easing ${distance.toInt()}m onto the line"
             else -> ", holding a ${distance.toInt()}m offset from the line"
         }
-        ok(player, "Following '${path.name}' (${requested.label})$approach.")
+        ok(player, "Following '${path.name}' (${requested.label})$approach.", PathMessages.Topic.ROUTES_REPLAY)
 
         // Binding a stopped ship is perfectly valid in GEOMETRY mode -- the route owns steering, never the
         // throttle, so it can sit bound to the line indefinitely and be driven by hand. Say so rather than
@@ -660,7 +661,7 @@ object ShipPaths {
                 level, player.uuid,
                 "Bound and stopped -- steer with the throttle, set a cruise speed, or CTRL+SHIFT+P to " +
                     "replay the recording.",
-                PathMessages.Kind.WARN
+                PathMessages.Kind.WARN, PathMessages.Topic.ROUTES_REPLAY
             )
         }
     }
@@ -700,7 +701,7 @@ object ShipPaths {
             wasHolding && !requested.isReplay -> " -- the ship is yours to drive from here"
             else -> ""
         }
-        ok(player, "'${follower.path.name}' switched to ${requested.label}$note.")
+        ok(player, "'${follower.path.name}' switched to ${requested.label}$note.", PathMessages.Topic.ROUTES_REPLAY)
     }
 
     /**
@@ -725,7 +726,7 @@ object ShipPaths {
             follower.paused = true
             PathBinding.get(ship)?.paused = true
             control.pathRelease(stopShip = true)
-            ok(player, "Paused on '${follower.path.name}' -- press again to carry on.")
+            ok(player, "Paused on '${follower.path.name}' -- press again to carry on.", PathMessages.Topic.ROUTES_REPLAY)
             return
         }
 
@@ -740,14 +741,14 @@ object ShipPaths {
 
         follower.paused = false
         PathBinding.get(ship)?.paused = false
-        ok(player, "Following '${follower.path.name}' again.")
+        ok(player, "Following '${follower.path.name}' again.", PathMessages.Topic.ROUTES_REPLAY)
     }
 
     /** SHIFT+P held for two seconds. Stop following, forget the binding, and bring the ship to rest. */
     fun stop(level: ServerLevel, player: ServerPlayer) {
         val ship = resolveShip(level, player) ?: return fail(player, "Stand on a ship to stop it.")
         val follower = release(ship, stopShip = true) ?: return fail(player, "This ship isn't following a route.")
-        ok(player, "Released from '${follower.path.name}'.")
+        ok(player, "Released from '${follower.path.name}'.", PathMessages.Topic.ROUTES_REPLAY)
     }
 
     /** Stop a ship following a route, without needing a player. Used by the command and by unbinding. */
@@ -802,19 +803,26 @@ object ShipPaths {
         return world.loadedShips.getById(parentId) ?: direct
     }
 
-    private fun ok(player: ServerPlayer, message: String) =
-        PathMessages.send(player, message, PathMessages.Kind.GOOD)
+    private fun ok(player: ServerPlayer, message: String, topic: PathMessages.Topic) =
+        PathMessages.send(player, message, PathMessages.Kind.GOOD, topic)
 
+    // Refusals only, so this keeps the ALWAYS default and its callers say nothing about topics.
     private fun fail(player: ServerPlayer, message: String) =
         PathMessages.send(player, message, PathMessages.Kind.ERROR)
 
-    private fun tell(level: ServerLevel, playerId: UUID?, message: String, error: Boolean) =
-        tell(level, playerId, message, if (error) PathMessages.Kind.ERROR else PathMessages.Kind.GOOD)
+    private fun tell(level: ServerLevel, playerId: UUID?, message: String, error: Boolean, topic: PathMessages.Topic) =
+        tell(level, playerId, message, if (error) PathMessages.Kind.ERROR else PathMessages.Kind.GOOD, topic)
 
     /** No-op when [playerId] is null (a follower resumed with no owner recorded) or that player is offline. */
-    private fun tell(level: ServerLevel, playerId: UUID?, message: String, kind: PathMessages.Kind) {
+    private fun tell(
+        level: ServerLevel,
+        playerId: UUID?,
+        message: String,
+        kind: PathMessages.Kind,
+        topic: PathMessages.Topic
+    ) {
         val player = playerId?.let { level.server.playerList.getPlayer(it) } ?: return
-        PathMessages.send(player, message, kind)
+        PathMessages.send(player, message, kind, topic)
     }
 
     /** How far off the line still counts as "on it" for the engage message. */

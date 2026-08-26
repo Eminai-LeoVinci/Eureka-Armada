@@ -363,7 +363,7 @@ object GunStations {
         unseat(level, villagerId)
         val gunName = label ?: "their gun"
         captain?.let { level.server.playerList.getPlayer(it) }?.let { player ->
-            PathMessages.send(player, "$name stands down -- $gunName is gone.", PathMessages.Kind.WARN)
+            PathMessages.send(player, "$name stands down -- $gunName is gone.", PathMessages.Kind.WARN, PathMessages.Topic.GUNNERY_GUN_LOST)
         }
     }
 

@@ -154,13 +154,6 @@ object CrewMuster {
         // articles never recorded where they stood" from "they were recorded and something moved them".
         // `labels` is expected to read 0 here -- the gun census needs shipAABB, which vs-core fills in a
         // beat after the ship exists; GunStations.reconcile is what seats the gunners, on its own clock.
-        logger.info(
-            "[crew] muster ship=${ship.id} crew='$crewName' berths=${berths.size} " +
-                "withPost=${berths.count { it.post != null }} posted=${berthing.posted} " +
-                "strayPosts=${berthing.strays} " +
-                "scattered=${berthing.scattered} labels=${GunLabels.labeled(level, ship).size} " +
-                "moved=$moved returned=$returned rebuilt=$rebuilt lost=$lost overflow=$overflow"
-        )
         report(captain, crewName, moved, returned, rebuilt, lost, overflow)
     }
 
@@ -236,7 +229,6 @@ object CrewMuster {
             if (ledger.berthOf(villager.uuid) == null) continue
             posts[villager.uuid] = offsetOf(Vec3(villager.x, villager.y, villager.z))
         }
-        logger.info("[crew] posts ship=${ship.id} frame=$frame villagers=${seen.size} measured=${posts.size}")
         return posts
     }
 
@@ -281,7 +273,6 @@ object CrewMuster {
         sweepHull: Boolean = true
     ): StandDownReport {
         val ledger = CrewLedger.get(level.server)
-        logger.info("[crew] stand-down ship=$shipId crews=${crewIds.size} sweep=$sweepHull")
 
         // Two independent ways onto the list, union'd by villager id. The bindings are the intended path; the
         // box sweep is the safety net that holds when a wheel points at the wrong crew or at none, and the
@@ -307,10 +298,6 @@ object CrewMuster {
                 berths.putIfAbsent(berth.villager, berth)
             }
         }
-        logger.info(
-            "[crew] sources: berthsByCrew=$berthsByCrew villagersInBox=${inBox.size} " +
-                "berthedInBox=$berthedInBox candidates=${berths.size}"
-        )
 
         // The acceptance box, with the same slack the sweep itself allows for somebody standing on the top face.
         val deck = AABB(
@@ -323,24 +310,21 @@ object CrewMuster {
         for (berth in berths.values) {
             val villager = inBox[berth.villager] ?: findAnywhere(level.server, berth.villager)
             if (villager == null) {
-                logger.info("[crew]   ${berth.name}: not-found")
                 continue
             }
             if (villager.level() !== level) {
-                logger.info("[crew]   ${berth.name}: found-elsewhere-skipped (other dimension)")
                 continue
             }
             // Aboard means inside the hull box -- or seated on one of THIS ship's gun seats, which pins them
             // to the ship more directly than any position test can.
             val seated = (villager.vehicle as? ShipMountingEntity)?.driveShipId == shipId
             if (!seated && !deck.contains(villager.x, villager.y, villager.z)) {
-                logger.info("[crew]   ${berth.name}: found-elsewhere-skipped (ashore)")
                 continue
             }
             berthedAboard++
             val snapshot = CrewSnapshot.capture(villager)
             if (snapshot == null) {
-                logger.warn("[crew]   ${berth.name}: snapshot-failed -- left aboard")
+                logger.warn("Crew snapshot failed for ${berth.name}; left aboard")
                 continue
             }
             // The seat first, while the villager still exists to be dismounted: this kills it now and clears
@@ -350,11 +334,9 @@ object CrewMuster {
             // `discard` rather than `kill`: nobody died. There is nothing to drop, no experience to award,
             // and the same crew member walks back out of the articles when she is rebuilt.
             villager.discard()
-            logger.info("[crew]   ${berth.name}: ${if (seated) "stood-down-seated" else "stood-down-standing"}")
             stood++
         }
 
-        logger.info("[crew] stand-down complete stood=$stood berthedAboard=$berthedAboard")
         return StandDownReport(stood, berthedAboard)
     }
 
@@ -617,7 +599,7 @@ object CrewMuster {
         PathMessages.send(
             captain,
             "$crewName mustered: ${parts.joinToString(", ")}.",
-            if (lost > 0 || overflow > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD
+            if (lost > 0 || overflow > 0) PathMessages.Kind.WARN else PathMessages.Kind.GOOD, PathMessages.Topic.CREW_MUSTER
         )
     }
 
