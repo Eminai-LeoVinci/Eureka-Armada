@@ -1,0 +1,6 @@
+{
+  "_comment": "The upper course of the Shipwright's Bench draws nothing. All 56 elements hang off the three LOWER blocks, one per column, because a column model spans Y 0..30 and that is inside the -16..32 an element is allowed. Splitting by column rather than drawing the whole desk from one block buys per-column lighting and culling; splitting by height as well would buy nothing and cost a UV pass. The particle texture is here so breaking a top block still throws the right splinters.",
+  "textures": {
+    "particle": "vs_eureka:block/shipwrights_bench/carpentry_station"
+  }
+}

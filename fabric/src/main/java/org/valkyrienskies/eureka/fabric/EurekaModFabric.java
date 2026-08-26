@@ -20,8 +20,11 @@ import net.minecraft.client.renderer.entity.ThrownItemRenderer;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import org.valkyrienskies.eureka.EurekaBlockEntities;
+import org.valkyrienskies.eureka.EurekaBlocks;
 import org.valkyrienskies.eureka.EurekaConfig;
+import org.valkyrienskies.eureka.fabric.mixin.client.MixinItemBlockRenderTypes;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaEntities;
 import org.valkyrienskies.eureka.EurekaItems;
@@ -234,6 +237,16 @@ public class EurekaModFabric implements ModInitializer {
             // Off until "/vs wreck-box true". DEV ONLY.
             WreckBoxRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
+
+            // The Shipwright's Bench is built into the CUTOUT layer, not SOLID. Its model carries the
+            // stonecutter's saw blade and a couple of knives, whose textures are mostly transparent -- and
+            // the solid layer discards alpha, so on SOLID they render as opaque grey slabs. Every other
+            // block this mod adds is opaque, which is why this is the only entry.
+            //
+            // Fabric API's BlockRenderLayerMap is gone in 1.21.11 and vanilla exposes no setter; see
+            // MixinItemBlockRenderTypes for what is left and why it is safe.
+            MixinItemBlockRenderTypes.vs$typeByBlock()
+                .put(EurekaBlocks.INSTANCE.getSHIPWRIGHTS_BENCH().get(), ChunkSectionLayer.CUTOUT);
             ClientPathState.INSTANCE.setShowAll(EurekaConfig.CLIENT.getShowAllPaths());
 
             // The overlay is a singleton too, and every route in it belongs to the world we just left. Without

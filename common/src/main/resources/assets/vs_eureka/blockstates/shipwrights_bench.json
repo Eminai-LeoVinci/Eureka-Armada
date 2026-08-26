@@ -1,7 +1,28 @@
 {
   "variants": {
-    "": {
-      "model": "vs_eureka:block/shipwrights_bench"
-    }
+    "bench_part=left_lower,facing=north": { "model": "vs_eureka:block/shipwrights_bench_left" },
+    "bench_part=middle_lower,facing=north": { "model": "vs_eureka:block/shipwrights_bench_middle" },
+    "bench_part=right_lower,facing=north": { "model": "vs_eureka:block/shipwrights_bench_right" },
+    "bench_part=left_upper,facing=north": { "model": "vs_eureka:block/shipwrights_bench_empty" },
+    "bench_part=middle_upper,facing=north": { "model": "vs_eureka:block/shipwrights_bench_empty" },
+    "bench_part=right_upper,facing=north": { "model": "vs_eureka:block/shipwrights_bench_empty" },
+    "bench_part=left_lower,facing=east": { "model": "vs_eureka:block/shipwrights_bench_left", "y": 90 },
+    "bench_part=middle_lower,facing=east": { "model": "vs_eureka:block/shipwrights_bench_middle", "y": 90 },
+    "bench_part=right_lower,facing=east": { "model": "vs_eureka:block/shipwrights_bench_right", "y": 90 },
+    "bench_part=left_upper,facing=east": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 90 },
+    "bench_part=middle_upper,facing=east": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 90 },
+    "bench_part=right_upper,facing=east": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 90 },
+    "bench_part=left_lower,facing=south": { "model": "vs_eureka:block/shipwrights_bench_left", "y": 180 },
+    "bench_part=middle_lower,facing=south": { "model": "vs_eureka:block/shipwrights_bench_middle", "y": 180 },
+    "bench_part=right_lower,facing=south": { "model": "vs_eureka:block/shipwrights_bench_right", "y": 180 },
+    "bench_part=left_upper,facing=south": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 180 },
+    "bench_part=middle_upper,facing=south": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 180 },
+    "bench_part=right_upper,facing=south": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 180 },
+    "bench_part=left_lower,facing=west": { "model": "vs_eureka:block/shipwrights_bench_left", "y": 270 },
+    "bench_part=middle_lower,facing=west": { "model": "vs_eureka:block/shipwrights_bench_middle", "y": 270 },
+    "bench_part=right_lower,facing=west": { "model": "vs_eureka:block/shipwrights_bench_right", "y": 270 },
+    "bench_part=left_upper,facing=west": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 270 },
+    "bench_part=middle_upper,facing=west": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 270 },
+    "bench_part=right_upper,facing=west": { "model": "vs_eureka:block/shipwrights_bench_empty", "y": 270 }
   }
 }

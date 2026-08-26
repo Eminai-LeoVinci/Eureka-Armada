@@ -2,6 +2,7 @@ package org.valkyrienskies.eureka
 
 import net.minecraft.world.level.block.state.properties.EnumProperty
 import net.minecraft.world.level.block.state.properties.IntegerProperty
+import org.valkyrienskies.eureka.block.BenchPart
 import org.valkyrienskies.eureka.block.CannonPart
 import org.valkyrienskies.eureka.block.HelmMark
 
@@ -16,6 +17,15 @@ object EurekaProperties {
 
     /** Which half of a two-block cannon this is. See [CannonPart]. */
     val CANNON_PART: EnumProperty<CannonPart> = EnumProperty.create("part", CannonPart::class.java)
+
+    /**
+     * Which of the six blocks of a Shipwright's Bench this is. See [BenchPart].
+     *
+     * Named "bench_part" rather than reusing "part": both blocks would otherwise offer a property of the same
+     * name holding a different enum, which reads as one thing in a blockstate file and in `/setblock` while
+     * being two.
+     */
+    val BENCH_PART: EnumProperty<BenchPart> = EnumProperty.create("bench_part", BenchPart::class.java)
 
     /**
      * How far a cannon's barrel is laid, in 5-degree steps from -45 to +45.

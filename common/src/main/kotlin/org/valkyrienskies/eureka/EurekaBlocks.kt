@@ -20,6 +20,9 @@ import org.valkyrienskies.mod.common.itemProps
 object EurekaBlocks {
     internal val BLOCKS = DeferredRegister.create(EurekaMod.MOD_ID, Registries.BLOCK)
 
+    /** Blocks whose item holds one per slot. See the note in [registerItems]. */
+    private val UNSTACKABLE = setOf("cannon", "shipwrights_bench")
+
     val ANCHOR = BLOCKS.register("anchor", ::AnchorBlock)
     val ENGINE = BLOCKS.register("engine", ::EngineBlock)
 
@@ -35,7 +38,8 @@ object EurekaBlocks {
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
 
-    // The shipwright's job site. Deliberately has no recipe -- see ShipwrightsBenchBlock.
+    // The shipwright's job site: a desk six blocks in size, laid 3 wide by 1 deep by 2 tall. Its recipe is
+    // config-driven like every other -- see ShipwrightsBenchBlock for why it stopped being unobtainable.
     val SHIPWRIGHTS_BENCH = BLOCKS.register("shipwrights_bench", ::ShipwrightsBenchBlock)
 
     // A submarine's interior air. No item and no creative tab entry -- it is placed by the assembler, never by
@@ -251,15 +255,15 @@ object EurekaBlocks {
             // in this mod is written as block.vs_eureka.*, so without this every item asks for a key no lang
             // file defines and renders as the raw id, in hand and in tooltips alike.
             //
-            // The cannon is the one block that does not stack: a two-block iron gun is not a pocketful of
-            // torches, and a chest with five guns in it should read as the arsenal it is. Existing stacks
-            // in old worlds keep their count; they just stop re-merging.
+            // Multi-block structures do not stack: a two-block iron gun and a six-block desk are not a
+            // pocketful of torches, and a chest with five guns in it should read as the arsenal it is.
+            // Existing stacks in old worlds keep their count; they just stop re-merging.
             //
             // The properties MUST be built inside the register lambda: itemProps() reads the id of the item
             // currently being registered, and evaluated out here it has none -- "Item id not set" on launch.
             items.register(it.name) {
                 val props =
-                    if (it.name == "cannon") itemProps().stacksTo(1).useBlockDescriptionPrefix()
+                    if (it.name in UNSTACKABLE) itemProps().stacksTo(1).useBlockDescriptionPrefix()
                     else itemProps().useBlockDescriptionPrefix()
                 // A wheel in the hand opens its own interface on sneak+right-click -- it is the one block
                 // here that carries a name and a crew binding around with it, and both were unreadable

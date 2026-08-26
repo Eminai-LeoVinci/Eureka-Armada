@@ -26,6 +26,7 @@
     "client.MixinEntityRenderStateCrewPlate",
     "client.MixinEntityRendererCrewNameTag",
     "client.MixinHumanoidGunnerPose",
+    "client.MixinItemBlockRenderTypes",
     "client.MixinIllagerGunnerPose",
     "client.MixinVillagerGunnerPose",
     "client.MixinNameTagBackdrop"

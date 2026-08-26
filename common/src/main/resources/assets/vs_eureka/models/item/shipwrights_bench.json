@@ -1,3 +1,7 @@
 {
-  "parent": "vs_eureka:block/shipwrights_bench"
+  "_comment": "Deliberate placeholder, same arrangement as the cannon. The inventory icon wants its own drawn sprite; until it exists the checker makes it obvious this is unfinished rather than subtly wrong. Sharing the cannon's placeholder texture on purpose -- one checker in the tree is easier to find and delete than two.",
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "vs_eureka:item/cannon_placeholder"
+  }
 }

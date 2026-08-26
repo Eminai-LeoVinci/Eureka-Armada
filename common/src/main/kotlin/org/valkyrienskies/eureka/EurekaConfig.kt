@@ -1368,6 +1368,18 @@ object EurekaConfig {
         var crewmanHelmPoiRange = 1
 
         @JsonSchema(
+            description = "How many shipwrights one Shipwright's Bench can employ at once. Like the helm above " +
+                "this is a point-of-interest ticket count, and it carries the same two warnings: it is read " +
+                "ONCE at startup and baked into each bench's POI record the first time that block is seen, so " +
+                "changing it needs a full restart and does NOT evict shipwrights from benches that already " +
+                "exist; and an unemployed villager will notice a job site 48 blocks away, so a bench built " +
+                "near a village can pull villagers off their own workstations. Only the middle block of the " +
+                "bottom row is the job site, so this is the count for the whole desk and not for each of its " +
+                "six blocks. Default 2."
+        )
+        var shipwrightsBenchPoiTickets = 2
+
+        @JsonSchema(
             description = "How many crew a player can command on any ONE ship before offering a single Heart of " +
                 "the Sea to a helm. The limit is per ship, not a global budget: with eight berths you can crew " +
                 "one hull to six and another to eight. Raising this applies retroactively to anyone who has " +

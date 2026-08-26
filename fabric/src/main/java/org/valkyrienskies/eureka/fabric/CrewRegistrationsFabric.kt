@@ -14,6 +14,7 @@ import net.fabricmc.fabric.api.`object`.builder.v1.world.poi.PointOfInterestHelp
 import net.minecraft.world.InteractionResult
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.BenchPart
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.crew.CrewBerths
@@ -64,15 +65,23 @@ object CrewRegistrationsFabric {
                 .filter { it.getValue(EurekaProperties.MARK) == HelmMark.NORMAL }
         )
 
-        // The shipwright's bench: an ORDINARY job site, one ticket, like a lectern. The helm above is the odd
-        // one out with its crew-sized count, not this. Registered here rather than in a file of its own for
-        // the same reason the helm is -- PointOfInterestHelper walks each block's state definition, so both
-        // have to come after EurekaBlocks.register(), and one call site is easier to keep true than two.
+        // The shipwright's bench. Registered here rather than in a file of its own for the same reason the
+        // helm is -- PointOfInterestHelper walks each block's state definition, so both have to come after
+        // EurekaBlocks.register(), and one call site is easier to keep true than two.
+        //
+        // ONLY THE ANCHOR IS THE JOB SITE. A POI is registered per blockstate, and a bench is six blocks, so
+        // handing over every state would make one desk six job sites and multiply its employment by six --
+        // a two-shipwright bench quietly hiring twelve. Filtering to BenchPart.ANCHOR is what makes
+        // shipwrightsBenchPoiTickets the count for the whole desk, and it is also why a shipwright always
+        // walks to the middle of the bottom row: with SHIPWRIGHT_POI_RANGE at 1, that block is the only one
+        // it can reach its workstation from.
         PointOfInterestHelper.register(
             ShipwrightProfession.POI_ID,
-            1,
+            EurekaConfig.SERVER.shipwrightsBenchPoiTickets,
             SHIPWRIGHT_POI_RANGE,
-            *ShipwrightProfession.benchBlocks()
+            ShipwrightProfession.benchBlocks()
+                .flatMap { it.stateDefinition.possibleStates }
+                .filter { it.getValue(EurekaProperties.BENCH_PART) == BenchPart.ANCHOR }
         )
 
         // The listings themselves are vanilla and live in :common; only this registration call needs the API.
