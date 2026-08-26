@@ -1,0 +1,30 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "BFB",
+    "FHF",
+    "SLS"
+  ],
+  "key": {
+    "B": {
+      "item": "minecraft:iron_bars"
+    },
+    "F": {
+      "item": "minecraft:dark_oak_fence"
+    },
+    "H": {
+      "item": "minecraft:heart_of_the_sea"
+    },
+    "S": {
+      "item": "minecraft:dark_oak_slab"
+    },
+    "L": {
+      "item": "minecraft:lodestone"
+    }
+  },
+  "result": {
+    "item": "vs_eureka:dark_oak_ship_helm",
+    "count": 1
+  },
+  "group": "ship_helm"
+}

@@ -1,0 +1,150 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+}
+
+plugins {
+    id "com.github.johnrengelman.shadow" version "7.1.2"
+    id "com.matthewprenger.cursegradle"
+    id "com.modrinth.minotaur"
+}
+
+apply from: '../gradle-scripts/publish-curseforge.gradle'
+
+architectury {
+    platformSetupLoomIde()
+    neoForge()
+}
+
+loom {
+    accessWidenerPath = project(":common").loom.accessWidenerPath
+
+    mixin {
+        useLegacyMixinAp = true
+        defaultRefmapName = "eureka-refmap.json"
+    }
+}
+
+configurations {
+    common
+    shadowCommon // Don't use shadow from the shadow plugin because we don't want IDEA to index this.
+    core
+    compileClasspath.extendsFrom common
+    runtimeClasspath.extendsFrom common
+    developmentNeoForge.extendsFrom common
+    compileClasspath.extendsFrom core
+    forgeRuntimeLibrary.extendsFrom core
+    shadowCommon.extendsFrom core
+}
+
+dependencies {
+    implementation(annotationProcessor("io.github.llamalad7:mixinextras-common:$mixin_extras_version"))
+
+    neoForge("net.neoforged:neoforge:$rootProject.neoforge_version")
+    modApi("org.valkyrienskies:valkyrienskies-1-21-1-forge:${rootProject.vs2_version}:dev-no-shadow") {
+        transitive = false
+    }
+    // We have to include vscore manually because forge transitive dependencies are weird
+    forgeRuntimeLibrary(api("org.valkyrienskies.core:impl:${rootProject.vs_core_version}") {
+        exclude module: "netty-buffer"
+        exclude module: "fastutil"
+        exclude module: "kotlin-stdlib-jdk8"
+    })
+    forgeRuntimeLibrary("com.fasterxml:classmate:1.5.1")
+
+    common(project(path: ":common", configuration: "namedElements")) { transitive false }
+    shadowCommon(project(path: ":common", configuration: "transformProductionNeoForge")) { transitive = false }
+
+    // Add Kotlin for Forge
+    compileOnly("thedarkcolour:kotlinforforge-neoforge:$forge_kotlin_version")
+    forgeRuntimeLibrary("thedarkcolour:kotlinforforge-neoforge:${forge_kotlin_version}")
+
+    // Cloth for config
+    modImplementation("me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}")
+}
+
+// I don't know why, but this is the only way gradle can launch it
+tasks.runClient.configure {
+    jvmArgs '-Dkotlinx.coroutines.debug=off'
+}
+
+tasks.runServer.configure {
+    jvmArgs '-Dkotlinx.coroutines.debug=off'
+}
+
+processResources {
+    inputs.property "version", project.version
+
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand "version": project.version, "vs2_version": (project.vs2_version.contains('+') ? project.vs2_version.substring(0, project.vs2_version.indexOf('+')) : project.vs2_version)
+    }
+}
+
+shadowJar {
+    exclude "fabric.mod.json"
+    exclude "architectury.common.json"
+
+    configurations = [project.configurations.shadowCommon]
+    archiveClassifier.set "dev-shadow"
+}
+
+remapJar {
+    atAccessWideners.add "vs_eureka.accesswidener"
+    input.set shadowJar.archiveFile
+            dependsOn shadowJar
+    archiveClassifier.set null
+}
+
+jar {
+    archiveClassifier.set "dev"
+}
+
+sourcesJar {
+    def commonSources = project(":common").sourcesJar
+    dependsOn commonSources
+            from commonSources.archiveFile.map { zipTree(it) }
+}
+
+components.java {
+    withVariantsFromConfiguration(project.configurations.shadowRuntimeElements) {
+        skip()
+    }
+}
+
+publishing {
+    publications {
+        mavenCommon(MavenPublication) {
+            groupId = "org.valkyrienskies.eureka"
+            version = project.version
+            artifactId = rootProject.archives_base_name + "-" + project.name
+            from components.java
+        }
+    }
+
+    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+    repositories {
+        if (project.vs_maven_username && project.vs_maven_password) {
+            println "Publishing to VS Maven"
+            maven {
+                url = project.vs_maven_url
+                credentials {
+                    username = project.vs_maven_username
+                    password = project.vs_maven_password
+                }
+            }
+        }
+        // Add repositories to publish to here.
+        if (System.getenv("GITHUB_ACTOR") != null) {
+            println "Publishing to Github Packages"
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/ValkyrienSkies/Eureka")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
+    }
+}

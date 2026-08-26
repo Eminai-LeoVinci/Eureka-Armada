@@ -1,0 +1,9 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_base",
+	"textures": {
+		"log": "block/warped_stem",
+		"log_top": "block/warped_stem_top",
+		"planks": "block/warped_planks",
+		"particle": "block/warped_planks"
+	}
+  }
