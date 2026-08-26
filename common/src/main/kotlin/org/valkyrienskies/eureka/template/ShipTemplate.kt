@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.eureka.crew.GunnerMounts
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
+import org.valkyrienskies.mod.compat.voxy.VoxyLodRefresh
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
 /**
@@ -498,6 +499,23 @@ object ShipTemplate {
         }
 
         val size = template.size
+
+        // Voxy voxelises a world chunk when it ingests it and never revisits it, so blocks written into
+        // chunks no client is tracking never reach the LOD. A pirate site regenerating a day's sail away
+        // is the case that matters: from a distance the anchorage reads as open water, and the hull only
+        // exists once you are close enough to load the real chunks -- which arrives as a collision rather
+        // than a sighting. Assembly and disassembly already send this signal; placing a template is the
+        // third way a hull appears in the world, and it went without.
+        val minChunkX = at.x shr 4
+        val minChunkZ = at.z shr 4
+        val maxChunkX = (at.x + size.x - 1) shr 4
+        val maxChunkZ = (at.z + size.z - 1) shr 4
+        for (chunkX in minChunkX..maxChunkX) {
+            for (chunkZ in minChunkZ..maxChunkZ) {
+                VoxyLodRefresh.mark(level, chunkX, chunkZ)
+            }
+        }
+
         return Placed(id, at, BlockPos(size.x, size.y, size.z))
     }
 
