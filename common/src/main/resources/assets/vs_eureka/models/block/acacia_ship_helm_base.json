@@ -1,0 +1,9 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_base",
+	"textures": {
+		"log": "block/acacia_log",
+		"log_top": "block/acacia_log_top",
+		"planks": "block/acacia_planks",
+		"particle": "block/acacia_planks"
+	}
+  }

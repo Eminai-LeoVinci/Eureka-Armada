@@ -1,0 +1,25 @@
+Eureka! Ships! (VS2) — Unofficial Fabric Port
+=============================================
+
+This repository is an unofficial community port and derivative work of the
+Eureka mod, the ship-building add-on for Valkyrien Skies.
+
+Original work
+-------------
+Eureka (VS Eureka Mod) and Valkyrien Skies are created and maintained by the
+Valkyrien Skies team, including ewoudje, Tri0de, Rubydesic, millennIumAMbiguity,
+and contributors (Copper, Anarava, and the VS Discord community).
+
+  Upstream: https://github.com/ValkyrienSkies/Eureka
+  Website:  https://valkyrienskies.org/
+
+Licensing
+---------
+The original Eureka source was distributed under the Apache License, Version 2.0.
+This port and its distributed/combined work are released under the GNU General
+Public License, Version 3 (see the LICENSE file), at the request of the Valkyrien
+Skies team for community ports. The original Apache-2.0 authorship and
+attributions above are retained in accordance with that license.
+
+This port is maintained by Eminai-LeoVinci and is not affiliated with or endorsed
+by the Valkyrien Skies team.

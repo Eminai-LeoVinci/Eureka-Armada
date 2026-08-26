@@ -1,0 +1,9 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_base",
+	"textures": {
+		"log": "block/crimson_stem",
+		"log_top": "block/crimson_stem_top",
+		"planks": "block/crimson_planks",
+		"particle": "block/crimson_planks"
+	}
+  }
