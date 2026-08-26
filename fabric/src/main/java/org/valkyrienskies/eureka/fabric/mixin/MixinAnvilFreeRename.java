@@ -18,7 +18,8 @@ import org.valkyrienskies.eureka.blueprint.Blueprint;
 /**
  * Naming a ship's wheel or a set of plans at an anvil costs nothing.
  *
- * <p>A wheel's name is its CREW's name, and a crew is renamed for free from the crew manifest. A blueprint's
+ * <p>A wheel's name is its SHIP's name -- the master wheel names whatever hull it assembles -- and a ship is
+ * renamed for free from the helm menu. A blueprint's
  * name is what its plans will be FILED under, and that is renamed for free from the page itself. The anvil is
  * the same job done with the thing in hand, so charging for one route and not the other would only mean the
  * free one is the route nobody discovers -- and a captain who has just spent 28 Hearts of the Sea on berths,

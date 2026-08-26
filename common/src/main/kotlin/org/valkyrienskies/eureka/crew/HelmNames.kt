@@ -173,25 +173,35 @@ object HelmNames {
         val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
         val slug = slugOf(Component.literal(cleaned)) ?: return false
 
-        // The wheel takes the name too, and this is the half that survives being mined. A wheel's name is
-        // vanilla `CustomName`, so it rides the item through the loot table, the anvil and the placement --
-        // whereas the ship's slug dies with the hull and the remembered copy is invisible on the stack. A
-        // captain who typed a name here and found a blank helm in their hand had hit exactly that gap.
-        helm.setHelmName(Component.literal(cleaned))
+        // Named even when there is no hull to name: renaming at a wheel on the ground has to stick, or the
+        // name would have to be typed again after assembling. On the ground the wheel IS the identity, so
+        // the name goes straight onto it -- the half that survives being mined, since a wheel's name is
+        // vanilla `CustomName` and rides the item through the loot table, the anvil and the placement.
+        val ship = CrewStations.shipOf(level, helm)
+        if (ship == null) {
+            helm.setHelmName(Component.literal(cleaned))
+            return true
+        }
 
-        // Named the wheel even if there is no hull to name: renaming at a wheel on the ground has to stick,
-        // or the name would have to be typed again after assembling.
-        val ship = CrewStations.shipOf(level, helm) ?: return true
+        // Assembled, the wheels are terminals and the name belongs to the SHIP -- so it is written on the
+        // MASTER (the crew station), whichever terminal it was typed at. The terminals stay blank until
+        // disassembly stamps the master's name onto all of them.
+        (CrewStations.stationOf(level, ship) ?: helm).setHelmName(Component.literal(cleaned))
         // The loaded object this tick, so every menu and readout answers immediately -- and then BOTH
         // stores through applyShipName, because a slug written onto the loaded ship alone never reaches
         // disk: it read back correctly all session and reverted to the generated name on the next login,
         // which is how this hid. See applyShipName for the two-store story.
         vsCore.renameShip(ship, slug)
         applyShipName(level, ship.id, slug)
-        // The wheel this was typed at remembers immediately, so Keep Name is right even if the ship is taken
-        // apart in the same breath. Every OTHER wheel on the hull picks the new name up from its own tick --
-        // see ShipHelmBlockEntity.tick -- which is why this does not have to go looking for them.
-        helm.rememberShipName(slug)
+        // The menu readout, synchronously on EVERY wheel. Left to the tick stagger, each wheel kept its
+        // stale copy for up to a second -- and the block update the master's own name-write just sent
+        // carried the OLD slug, actively re-teaching every client the wrong name in the meantime.
+        CrewStations.helmsAboard(level, ship)?.forEach { wheel ->
+            if (!PirateHelm.gated(wheel.blockState)) wheel.noteShipSlug(slug)
+        }
+        // And the authoritative source the open menu draws from, in the same breath -- the same pair, and
+        // the same reasoning, as the crew rename above.
+        CrewRoll.sender(player, CrewRoll.build(player, helm))
         return true
     }
 

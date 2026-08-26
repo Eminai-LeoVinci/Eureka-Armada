@@ -169,6 +169,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     /** Guns per deck, keel up, off the same payload the holds ride. Empty until it lands (or no guns). */
     private var deckCounts: List<Int> = emptyList()
 
+    /**
+     * Whether this screen has seeded the widgets from the ship's own memory yet. Once per OPEN: the first
+     * stores payload seeds, and every later refresh (each order pushes stores back) leaves alone whatever
+     * the captain has typed since. A new screen -- another wheel, another ship, a reopen -- seeds afresh.
+     */
+    private var opsSeeded = false
+
     /** How far the Operations body is scrolled: the tab outgrew its panel when it grew categories. */
     private var opsScroll = 0
 
@@ -2109,10 +2116,39 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * genuinely lost that round -- and in both cases a predictable first entry beats one that moves as the
      * magazine drains.
      */
-    private fun acceptStoresNow(next: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
+    private fun acceptStoresNow(
+        next: ShipStores.Stores,
+        decks: List<Int>,
+        firing: Boolean,
+        memory: CrewOperations.OpsMemory?
+    ) {
         stores = next
         deckCounts = decks
         fireAtWill = firing
+        // The SHIP's memory of the last orders seeds the book, once per open and before the ammo default
+        // below runs -- so the round the last restock loaded is already "chosen" by the time it is
+        // checked. Every wheel projects one book, so this is what makes a terminal opened after a relog
+        // -- or by another captain -- read the way the last order left it. A hull that has never been
+        // ordered sends no memory, and the captain's own client-side habits stand.
+        if (!opsSeeded) {
+            opsSeeded = true
+            if (memory != null) {
+                gunnerCount = memory.gunnerCount.coerceIn(0, snapshot.maxBerths)
+                fireCount = memory.fireCount.coerceIn(0, snapshot.maxBerths)
+                gunnerCountBox?.value = gunnerCount.toString()
+                fireCountBox?.value = fireCount.toString()
+                CrewOperations.Side.entries.getOrNull(memory.crewSide)?.let { crewSide = it }
+                CrewOperations.Side.entries.getOrNull(memory.ctrlSide)?.let { ctrlSide = it }
+                CrewOperations.Side.entries.getOrNull(memory.shotSide)?.let { shotSide = it }
+                CrewOperations.AssignMode.entries.getOrNull(memory.crewMode)?.let { crewMode = it }
+                CrewOperations.AssignMode.entries.getOrNull(memory.fireMode)?.let { fireMode = it }
+                val ball = Cannonball.entries.getOrNull(memory.ammoBall)
+                val charge = CannonCharge.entries.getOrNull(memory.ammoCharge)
+                if (ball != null && charge != null && next.ammo.any { it.ball == ball && it.charge == charge }) {
+                    selectedAmmo = ball to charge
+                }
+            }
+        }
         val chosen = selectedAmmo
         val stillThere = chosen != null && next.ammo.any { it.ball == chosen.first && it.charge == chosen.second }
         if (!stillThere) {
@@ -2831,10 +2867,16 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         /** A stores tally arriving, decks census riding along. Ignored unless it is about this wheel. */
-        fun acceptStores(helm: Long, stores: ShipStores.Stores, decks: List<Int>, firing: Boolean) {
+        fun acceptStores(
+            helm: Long,
+            stores: ShipStores.Stores,
+            decks: List<Int>,
+            firing: Boolean,
+            memory: CrewOperations.OpsMemory?
+        ) {
             val screen = Minecraft.getInstance().screen as? CrewManifestScreen ?: return
             if (screen.snapshot.helm != helm) return
-            screen.acceptStoresNow(stores, decks, firing)
+            screen.acceptStoresNow(stores, decks, firing, memory)
         }
 
         private val TITLE: Component = Component.translatable("gui.vs_eureka.crew_manifest")

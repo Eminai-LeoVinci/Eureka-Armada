@@ -391,10 +391,9 @@ object ShipTemplate {
     /**
      * Forget, in every captured helm, which ship this used to be.
      *
-     * The helm block entity stores the name as vanilla's own `CustomName` plus a remembered slug, and re-applies
-     * it through `renameShip` a few ticks after the hull next assembles -- so a copied helm renames its new ship
-     * to the old one's name without anyone asking. Note the flag is written only when *false*, so an absent key
-     * reads back as "keep the name": clearing the name is not enough, the refusal has to be written in.
+     * The helm block entity stores the name as vanilla's own `CustomName` plus a legacy remembered slug, and
+     * a named wheel names whatever hull it next assembles -- so a copied helm would rename its new ship to
+     * the old one's name without anyone asking. Stripping both keys leaves the copy genuinely blank.
      */
     private fun stripShipName(template: StructureTemplate) {
         for (palette in template.palettes) {
@@ -408,7 +407,6 @@ object ShipTemplate {
                 // copy must not share a name: two wheels carrying one binding would have every bottle marked
                 // on the original answering to whichever copy reported its address last.
                 tag.remove(BOTTLE_BINDING_KEY)
-                tag.putBoolean(KEEP_NAME_KEY, false)
             }
         }
     }
@@ -454,7 +452,6 @@ object ShipTemplate {
 
     /** Mirrors the private constants in ShipHelmBlockEntity; the tags are written by that class, not this one. */
     private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
-    private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
     private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
     private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
     private const val PIRATE_TEMPLATE_KEY = "vs_eureka:pirate_template"

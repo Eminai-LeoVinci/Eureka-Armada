@@ -138,11 +138,11 @@ object CrewRoll {
                 fare = if (aboard || perHead <= 0) 0 else heads * perHead
             )
         }
-        // What this wheel says the hull is called, read on the SERVER where it cannot be behind. The wheel's
-        // own name while Keep Name is on -- that is what names the hull under the current model -- and the
-        // ship's slug otherwise, which is what the hull answers to when no wheel is naming it.
+        // What the hull is called, read on the SERVER where it cannot be behind. The station wheel is the
+        // MASTER and its name IS the ship's; the slug is the fallback for the beat before assembly settles
+        // the name onto it, and for a hull answering to a generated name no wheel has adopted yet.
         val level = captain.level() as? ServerLevel
-        val shipName = station.helmName?.string?.takeIf { station.keepName && it.isNotBlank() }
+        val shipName = station.helmName?.string?.takeIf { it.isNotBlank() }
             ?: level?.let { CrewStations.shipOf(it, station) }?.slug?.replace('-', ' ')
             ?: ""
 

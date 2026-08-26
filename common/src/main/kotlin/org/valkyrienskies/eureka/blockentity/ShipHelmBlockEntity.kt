@@ -73,7 +73,6 @@ import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.path.PathMessages
-import org.valkyrienskies.eureka.crew.CrewNameGenerator
 import org.valkyrienskies.eureka.crew.CrewRoster
 import org.valkyrienskies.eureka.crew.CrewTickets
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
@@ -128,10 +127,11 @@ private const val ENVIRONMENT_SAMPLE_TICKS = 20L
 // already carrying, so it only has to be sooner than a player gives up on the wheel.
 private const val TICKET_HEAL_TICKS = 600L
 
-// The two Keep Name fields. Namespaced because they are written into `custom_data` on the ITEM as well as into
-// block-entity NBT, and custom_data is a shared bag every mod may put things in.
+// Namespaced because it is written into `custom_data` on the ITEM as well as into block-entity NBT, and
+// custom_data is a shared bag every mod may put things in. LEGACY INPUT ONLY since the master-helm rework:
+// read so a pre-rework wheel still surfaces the name it was keeping, never written back. Its old companion
+// `vs_eureka:keep_name` is retired entirely -- stale keys in saves, items and templates are simply ignored.
 private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
-private const val KEEP_NAME_KEY = "vs_eureka:keep_name"
 private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
 private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
 
@@ -470,9 +470,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     /**
      * The name written on this wheel, or null while it is still blank.
      *
-     * This is the ship's identity, not a label on a block. A named wheel lends its name to whatever hull it
-     * assembles, and -- with the wood variant and the captain -- it is the key a crew is filed under, so two
-     * wheels that agree on all three are the same berth even if one of them was crafted this morning.
+     * This is the ship's identity, not a label on a block. The wheel that orders an assembly is the MASTER:
+     * the hull takes this name (or, if the wheel is blank, adopts vs-core's generated one as its real name),
+     * every OTHER wheel aboard is wiped so the terminals stay interchangeable, and disassembly stamps the
+     * master's name back onto all of them -- every wheel mined off a named ship carries her name.
      *
      * Stored as vanilla's own `CustomName`, deliberately NOT under a `vs_eureka:` prefix like the roster
      * beside it. That key is a contract with three pieces of vanilla we want for free: the implicit-component
@@ -496,26 +497,14 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     /**
-     * The slug of the last ship this wheel steered, or null if it has never named one.
+     * LEGACY: the slug a pre-rework wheel was keeping under the old Keep Name feature, or null.
      *
-     * A THIRD name, and deliberately not either of the other two. [helmName] is the crew's and never touches a
-     * hull; the ship's own name is `Ship.slug` and dies with the ship at disassembly. This is what the wheel
-     * REMEMBERS, so a hull can be taken apart and rebuilt -- or replaced entirely -- and still be the ship it
-     * was. Stored already slugged, because that is the form vs-core takes and re-slugging on every assembly
-     * would be a second place for the rules to drift.
+     * Read-only input now. On load it is PROMOTED into [helmName] (un-dashed) when the wheel has no name of
+     * its own, and never written again -- since the master-helm rework the wheel's name IS the memory,
+     * stamped onto every wheel at disassembly. Kept as the assembly-time fallback too, belt and braces for
+     * a wheel that somehow reaches assembly unpromoted.
      */
     var rememberedShipName: String? = null
-        private set
-
-    /**
-     * Whether this wheel re-applies [rememberedShipName] to whatever it assembles.
-     *
-     * Defaults ON, because a captain who has named a ship almost always wants it to stay named, and the case
-     * this protects against -- a forgotten wheel quietly renaming a hull you had called something else -- is
-     * rarer than the case it serves. Unticking stops the wheel applying and recording; what it already
-     * remembers keeps, so ticking the box again brings the name back. See [setKeepName].
-     */
-    var keepName: Boolean = true
         private set
 
     /**
@@ -524,7 +513,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      * `Ship.slug` cannot be read on the client and trusted: VS2 tells a client a ship's name when the ship
      * loads and does not push later changes, so a renamed ship keeps its old name on every client until
      * something reloads it. The helm menu appeared to work only because it echoes what the player typed --
-     * a name set by anything else (Keep Name, another player's `/vs rename`) showed the stale one.
+     * a name set by anything else (an assembly, another player's `/vs rename`) showed the stale one.
      *
      * So the wheel carries it. This block entity already syncs to clients, so the name rides along with
      * everything else and the menu has a value it can trust. Refreshed on the same slow stagger as the
@@ -577,8 +566,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      * reference to the object it was opened on, so from that moment it is reading a ghost: every readout
      * freezes at whatever the discarded copy last held, and a checkbox reads its constructor default rather
      * than the wheel's real setting. That is not a stale number, it is a menu quietly telling lies -- it
-     * cost an afternoon chasing a Keep Name box that appeared to tick itself back on when the setting had
-     * in fact been saved correctly all along.
+     * cost an afternoon chasing a settings checkbox that appeared to tick itself back on when the setting
+     * had in fact been saved correctly all along.
      *
      * Re-resolving by position instead would not save it: the wheel does not merely change object, it
      * changes ADDRESS, out of the world and into the shipyard. There is nothing at the old position to look
@@ -605,36 +594,27 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     /**
-     * Toggle the Keep Name behaviour.
+     * Blank this wheel's identity, for an assembly it did not order.
      *
-     * Unticking stops the wheel APPLYING its name; it does not make the wheel forget it. It used to do both,
-     * on the reasoning that an off switch should be complete -- but the two halves are wanted separately.
-     * A captain who unticks this to let one hull come up under a fresh name still wants the old name on
-     * file, so that ticking the box again puts it back. Forgetting made that a one-way door: the name was
-     * gone the instant the box came off, and re-ticking produced another generated name with no way to
-     * recover the original short of remembering it yourself.
-     *
-     * Nothing is lost by keeping it, either. A wheel that is switched off applies nothing and records
-     * nothing new ([rememberShipName] still refuses while it is off), so the remembered name simply sits
-     * there, harmless, until the box is ticked again or a new name is recorded over it.
+     * The legacy remembered slug goes with the name, deliberately: the load-time promotion in
+     * [loadAdditional] would otherwise resurrect the very name the wipe just took off, the next time the
+     * chunk reloaded. Internal to the master-helm arrangement -- everything else goes through [setHelmName].
      */
-    fun setKeepName(value: Boolean) {
-        keepName = value
-        setChanged()
-        level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
+    internal fun wipeIdentityForAssembly() {
+        rememberedShipName = null
+        setHelmName(null)
     }
 
     /**
-     * Record the name of the ship this wheel is currently part of. Ignored while Keep Name is off.
+     * Push the menu-readout slug NOW rather than waiting for [tick]'s slow stagger to notice.
      *
-     * A name vs-core made up is deliberately NOT remembered. The point of the feature is to keep the name a
-     * captain chose, and remembering a generated one would mean any hull that came up unnamed -- including one
-     * where re-applying had just failed -- would overwrite the real name and lose it for good.
+     * A rename used to leave every wheel's copy stale for up to a second -- worse, the block update its own
+     * name-write sent carried the OLD slug, actively re-teaching every client the wrong name. See
+     * `HelmNames.renameShip` and the assembly master loop, the callers.
      */
-    fun rememberShipName(slug: String?) {        if (!keepName || slug.isNullOrEmpty()) return
-        if (rememberedShipName == slug) return
-        if (CrewNameGenerator.looksGenerated(slug)) return
-        rememberedShipName = slug
+    internal fun noteShipSlug(slug: String?) {
+        if (shipSlug == slug) return
+        shipSlug = slug
         setChanged()
         level?.let { it.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL) }
     }
@@ -662,7 +642,6 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         if (custom != null) {
             val tag = custom.copyTag()
             rememberedShipName = tag.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
-            keepName = tag.getBooleanOr(KEEP_NAME_KEY, true)
             // The crew bindings ride here too, and this is the line that makes an ANVIL rename harmless: the
             // anvil rewrites `custom_name` and touches nothing else, so a wheel renamed from White Pearl to
             // Black Pearl comes back pointing at exactly the crew it left with.
@@ -673,24 +652,40 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 )
             )
         }
+        // Promote a legacy Keep Name wheel the moment it lands: pre-rework items carry a remembered slug and
+        // often no custom_name. The wheel's own name is the one identity now, so the memory becomes the name.
+        if (helmName == null) rememberedShipName?.let { helmName = Component.literal(it.replace('-', ' ')) }
+        // ...unless it just landed on an ASSEMBLED ship, in which case it arrives as a blank terminal,
+        // whatever its item said. While she sails there is ONE identity and it is the ship's: a name carried
+        // aboard would title this wheel's menu with some other ship for as long as she stayed assembled --
+        // assembly wipes the siblings it FINDS, and a wheel placed afterwards must not slip past that rule.
+        // Disassembly stamps the real name onto every wheel, this one included. The crew bindings stay,
+        // because a wheel's crew was never its name. The readout slug is seeded in the same breath, so the
+        // menu answers correctly on the very first open rather than after the first sample tick.
+        (level as? ServerLevel)?.let { sLevel ->
+            sLevel.getLoadedShipManagingPos(blockPos)?.let { aboard ->
+                rememberedShipName = null
+                helmName = null
+                shipSlug = aboard.slug
+                setChanged()
+                sLevel.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_ALL)
+            }
+        }
     }
 
     override fun collectImplicitComponents(components: DataComponentMap.Builder) {
         super.collectImplicitComponents(components)
         components.set(DataComponents.CUSTOM_NAME, helmName)
 
-        // Only written when there is something to say. A wheel that has never named a ship and is switched on
-        // -- which is most of them -- puts no custom_data on the item at all, so an ordinary helm stacks with
-        // every other ordinary helm instead of splitting into singletons.
-        if (rememberedShipName != null || !keepName || crewBindings.isNotEmpty()) {
+        // Only written when there is something to say. A wheel with no crew bindings -- which is most of them
+        // -- puts no custom_data on the item at all, so an ordinary helm stacks with every other ordinary
+        // helm instead of splitting into singletons. The legacy remembered slug is deliberately NOT carried
+        // out: it was promoted into the name on the way in, and the name rides `custom_name` above.
+        if (crewBindings.isNotEmpty()) {
             val tag = CompoundTag()
-            rememberedShipName?.let { tag.putString(REMEMBERED_SHIP_KEY, it) }
-            if (!keepName) tag.putBoolean(KEEP_NAME_KEY, false)
-            if (crewBindings.isNotEmpty()) {
-                val list = ListTag()
-                for (entry in encodeCrewBindings(crewBindings)) list.add(StringTag.valueOf(entry))
-                tag.put(CREW_BINDINGS_KEY, list)
-            }
+            val list = ListTag()
+            for (entry in encodeCrewBindings(crewBindings)) list.add(StringTag.valueOf(entry))
+            tag.put(CREW_BINDINGS_KEY, list)
             components.set(DataComponents.CUSTOM_DATA, CustomData.of(tag))
         }
     }
@@ -726,13 +721,11 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         output.storeNullable("CustomName", ComponentSerialization.CODEC, helmName)
         if (!crew.isEmpty) output.store("vs_eureka:crew", CrewRoster.CODEC, crew.entries())
         if (isCrewStation) output.putBoolean("vs_eureka:crew_station", true)
-        rememberedShipName?.let { output.putString(REMEMBERED_SHIP_KEY, it) }
+        // The legacy remembered slug is read but never written back: the load below promotes it into the
+        // wheel's own name, and saving it again would be a second copy of the name waiting to drift.
         // Written for the sync rather than for the save -- getUpdateTag is saveCustomOnly, so this is how the
         // client learns the ship's name at all. Harmless on disk; re-derived from the ship on the next tick.
         shipSlug?.let { output.putString(SHIP_SLUG_KEY, it) }
-        // Written only when OFF, so the default costs nothing and every wheel already in a save keeps the
-        // behaviour switched on without a migration.
-        if (!keepName) output.putBoolean(KEEP_NAME_KEY, false)
         // As a string rather than an int array: ShipTemplate.stripShipName edits this tag as raw NBT in a
         // template palette, and a string key can be removed there without agreeing on an encoding.
         bottleBinding?.let { output.putString(BOTTLE_BINDING_KEY, it.toString()) }
@@ -756,7 +749,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         crew.replaceAll(input.read("vs_eureka:crew", CrewRoster.CODEC).orElse(emptyList()))
         isCrewStation = input.getBooleanOr("vs_eureka:crew_station", false)
         rememberedShipName = input.getString(REMEMBERED_SHIP_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
-        keepName = input.getBooleanOr(KEEP_NAME_KEY, true)
+        // Promote a legacy Keep Name wheel the moment it loads: pre-rework saves carry a remembered slug and
+        // often no CustomName. The wheel's own name is the one identity now, so the memory becomes the name.
+        if (helmName == null) rememberedShipName?.let { helmName = Component.literal(it.replace('-', ' ')) }
         shipSlug = input.getString(SHIP_SLUG_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
         bottleBinding = input.getString(BOTTLE_BINDING_KEY).orElse(null)
             ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
@@ -1065,14 +1060,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // contact above. Nothing steers by these -- they are numbers on a screen.
             if (sLevel.gameTime % ENVIRONMENT_SAMPLE_TICKS == (blockPos.hashCode().toLong() and 0xFL) % ENVIRONMENT_SAMPLE_TICKS) {
                 sampleEnvironment(sLevel, curShip, curControl)
-                // Keep Name: every wheel notes what its own ship is called, on the same slow stagger. Doing it
-                // here rather than at the rename means it needs no notification and no walk of the hull -- a
-                // wheel that was placed later, or renamed from a different wheel, still ends up knowing. The
-                // write is a no-op unless the name actually changed.
-                rememberShipName(curShip.slug)
-                // And the name the MENU shows, which is a different question: this one follows the ship even
-                // when Keep Name is off or the name is a generated one, because it is a readout rather than a
-                // memory. Pushed to clients only when it actually changes.
+                // The name the MENU shows. A readout rather than a memory: it follows the ship even while
+                // the name is a generated one. Pushed to clients only when it actually changes.
                 if (shipSlug != curShip.slug) {
                     shipSlug = curShip.slug
                     setChanged()
@@ -1208,7 +1197,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // border faces lock to the helm the instant the ship exists (see the seed call after finishAssembly).
         val forwardAtAssembly = helmSeatDirection
 
-        // Keep Name, read NOW for the same reason the bow direction is.
+        // The wheel's identity, read NOW for the same reason the bow direction is.
         //
         // Assembly relocates this wheel into the shipyard, and the relocation RESETS the block entity it moved
         // FROM -- the destination copy gets the data, and this object is reloaded from an empty tag. `this` is
@@ -1218,7 +1207,6 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         //
         // This is also what made the first attempt at naming a ship from its wheel fail: it read the helm's
         // name inside applyControl and wrote a null every time.
-        val keepNameAtAssembly = keepName
         val rememberedAtAssembly = rememberedShipName
         // The wheel's own name, which is what the hull is called from here on. Falls back to the remembered
         // ship name for a wheel saved before the two were joined -- those carry a remembered slug and no
@@ -1469,8 +1457,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 }
             }
 
-            // Keep Name: give the hull back the name this wheel last steered under, using the value read off
-            // the block BEFORE the assembly reset it (see keepNameAtAssembly above).
+            // Give the hull the master wheel's name, using the value read off the block BEFORE the assembly
+            // reset it (see wheelNameAtAssembly above).
             //
             // Through HelmNames.applyShipName rather than a plain deferred write, and the difference is the
             // whole bug it fixed: a slug written into a ship vs-core is still assembling does not survive,
@@ -1479,22 +1467,29 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // generated name with this wheel remembering the right one and nothing left to apply it. The
             // helper writes both stores and checks its own work until the name sticks.
             //
-            // The name is the WHEEL's now, not a separate remembered slug: a captain types one name, the wheel
-            // wears it, the item carries it and the hull answers to it. Keep Name is the switch for the whole
-            // arrangement -- turn it off and the hull keeps whatever vs-core called it.
-            if (keepNameAtAssembly && wheelNameAtAssembly != null) {
+            // The name is the WHEEL's: a captain types one name, the wheel wears it, the item carries it and
+            // the hull answers to it. A blank wheel leaves vs-core's generated slug standing -- and then
+            // ADOPTS it as its real name, in the master loop below.
+            if (wheelNameAtAssembly != null) {
                 HelmNames.applyShipName(level, loadedShip.id, wheelNameAtAssembly)
             }
 
-            // The wheel that ordered the assembly is the MASTER: the hull takes its name, and so does every
-            // other wheel aboard. A ship carrying three helms under three different names was a ship with
-            // three answers to "what is she called" -- the menu showed whichever wheel you happened to be
-            // standing at, and assembling from the wrong one quietly renamed the ship to something else.
-            // One wheel decides, and the rest fall in behind it.
+            // The wheel that ordered the assembly is the MASTER: the hull takes its name, and every OTHER
+            // wheel aboard is WIPED blank. A ship carrying three helms under three different names was a
+            // ship with three answers to "what is she called" -- the menu showed whichever wheel you
+            // happened to be standing at, and assembling from the wrong one quietly renamed the ship to
+            // something else. While she sails, the wheels are interchangeable terminals projecting one
+            // identity; disassembly stamps the master's name back onto every one of them.
             //
-            // A wheel that has never been named takes the name vs-core made up, and keeps it. That is the one
-            // moment a blank wheel stops being blank: from here it has a name on the item, a name for the hull
-            // and a row in the helm's crew list that reads as something.
+            // A master that has never been named takes the name vs-core made up, and keeps it. That is the
+            // one moment a blank wheel stops being blank: from here it has a name on the item, a name for
+            // the hull and a row in the helm's crew list that reads as something. And it wins even when a
+            // SIBLING carries a name -- the accessed wheel always decides, so which wheel a captain pressed
+            // never becomes a question the ship answers differently.
+            //
+            // The master is found by ADDRESS -- the exact shipyard position the paste put this wheel at --
+            // never by the isCrewStation flag: CrewStations.settle runs on this same deferred tick, and
+            // which of the two goes first is nobody's promise.
             //
             // Deferred like the settle above, and for the same two reasons -- the generated slug is not final
             // until vs-core has finished building the ship, and the wheels cannot be found until it has filled
@@ -1508,36 +1503,40 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                     val master = helmDisplayAtAssembly
                         ?: wheelNameAtAssembly?.replace('-', ' ')
                         ?: built.slug?.replace('-', ' ')
+                    val masterPos = BlockPos.of(crewStation)
+                    var wiped = 0
+                    var adopted = 0
                     for (wheel in CrewStations.helmsAboard(level, built).orEmpty()) {
                         // Pirate wheels keep their own papers. Renaming one would rewrite a design fact that
                         // every copy of that hull shares.
                         if (PirateHelm.gated(wheel.blockState)) continue
 
-                        // The master's SETTINGS travel too, not only its name. A captain ticking Keep Name at
-                        // the wheel they are standing at means it for the SHIP -- and a hull whose wheels
-                        // disagree behaves differently depending on which one was last touched, or, after a
-                        // bottle, on which one helmIn happened to score highest.
-                        if (wheel.keepName != keepNameAtAssembly) wheel.setKeepName(keepNameAtAssembly)
-
-                        // The NAME only travels while Keep Name is on. With it off the hull answers to
-                        // whatever vs-core called her, and wiping a name the captain typed -- off every wheel
-                        // at once -- is not what turning a switch off ought to do.
-                        if (keepNameAtAssembly && master != null && wheel.helmName?.string != master) {
-                            wheel.setHelmName(Component.literal(master))
+                        if (wheel.blockPos == masterPos) {
+                            // The master wears the settled name -- including a generated one it just adopted.
+                            if (master != null && wheel.helmName?.string != master) {
+                                wheel.setHelmName(Component.literal(master))
+                            }
+                        } else {
+                            // A sibling with a legacy block-entity roster resolves its crew BY NAME the
+                            // first time anyone asks. Adopt it into the ledger while the name is still on
+                            // the wheel, or the wipe below would orphan that crew for good.
+                            if (!wheel.crew.isEmpty && wheel.helmName != null) {
+                                CrewLedger.get(server).adoptLegacy(server, wheel)
+                                adopted++
+                            }
+                            if (wheel.helmName != null || wheel.rememberedShipName != null) wiped++
+                            wheel.wipeIdentityForAssembly()
                         }
                         // The menu's readout is pushed in the same breath. Left to converge on its own slow
                         // stagger it pushes only when the SERVER's value changes -- so a wheel whose client
                         // copy was already behind had nothing to correct it, and went on showing whatever the
-                        // ship was called when its chunk loaded.
-                        val slug = built.slug
-                        if (slug != null && wheel.shipSlug != slug) {
-                            wheel.shipSlug = slug
-                            wheel.setChanged()
-                            level.sendBlockUpdated(
-                                wheel.blockPos, wheel.blockState, wheel.blockState, Block.UPDATE_ALL
-                            )
-                        }
+                        // ship was called when its chunk loaded. The settled name is preferred over the
+                        // ship's current slug, which for these first few ticks can still be the generated
+                        // one applyShipName is busy replacing.
+                        val slug = wheelNameAtAssembly ?: built.slug
+                        if (slug != null) wheel.noteShipSlug(slug)
                     }
+                    logger.info("[name] assembly ship={} master='{}' wiped={} adopted={}", namedId, master, wiped, adopted)
                 }
             }
 
@@ -1628,12 +1627,6 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             return
         }
 
-        // Keep Name: the last chance to read what this ship was called. A disassembly destroys the ship object
-        // and its slug with it, so a wheel that has not written the name down by now has lost it. Deliberately
-        // AFTER the canDisassemble gate, so a deferred teardown records the name once it actually happens
-        // rather than on every waiting tick.
-        rememberShipName(ship.slug)
-
         // Everything the crew stand-down below needs, read while the ship still exists and while this block
         // entity is still the one holding the articles. The unfill relocates the wheel back into the world,
         // which resets THIS object exactly as an assembly does -- see the top of `assemble`.
@@ -1646,6 +1639,27 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // comes apart for all of them at once.
         val crewStation = CrewStations.stationOf(level as ServerLevel, ship)
         val shipName = crewStation?.helmName?.string ?: helmName?.string
+
+        // The master's name goes onto EVERY wheel, now -- while the ship still exists to walk, and while
+        // these are still the shipyard block entities whose NBT the unfill below is about to carry out into
+        // the world. This is the other half of the master-helm arrangement: assembly wiped the siblings so
+        // the terminals could not disagree; disassembly hands each of them the identity, so every wheel
+        // mined off this ship bears her name and any one of them can seed her next hull. Deliberately AFTER
+        // the canDisassemble gate, so a deferred teardown stamps once, when it actually happens.
+        //
+        // The stamped list is for the refusal path below: an unfill the world declines leaves the ship
+        // ASSEMBLED, and an assembled ship must not sail on with every terminal named.
+        val masterStamp = shipName ?: ship.slug?.replace('-', ' ')
+        val stampedWheels = ArrayList<ShipHelmBlockEntity>()
+        if (masterStamp != null) {
+            for (wheel in CrewStations.helmsAboard(level as ServerLevel, ship).orEmpty()) {
+                // Pirate wheels keep their own papers, at teardown as at assembly.
+                if (PirateHelm.gated(wheel.blockState)) continue
+                if (wheel.helmName?.string == masterStamp) continue
+                wheel.setHelmName(Component.literal(masterStamp))
+                stampedWheels.add(wheel)
+            }
+        }
         val crewIdsAtTeardown = LinkedHashSet<UUID>().apply {
             crewStation?.let { addAll(it.crewBindings().values) }
             addAll(crewBindings().values)
@@ -1693,6 +1707,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             shouldDisassembleWhenPossible = false
             control.disassembling = false
             control.aligning = false
+            // Un-stamp: the ship is still assembled, so the terminals go back to blank and the master keeps
+            // the name alone. Only wheels the stamp actually CHANGED are in the list, so a name-bearing
+            // master is never touched here.
+            for (wheel in stampedWheels) wheel.setHelmName(null)
             val centre = ship.transform.positionInWorld
             for (player in serverLevel.players()) {
                 if (player.distanceToSqr(centre.x(), centre.y(), centre.z()) < 128.0 * 128.0) {
@@ -1705,6 +1723,13 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
         shouldDisassembleWhenPossible = false
+
+        if (masterStamp != null) {
+            logger.info(
+                "[name] disassembly ship={} stamped '{}' onto {} wheels",
+                shipIdAtTeardown, masterStamp, stampedWheels.size
+            )
+        }
 
         // Take the crew off the deck and into the articles, now that there is definitely no deck. Deliberately
         // AFTER the unfill rather than before it: the unfill can decline (a hull that will not fit under the

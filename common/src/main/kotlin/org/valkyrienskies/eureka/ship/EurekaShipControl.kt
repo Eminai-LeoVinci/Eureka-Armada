@@ -1577,6 +1577,26 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     @JsonIgnore @Volatile var fireAtWillNextScanAt = 0L
     @JsonIgnore @Volatile var fireAtWillNextShotAt = 0L
 
+    // The Operations book's remembered settings -- the terminal memory. Every wheel on the hull projects
+    // ONE book, so what a captain last ordered is a fact about the SHIP, persisted with it: counts, sides,
+    // modes and the round last loaded seed the book at open, at any wheel, after any relog or restart.
+    // Written when an ORDER fires (assign, restock, angle/power) -- never when a widget is merely fiddled
+    // -- so a value typed but not sent still dies with the screen, exactly as it always has. Sides, modes
+    // and the ammo pair are stored as the enums' ordinals (the wire format throughout the ops channel);
+    // the ammo pair is -1 until a shot restock has ever named one. `opsRemembered` is the seal: until any
+    // order fires on this hull, the book keeps the captain's own client-side habits instead of stomping
+    // them with defaults. See CrewOperations.rememberOps and OpsMemory.
+    var opsRemembered = false
+    var opsGunnerCount = 0
+    var opsFireCount = 0
+    var opsCrewSide = 2 // CrewOperations.Side.BOTH
+    var opsCtrlSide = 2
+    var opsShotSide = 2
+    var opsCrewMode = 0 // CrewOperations.AssignMode.KEEP
+    var opsFireMode = 0
+    var opsAmmoBall = -1
+    var opsAmmoCharge = -1
+
     @Volatile
     var floaters = 0 // Amount of floaters * 15
         set(v) {

@@ -14,6 +14,7 @@ import org.valkyrienskies.core.api.ships.Ship
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
+import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.crew.CrewRoll
 import org.valkyrienskies.eureka.crew.HelmNames
@@ -104,7 +105,6 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     private lateinit var keepActiveCheckbox: ShipHelmCheckbox
     private lateinit var waterLockCheckbox: ShipHelmCheckbox
-    private lateinit var keepNameCheckbox: ShipHelmCheckbox
     private lateinit var armadaParentCheckbox: ShipHelmCheckbox
     private lateinit var armadaChildCheckbox: ShipHelmCheckbox
 
@@ -112,7 +112,11 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     private lateinit var renameBox: EditBox
     private var renaming = false
 
+    // The raycast is only ever a GUESS at which wheel this menu is on -- see updateButtons, where the
+    // server-synced position takes over -- so it is at least required to have actually hit a wheel here.
+    // Unvalidated, a seated player's stray crosshair latched a deck block and the name sources went dark.
     private var pos = (Minecraft.getInstance().hitResult as? BlockHitResult)?.blockPos
+        ?.takeIf { Minecraft.getInstance().level?.getBlockState(it)?.block is ShipHelmBlock }
     private var ship: Ship? = pos?.let { Minecraft.getInstance().level?.getShipManagingPos(it) }
 
     init {
@@ -276,16 +280,6 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
                 WATER_LOCK_TEXT, font, { menu.waterAltitudeHold }
             ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 5) }
         )
-        // "Keep Name": the wheel re-applies the last ship name it saw to whatever it assembles next. Sits with
-        // Water Lock rather than in the armada column because both are properties of this helm's own
-        // behaviour, and unlike everything else here it stays live on an UNASSEMBLED wheel -- which is exactly
-        // when a captain carrying one to a new hull wants to check it.
-        keepNameCheckbox = addRenderableWidget(
-            ShipHelmCheckbox(
-                x + MISC_X, y + MISC_Y + 2 * MISC_DY, checkboxWidth(KEEP_NAME_TEXT),
-                KEEP_NAME_TEXT, font, { menu.keepName }
-            ) { minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, 2) }
-        )
         // Armada role markers, second misc column: tick Parent at the lead ship, then Child at each ship that
         // should fly in its formation. Mutually exclusive (see updateButtons).
         armadaParentCheckbox = addRenderableWidget(
@@ -416,7 +410,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         pendingNames[s.id]?.let { return it.ifEmpty { null } }
         // The WHEEL's copy first. `Ship.slug` on the client is only ever what the ship was called when it
         // loaded -- VS2 does not push later renames -- so a ship named by anything the player did not just
-        // type here (Keep Name, another captain's rename) reads stale from it forever. The helm block entity
+        // type here (an assembly, another captain's rename) reads stale from it forever. The helm block entity
         // syncs, so its copy is the current one. Falls back to the ship for a wheel that has not sampled yet.
         // What the SERVER said this wheel calls the hull, which is the only answer that cannot be behind.
         //
@@ -532,8 +526,22 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
     }
 
     private fun updateButtons() {
-        val newPos = (Minecraft.getInstance().hitResult as? BlockHitResult)?.blockPos
-        if (newPos != null) pos = newPos
+        // Which wheel is this menu on? The SERVER's answer, from the menu's synced slots, wins outright:
+        // the crosshair raycast guesses wrong exactly when it matters (a seated player's frozen camera
+        // points wherever it happened to point, and sit() opens this menu with no aim at all), and a wrong
+        // `pos` skipped both authoritative name sources -- the roll match and the wheel's synced slug -- so
+        // the title fell back to the client's frozen Ship.slug: the generated-name flicker, corrected on
+        // reopen. The raycast survives only as a fallback for the beat before the slots arrive, and only
+        // when it actually hit a wheel.
+        val syncedPos = menu.helmPos
+        if (syncedPos != null) {
+            pos = syncedPos
+        } else {
+            val newPos = (Minecraft.getInstance().hitResult as? BlockHitResult)?.blockPos
+            if (newPos != null && Minecraft.getInstance().level?.getBlockState(newPos)?.block is ShipHelmBlock) {
+                pos = newPos
+            }
+        }
         val newShip = pos?.let { Minecraft.getInstance().level?.getShipManagingPos(it) }
         if (newShip != null) ship = newShip
 
@@ -579,11 +587,6 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // question of what would enable it, and the answer is "nothing".
         waterLockCheckbox.visible = viewedTab == ControlProfile.BOAT
         waterLockCheckbox.active = !childLocked
-
-        // Always live, on every tab, assembled or not: it describes what this WHEEL does next time, and the
-        // moment it most needs setting is while the wheel is sitting on a hull that has not been built yet.
-        keepNameCheckbox.visible = true
-        keepNameCheckbox.active = true
 
         // Armada role markers are mutually exclusive: a child can't be marked parent, and a parent (real or
         // just marked) can't be ticked child. Both need an assembled ship, since a bond is between two ships.
@@ -1017,12 +1020,12 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     companion object {
         /**
-         * A just-typed name, keyed on the WHEEL's packed block position, held until the server's own copy of
-         * the block entity agrees with it.
+         * A just-typed name, keyed on the SHIP's id, held until vs-core's own copy of the slug agrees.
          *
-         * Static because the screen is rebuilt on every resize and would otherwise forget an in-flight rename.
-         * Was keyed on ship id when this box renamed ships; the key moved with the name, onto the block that
-         * now carries it -- which also means a wheel that has never built a ship can hold a pending name.
+         * Static because the screen is rebuilt on every resize and would otherwise forget an in-flight
+         * rename. Ship-keyed, not wheel-keyed: a rename only exists while a hull does (the Rename control
+         * hides otherwise), and the echo has to survive the captain walking between terminals of the same
+         * ship, which a wheel-keyed echo would not.
          */
         private val pendingNames = HashMap<Long, String>()
         private val NUMERIC = Regex("-?\\d*\\.?\\d*")
@@ -1168,7 +1171,6 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val BOX_BG = 0xFFB0B0B0.toInt()
 
         private val KEEP_ACTIVE_TEXT = Component.translatable("gui.vs_eureka.keep_active")
-        private val KEEP_NAME_TEXT = Component.translatable("gui.vs_eureka.keep_name")
         private val WATER_LOCK_TEXT = Component.translatable("gui.vs_eureka.water_lock")
         private val ARMADA_PARENT_TEXT = Component.translatable("gui.vs_eureka.armada_parent")
         private val ARMADA_CHILD_TEXT = Component.translatable("gui.vs_eureka.armada_child")

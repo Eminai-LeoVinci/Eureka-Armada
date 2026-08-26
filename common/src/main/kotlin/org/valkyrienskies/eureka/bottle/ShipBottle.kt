@@ -89,7 +89,13 @@ object ShipBottle {
             PathMessages.send(player, "That wheel is broken -- it has no workings.", PathMessages.Kind.WARN)
             return false
         }
-        val shipName = ship.slug ?: "unnamed ship"
+        // The DISPLAY name, spaces and all: the station wheel is the master and its name IS the ship's,
+        // with the un-dashed slug standing in for a hull still sailing under a generated name. What is
+        // written here is what the tooltip prints and what release stamps back -- storing the raw slug was
+        // why an old bottle read `black-pearl`, and why an apostrophe never came home.
+        val shipName = CrewStations.stationOf(level, ship)?.helmName?.string
+            ?: ship.slug?.replace('-', ' ')
+            ?: "unnamed ship"
 
         val tag = CompoundTag()
         tag.putString(SHIP_NAME_KEY, shipName)
@@ -211,7 +217,11 @@ object ShipBottle {
             PathMessages.send(player, "That wheel is not part of an assembled ship.", PathMessages.Kind.WARN)
             return null
         }
-        val shipName = ship.slug ?: "unnamed ship"
+        // The display name, exactly as mark() takes it -- see the comment there. Read while the ship still
+        // exists: capture is about to delete her.
+        val shipName = CrewStations.stationOf(level, ship)?.helmName?.string
+            ?: ship.slug?.replace('-', ' ')
+            ?: "unnamed ship"
 
         val templateName = templateNameFor(UUID.randomUUID())
         when (val outcome = ShipTemplate.capture(level, ship, templateName, keepShipName = true)) {
@@ -456,20 +466,21 @@ object ShipBottle {
             // people standing on a deck that is briefly not collidable, and a hull coming out of a bottle has
             // nobody standing on it -- so all the freeze can do here is grab whoever is passing overhead, which
             // on a thrown bottle is very often the person who threw it, mid-elytra.
-            // Her name goes back on the wheel BEFORE she is built, and Keep Name goes on with it.
+            // Her name goes back on the wheel BEFORE she is built -- which also makes that wheel the MASTER
+            // the assembly names the hull from, so a bottle cycle restores the same master it captured.
             //
-            // A bottle is the one case where the name is not a preference -- it is what was captured, it is
-            // printed on the bottle, and the message the captain is about to read says it out loud. Leaving
-            // it to the wheel's own switch meant a hull came out under a freshly invented slug while the
-            // bottle in the player's hand still said otherwise; and WHICH wheel gets asked is decided by
-            // helmIn's scoring rather than by the captain, so its switch is not theirs in any real sense.
+            // A bottle's name is not a preference -- it is what was captured, it is printed on the bottle,
+            // and the message the captain is about to read says it out loud. Left to the wheel's own NBT, a
+            // hull sometimes came out under a freshly invented slug while the bottle in the player's hand
+            // still said otherwise.
             //
             // Stamped on the wheel rather than applied to the ship afterwards, so it travels the same road
             // every other assembly name takes -- HelmNames.applyShipName's verify-loop included, which is
             // what makes a name survive a hull vs-core is still building.
+            // As shipNameOf returns it -- already un-dashed for a legacy bottle, and NOT re-un-dashed here,
+            // so a name a captain deliberately wrote a dash into survives its bottle cycle.
             shipNameOf(stack)?.takeIf { it.isNotBlank() }?.let { captured ->
-                helmEntity.setHelmName(Component.literal(captured.replace('-', ' ')))
-                helmEntity.setKeepName(true)
+                helmEntity.setHelmName(Component.literal(captured))
             }
             helmEntity.assemble(player, placed, holdEntities = false)
             // Said out loud on purpose: a hull resting on the ground looks exactly like a pile of blocks, so
@@ -588,7 +599,11 @@ object ShipBottle {
     /** The ship's name, for the tooltip. Null on an empty bottle. */
     fun shipNameOf(stack: ItemStack): String? {
         val data = stack.get(DataComponents.CUSTOM_DATA) ?: return null
-        return data.copyTag().getString(SHIP_NAME_KEY).orElse(null)?.takeIf { it.isNotEmpty() }
+        val stored = data.copyTag().getString(SHIP_NAME_KEY).orElse(null)?.takeIf { it.isNotEmpty() } ?: return null
+        // Bottles filled before the master-helm rework stored the raw SLUG -- dashes standing for spaces.
+        // One choke point un-dashes them for every reader (tooltips, throw messages, the release stamp);
+        // a stored name that already carries a space is a real display name and is kept exactly as written.
+        return if (' ' !in stored && '-' in stored) stored.replace('-', ' ') else stored
     }
 
     /** The block flag placement uses, kept here so release and the debug command cannot drift apart. */

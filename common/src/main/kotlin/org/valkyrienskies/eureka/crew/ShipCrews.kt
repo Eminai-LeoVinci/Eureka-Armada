@@ -597,15 +597,10 @@ object ShipCrews {
                 "This wheel now keeps ${ShipCrew.name(ship)}'s articles. Sign your crew on.",
                 PathMessages.Kind.GOOD
             )
-        } else if (station !== helm) {
-            // Every helm steers; only one holds the crew. Saying so here is the whole explanation of why a
-            // second wheel did not give them more berths.
-            PathMessages.send(
-                player,
-                "${ShipCrew.name(ship)}'s articles are kept at another wheel; this one only steers.",
-                PathMessages.Kind.GOOD
-            )
         }
+        // A wheel that is NOT the station opens the station's book without comment. It used to say the
+        // articles were kept at another wheel -- but under the master-helm arrangement every wheel is a
+        // terminal onto the same book, so the redirect is the feature working, not a detour worth a line.
 
         if (CrewManifest.sender(player, CrewManifest.build(level, player, station))) return
         printArticles(level, player, ship, station)

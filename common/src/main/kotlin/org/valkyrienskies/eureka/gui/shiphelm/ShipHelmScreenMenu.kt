@@ -1,5 +1,6 @@
 package org.valkyrienskies.eureka.gui.shiphelm
 
+import net.minecraft.core.BlockPos
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
@@ -78,13 +79,31 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedDamageLostLow = 0   // blocks lost to damage, low 16 bits (counts can exceed a short)
     private var syncedDamageLostHigh = 0  // blocks lost to damage, high bits
     private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
-    private var syncedKeepName = true    // does this WHEEL re-apply the last ship name it saw
     private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
     private var syncedHelmNumber = 0    // this wheel's "n of total" on its hull; 0 = not aboard a ship
+    private var syncedHelmPos0 = 0      // the wheel's packed BlockPos in 16-bit chunks (see helmPos below)
+    private var syncedHelmPos1 = 0
+    private var syncedHelmPos2 = 0
+    private var syncedHelmPos3 = 0
 
     /** "2/8" for the header, or null when this wheel is not on a ship and so is not one of anything. */
     val helmNumber: String?
         get() = ShipBearing.unpackNumber(blockEntity?.fittingNumber ?: syncedHelmNumber)
+
+    /**
+     * The wheel this menu is open on, as the SERVER said -- or null on a client mirror the slots have not
+     * reached yet. `0L` decodes to the origin at y=0, where no wheel lives, so treating the unsynced zero
+     * as "not yet" costs nothing real. Never changes while the menu lives: a relocation closes menus.
+     */
+    val helmPos: BlockPos?
+        get() {
+            blockEntity?.let { return it.blockPos }
+            val packed = (syncedHelmPos0.toLong() and 0xFFFFL) or
+                ((syncedHelmPos1.toLong() and 0xFFFFL) shl 16) or
+                ((syncedHelmPos2.toLong() and 0xFFFFL) shl 32) or
+                ((syncedHelmPos3.toLong() and 0xFFFFL) shl 48)
+            return if (packed == 0L) null else BlockPos.of(packed)
+        }
 
     init {
         addDataSlot(object : DataSlot() {
@@ -262,13 +281,6 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = if (blockEntity?.isArmadaChild == true) 1 else 0
             override fun set(value: Int) { syncedIsChild = value == 1 }
         })
-        // "Keep Name" -- whether this wheel re-applies the name of the last ship it steered. A property of the
-        // BLOCK, not of a ship, so it syncs (and is togglable) on an unassembled helm too, which is exactly
-        // when a captain carrying a wheel to a new hull would want to check it.
-        addDataSlot(object : DataSlot() {
-            override fun get(): Int = if (blockEntity?.keepName != false) 1 else 0
-            override fun set(value: Int) { syncedKeepName = value == 1 }
-        })
         // Armada Parent checkbox state, bit-packed: it ticks either because this ship really leads an armada
         // (bit0) or because this player has only just marked it as the parent to bind to (bit1, per-player --
         // hence read against the opener, not globally).
@@ -282,13 +294,34 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             }
             override fun set(value: Int) { syncedArmadaParent = value }
         })
-        // APPENDED, and it must stay last: data slots are matched by index, so inserting one anywhere
-        // above would renumber every slot after it. Stamped once at open (see
-        // ShipHelmBlockEntity.fittingNumber) rather than recomputed here -- this getter runs on every
-        // broadcast, and a hull walk at that rate would be absurd for a label that never moves.
+        // APPENDED: data slots are matched by index, so new slots go at the END, never inserted above.
+        // Stamped once at open (see ShipHelmBlockEntity.fittingNumber) rather than recomputed here -- this
+        // getter runs on every broadcast, and a hull walk at that rate would be absurd for a label that
+        // never moves.
         addDataSlot(object : DataSlot() {
             override fun get(): Int = blockEntity?.fittingNumber ?: 0
             override fun set(value: Int) { syncedHelmNumber = value }
+        })
+        // The wheel's own position, in 16-bit chunks -- the mass/blockCount idiom, because A SLOT TRANSMITS
+        // A SHORT. The screen's crosshair raycast is a GUESS at which wheel this menu is on, and it guesses
+        // wrong exactly when it matters: a seated player's frozen camera points anywhere, and sit() opens
+        // this menu with no aim at all. A wrong guess made the screen skip both authoritative name sources
+        // and fall back to the client's frozen Ship.slug -- the rare generated-name flicker on open.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = ((blockEntity?.blockPos?.asLong() ?: 0L) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos0 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 16) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos1 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 32) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos2 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 48) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos3 = value }
         })
     }
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive
@@ -297,8 +330,6 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     // Server-authoritative, synced above: is this helm's ship an armada child (controls read-only if so).
     val isArmadaChild: Boolean get() = blockEntity?.isArmadaChild ?: syncedIsChild
 
-    /** Whether this wheel re-applies its remembered ship name. Read off the block server-side, the slot client-side. */
-    val keepName: Boolean get() = blockEntity?.keepName ?: syncedKeepName
     // Whether the "Armada Parent" box shows ticked: this ship leads an armada, or the viewer has marked it as
     // the parent their next children bind to.
     val isArmadaParent: Boolean get() =
@@ -441,13 +472,8 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             return true
         }
 
-        // "Keep Name" checkbox -> whether this wheel re-applies its remembered ship name on the next assembly.
-        // Deliberately NOT gated on `assembled`: a wheel in a player's hand, or newly placed on a bare hull, is
-        // exactly when this needs setting, and it is a property of the block rather than of any ship.
-        if (id == 2 && server) {
-            blockEntity.setKeepName(!blockEntity.keepName)
-            return true
-        }
+        // Id 2 was the Keep Name checkbox the master-helm rework retired. Freed, not reused: a stale client
+        // could still send it, and the wrong feature answering would be worse than silence.
 
         // The Crew & Operations book: close this menu and hand the player the articles -- the same screen
         // the crew key opens at the wheel. The close must run FIRST: the container-close packet has to land

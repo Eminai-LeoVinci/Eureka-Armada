@@ -27,6 +27,7 @@ import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
 import org.valkyrienskies.eureka.crew.CrewRoll
+import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.crew.HelmNames
 import org.valkyrienskies.eureka.crew.HoldLabelSync
@@ -424,9 +425,9 @@ object PathNetworkingFabric {
 
         CrewRoll.sender = { player, roll -> sendCrewRoll(player, roll) }
         CrewRoll.rosterSender = { player, roster -> sendCrewRoster(player, roster) }
-        CrewOperations.storesSender = { player, helm, stores, decks, firing ->
+        CrewOperations.storesSender = { player, helm, stores, decks, firing, memory ->
             if (ServerPlayNetworking.canSend(player, CREW_STORES_TYPE)) {
-                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks, firing)))
+                ServerPlayNetworking.send(player, CrewStoresPayload(encodeStores(helm, stores, decks, firing, memory)))
                 true
             } else {
                 false
@@ -710,7 +711,16 @@ object PathNetworkingFabric {
                         // Picking is not calling: no reach test, no fare, nothing moves. It is a note of what
                         // the dropdown says, so that Assemble -- a container button with no room for a crew id
                         // -- can read it. The ownership check that matters happens when the crew is called.
-                        wheel?.selectCrew(player.uuid, picked.takeIf { it != NO_CREW })
+                        //
+                        // Noted on the STATION when the wheel is on a ship: the terminals all show the
+                        // station's dropdown (CrewRoll.build redirects there), so a pick made at one wheel
+                        // must land where every other wheel reads. Off-ship there is no station and the
+                        // clicked wheel is the one Assemble will read -- exactly where the note belongs.
+                        if (wheel != null) {
+                            val station = CrewStations.shipOf(level, wheel)
+                                ?.let { CrewStations.stationOf(level, it) } ?: wheel
+                            station.selectCrew(player.uuid, picked.takeIf { it != NO_CREW })
+                        }
                         Unit
                     })
                 }
@@ -840,7 +850,7 @@ object PathNetworkingFabric {
                 return@registerGlobalReceiver
             }
             context.client().execute {
-                CrewManifestScreen.acceptStores(update.helm, update.stores, update.decks, update.firing)
+                CrewManifestScreen.acceptStores(update.helm, update.stores, update.decks, update.firing, update.memory)
             }
         }
         ClientPlayNetworking.registerGlobalReceiver(HOLD_LABEL_TYPE) { payload, context ->
@@ -1206,7 +1216,8 @@ object PathNetworkingFabric {
         helm: Long,
         stores: ShipStores.Stores,
         decks: List<Int>,
-        firing: Boolean
+        firing: Boolean,
+        memory: CrewOperations.OpsMemory?
     ): ByteArray {
         val buf = FriendlyByteBuf(Unpooled.buffer())
         buf.writeLong(helm)
@@ -1232,6 +1243,21 @@ object PathNetworkingFabric {
         // the last person to press it happened to want. Rides here for the same reason the deck counts
         // do: the payload already refreshes on screen-open and after every ops order.
         buf.writeBoolean(firing)
+        // The book's ship-side memory, appended last (see CrewOperations.OpsMemory). A presence byte
+        // rather than sentinel-stuffing every field: absent means no order has ever fired on this hull,
+        // which the screen reads as "keep the captain's own habits".
+        buf.writeBoolean(memory != null)
+        if (memory != null) {
+            buf.writeVarInt(memory.gunnerCount)
+            buf.writeVarInt(memory.fireCount)
+            buf.writeByte(memory.crewSide)
+            buf.writeByte(memory.ctrlSide)
+            buf.writeByte(memory.shotSide)
+            buf.writeByte(memory.crewMode)
+            buf.writeByte(memory.fireMode)
+            buf.writeByte(memory.ammoBall)
+            buf.writeByte(memory.ammoCharge)
+        }
         return toArray(buf)
     }
 
@@ -1239,7 +1265,8 @@ object PathNetworkingFabric {
         val helm: Long,
         val stores: ShipStores.Stores,
         val decks: List<Int>,
-        val firing: Boolean
+        val firing: Boolean,
+        val memory: CrewOperations.OpsMemory?
     )
 
     private fun decodeStores(data: ByteArray): StoresUpdate {
@@ -1265,7 +1292,25 @@ object PathNetworkingFabric {
         val deckCount = buf.readVarInt().coerceIn(0, MAX_LAYERS)
         val decks = List(deckCount) { buf.readVarInt() }
 
-        return StoresUpdate(helm, ShipStores.Stores(gunpowder, ammo, fuels), decks, buf.readBoolean())
+        val firing = buf.readBoolean()
+        // Ordinals are handed on raw: the screen resolves them through entries.getOrNull, so a value from
+        // some other build's enum order degrades to "no seed" rather than to a wrong widget.
+        val memory = if (buf.isReadable && buf.readBoolean()) {
+            CrewOperations.OpsMemory(
+                gunnerCount = buf.readVarInt().coerceIn(0, MAX_OPS_COUNT),
+                fireCount = buf.readVarInt().coerceIn(0, MAX_OPS_COUNT),
+                crewSide = buf.readByte().toInt(),
+                ctrlSide = buf.readByte().toInt(),
+                shotSide = buf.readByte().toInt(),
+                crewMode = buf.readByte().toInt(),
+                fireMode = buf.readByte().toInt(),
+                ammoBall = buf.readByte().toInt(),
+                ammoCharge = buf.readByte().toInt()
+            )
+        } else {
+            null
+        }
+        return StoresUpdate(helm, ShipStores.Stores(gunpowder, ammo, fuels), decks, firing, memory)
     }
 
     /** Decode bound on shot kinds; the item set is 15 today, and a hostile length is clamped, not trusted. */

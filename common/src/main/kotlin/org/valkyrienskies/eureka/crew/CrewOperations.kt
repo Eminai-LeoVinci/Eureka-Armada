@@ -66,6 +66,25 @@ object CrewOperations {
     enum class AssignMode { KEEP, REASSIGN, RELEASE }
 
     /**
+     * The Operations book's remembered settings, read off the ship and sent with every stores push so the
+     * book opens set the way the last order left it -- at any wheel, after any relog or restart. Null until
+     * the first order ever fires on that hull, which is what lets a fresh ship defer to the captain's own
+     * client-side habits instead of stomping them with defaults. Sides, modes and the ammo pair travel as
+     * ordinals; the ammo pair is -1 until a shot restock has named one.
+     */
+    data class OpsMemory(
+        val gunnerCount: Int,
+        val fireCount: Int,
+        val crewSide: Int,
+        val ctrlSide: Int,
+        val shotSide: Int,
+        val crewMode: Int,
+        val fireMode: Int,
+        val ammoBall: Int,
+        val ammoCharge: Int
+    )
+
+    /**
      * Pushes a stores tally at one screen, along with the guns-per-deck census the deck dropdown lists.
      * Installed by the platform networking, exactly as `CrewManifest.sender` is; the default no-op keeps
      * loaders without the payload honest. The deck counts ride this payload rather than the manifest
@@ -73,8 +92,8 @@ object CrewOperations {
      */
     @Volatile
     @JvmField
-    var storesSender: (ServerPlayer, Long, ShipStores.Stores, List<Int>, Boolean) -> Boolean =
-        { _, _, _, _, _ -> false }
+    var storesSender: (ServerPlayer, Long, ShipStores.Stores, List<Int>, Boolean, OpsMemory?) -> Boolean =
+        { _, _, _, _, _, _ -> false }
 
     // region the orders
 
@@ -168,6 +187,11 @@ object CrewOperations {
         mode: AssignMode
     ) {
         val op = gate(level, player, helm) ?: return
+        rememberOps(op) {
+            it.opsGunnerCount = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
+            it.opsCrewSide = side.ordinal
+            it.opsCrewMode = mode.ordinal
+        }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -316,6 +340,10 @@ object CrewOperations {
         mode: AssignMode
     ) {
         val op = gate(level, player, helm) ?: return
+        rememberOps(op) {
+            it.opsFireCount = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
+            it.opsFireMode = mode.ordinal
+        }
         val ledger = CrewLedger.get(level.server)
         val berths = ledger.berths(op.crewId).sortedBy { it.slot }
         val total = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
@@ -503,6 +531,11 @@ object CrewOperations {
         layer: Int
     ) {
         val op = gate(level, player, helm) ?: return
+        rememberOps(op) {
+            it.opsShotSide = side.ordinal
+            it.opsAmmoBall = ball.ordinal
+            it.opsAmmoCharge = charge.ordinal
+        }
         if (!storesManned(op)) return
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
@@ -594,6 +627,7 @@ object CrewOperations {
      */
     fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
+        rememberOps(op) { it.opsCtrlSide = side.ordinal }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -632,6 +666,7 @@ object CrewOperations {
      */
     fun requestPower(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, ordinal: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
+        rememberOps(op) { it.opsCtrlSide = side.ordinal }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -895,6 +930,17 @@ object CrewOperations {
     // DEV ONLY [stores] trace -- strip with the ROADMAP 6c sweep.
     private val storesLog by org.valkyrienskies.mod.util.logger()
 
+    /**
+     * Note an order's settings on the SHIP -- the terminal memory the next book-open seeds from. Recorded
+     * right after the gate, before the order's own refusals: "sixty to port" is what the captain last
+     * ordered even when port turned out to hold no guns, and remembering a refused order costs nothing.
+     */
+    private fun rememberOps(op: Op, write: (EurekaShipControl) -> Unit) {
+        val control = op.ship.getAttachment(EurekaShipControl::class.java) ?: return
+        write(control)
+        control.opsRemembered = true
+    }
+
     private fun pushStores(op: Op) = pushStores(op.level, op.player, op.station, op.ship)
 
     private fun pushStores(
@@ -904,9 +950,18 @@ object CrewOperations {
         ship: LoadedServerShip
     ) {
         val decks = GunLabels.layerCounts(GunLabels.labeled(level, ship))
-        val firing = ship.getAttachment(EurekaShipControl::class.java)?.fireAtWill ?: false
+        val control = ship.getAttachment(EurekaShipControl::class.java)
+        val firing = control?.fireAtWill ?: false
+        val memory = control?.takeIf { it.opsRemembered }?.let {
+            OpsMemory(
+                it.opsGunnerCount, it.opsFireCount,
+                it.opsCrewSide, it.opsCtrlSide, it.opsShotSide,
+                it.opsCrewMode, it.opsFireMode,
+                it.opsAmmoBall, it.opsAmmoCharge
+            )
+        }
         val tally = ShipStores.tally(level, ship)
-        storesSender(player, station.blockPos.asLong(), tally, decks, firing)
+        storesSender(player, station.blockPos.asLong(), tally, decks, firing, memory)
     }
 
     /**

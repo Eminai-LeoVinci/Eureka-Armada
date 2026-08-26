@@ -852,7 +852,7 @@ otherwise throws `ERROR_MANY_SHIP_FOUND`, so teleport, rename and everything els
 ship argument stop working until you dig out with `@v[id=...]`.
 
 Agreed shape when it gets built: one shared "is this name taken" check against `allShips`, wired
-into three places — the Keep Name re-apply at assembly, the helm's rename box, and `/vs rename`
+into three places — the master-helm name apply at assembly, the helm's rename box, and `/vs rename`
 (which lives in VS2, so it needs a mixin). On a clash, refuse and tell the player the name is in
 use rather than silently renaming.
 

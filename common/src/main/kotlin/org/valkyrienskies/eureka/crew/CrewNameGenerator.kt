@@ -55,12 +55,13 @@ object CrewNameGenerator {
      *
      * vs-core names a new ship by joining three words from [pool] with dashes -- `drake-hay-rock`,
      * `revenant-creation-editing`. Testing all three against the pool makes this precise rather than a guess
-     * about shape: a player would have to type three dash-joined dictionary nouns in lower case to be mistaken
-     * for one, and the only cost if they do is that Keep Name declines to remember that particular name.
+     * about shape: a player would have to type three dash-joined dictionary nouns in lower case to be
+     * mistaken for one.
      *
-     * This exists because Keep Name reads the ship's slug on a timer. Without it, a hull that came up with a
-     * generated name would overwrite the name the captain had chosen, and one failed re-apply would erase the
-     * memory for good -- which is exactly how it failed the first time.
+     * The surviving use is HelmNames.applyShipName's yield check: mid-retry, a DIFFERENT real name means a
+     * captain typed one and theirs wins, while a generated slug is never deferred to -- overwriting one is
+     * the whole job. Without this test, one hull that came up under a generated name would have out-ranked
+     * the name the captain had chosen.
      */
     fun looksGenerated(slug: String): Boolean {
         val parts = slug.split('-')
