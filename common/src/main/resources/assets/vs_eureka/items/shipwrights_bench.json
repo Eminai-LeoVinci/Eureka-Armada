@@ -1,19 +1,7 @@
 {
+  "_comment": "One model for every display context: the bench in hand is simply the bench, scaled down by the transforms authored in the .bbmodel (a fifth of size over the shoulder, a quarter in first person). No display_context select is needed while every case draws the same model -- the cannon still has one because its held form is a placeholder and its icon is not.",
   "model": {
-    "type": "minecraft:select",
-    "property": "minecraft:display_context",
-    "cases": [
-      {
-        "when": ["gui", "ground", "fixed", "on_shelf"],
-        "model": {
-          "type": "minecraft:model",
-          "model": "vs_eureka:item/shipwrights_bench"
-        }
-      }
-    ],
-    "fallback": {
-      "type": "minecraft:model",
-      "model": "vs_eureka:item/shipwrights_bench_in_hand"
-    }
+    "type": "minecraft:model",
+    "model": "vs_eureka:item/shipwrights_bench"
   }
 }
