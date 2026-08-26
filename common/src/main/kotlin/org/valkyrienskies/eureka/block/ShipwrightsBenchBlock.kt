@@ -25,6 +25,7 @@ import net.minecraft.world.level.material.MapColor
 import net.minecraft.world.level.pathfinder.PathComputationType
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
+import net.minecraft.world.phys.shapes.Shapes
 import net.minecraft.world.phys.shapes.VoxelShape
 import org.valkyrienskies.eureka.EurekaProperties.BENCH_PART
 import org.valkyrienskies.eureka.crew.CrewEggs
@@ -191,11 +192,24 @@ class ShipwrightsBenchBlock : Block(
     /**
      * The bottom row is a solid desk; the top row is the tools standing on it.
      *
-     * The model tops out at 30 of a possible 32, so the upper course is 14 high rather than a full block --
-     * enough that the desk cannot be walked onto, without a phantom two pixels of ceiling above the anvil.
+     * The top row is 14 high rather than a full block -- the model tops out at 30 of a possible 32, so this
+     * is the tools without a phantom two pixels of ceiling above the anvil -- with ONE exception.
+     *
+     * [BenchPart.LEFT_UPPER] has no shape at all. That is the smithing-table end, where the desk carries
+     * only the hand saw, and it is the one span of worktop clear enough to stand on; the anvil and the
+     * stonecutter fill their columns and should still stop you. So a player can step up at that end and
+     * nowhere else, which is the point -- this is a foothold, not a walkway along the whole bench. The
+     * cost is local and small: the hand saw above that block cannot be clicked, and the desk beneath it
+     * still can.
      */
-    override fun getShape(state: BlockState, getter: BlockGetter, pos: BlockPos, ctx: CollisionContext): VoxelShape =
-        if (state.getValue(BENCH_PART).up == 0) LOWER_SHAPE else UPPER_SHAPE
+    override fun getShape(state: BlockState, getter: BlockGetter, pos: BlockPos, ctx: CollisionContext): VoxelShape {
+        val part = state.getValue(BENCH_PART)
+        return when {
+            part.up == 0 -> LOWER_SHAPE
+            part == BenchPart.LEFT_UPPER -> Shapes.empty()
+            else -> UPPER_SHAPE
+        }
+    }
 
     override fun isPathfindable(state: BlockState, type: PathComputationType): Boolean = false
 
@@ -204,8 +218,8 @@ class ShipwrightsBenchBlock : Block(
      *
      * The "deliberately not interactive" note above still stands for everything a PLAYER can do here: this
      * answers only a creative hand holding a villager egg, and every other click falls through untouched, so
-     * an empty hand still does nothing and the bench still answers no questions. Any of the six parts will do
-     * -- the desk reads as one object to whoever is holding the egg. See [CrewEggs] for why an authoring
+     * an empty hand still does nothing and the bench still answers no questions. Any of the parts will do --
+     * the desk reads as one object to whoever is holding the egg. See [CrewEggs] for why an authoring
      * gesture does not undo the rule that a shipwright is made by claiming a bench.
      */
     override fun useItemOn(
