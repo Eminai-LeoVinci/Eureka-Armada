@@ -1597,6 +1597,13 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     var opsAmmoBall = -1
     var opsAmmoCharge = -1
 
+    // The decks those three scopes point at, 0 = all. Beside the sides because they are half of the same
+    // knob -- a side remembered without its deck is the half-answer that made re-opening the book feel
+    // like it had forgotten something. The restock's is its OWN: it used to borrow the cannon controls'.
+    var opsCrewLayer = 0
+    var opsCtrlLayer = 0
+    var opsShotLayer = 0
+
     @Volatile
     var floaters = 0 // Amount of floaters * 15
         set(v) {

@@ -156,7 +156,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     // endregion
 
     /** Which face is showing. Operations first: fleet-scale orders are what a captain opens this FOR. */
-    private var activeTab = Tab.OPERATIONS
+    // Opens on Operations, except where there is no ship to operate: a wheel in the hand or on the ground
+    // opens straight onto the Crews tab, the only one of the three with anything to say.
+    private var activeTab = if (snapshot.readOnly) Tab.CREWS else Tab.OPERATIONS
 
     // region Operations state
 
@@ -200,22 +202,34 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var crewSide: CrewOperations.Side
         get() = rememberedCrewSide
         set(value) { rememberedCrewSide = value }
-    private var crewLayer = 0
+    private var crewLayer: Int
+        get() = rememberedCrewLayer
+        set(value) { rememberedCrewLayer = value }
 
     /**
-     * The cannon-controls scope: one side + deck pair governing Set Angle, Set Power, the ammunition
-     * pick, and the deck half of the cannonball restock. One pair rather than one per row, because the
-     * rows under it are one battery being worked.
+     * The cannon-controls scope: one side + deck pair governing Set Angle, Set Power and the ammunition
+     * pick. One pair rather than one per row, because the rows under it are one battery being worked.
      */
     private var ctrlSide: CrewOperations.Side
         get() = rememberedCtrlSide
         set(value) { rememberedCtrlSide = value }
-    private var ctrlLayer = 0
+    private var ctrlLayer: Int
+        get() = rememberedCtrlLayer
+        set(value) { rememberedCtrlLayer = value }
 
-    /** The cannonball restock's own side; its DECK comes from the cannon controls above it. */
+    /**
+     * The cannonball restock's OWN scope, side and deck both.
+     *
+     * It used to borrow the cannon controls' deck, which quietly tied two orders a captain thinks of
+     * separately: "lay Deck 3 to port" and "load Deck 2 to starboard" are one trip, and doing them in
+     * either order moved the other's aim. Its own pair, like the gunners' above.
+     */
     private var shotSide: CrewOperations.Side
         get() = rememberedShotSide
         set(value) { rememberedShotSide = value }
+    private var shotLayer: Int
+        get() = rememberedShotLayer
+        set(value) { rememberedShotLayer = value }
 
     /**
      * What each Assign button will DO -- kept in the companion, not here, so closing the book and opening
@@ -257,9 +271,14 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private var elevIndex = 9
     private var powerLevel = 0
 
-    /** The two deck dropdowns -- at most one open, sharing a scroll for the rare many-decked hull. */
-    private var crewLayerMenuOpen = false
-    private var ctrlLayerMenuOpen = false
+    /**
+     * Which deck dropdown is unfolded, as the anchor stop it hangs from, or -1 for none.
+     *
+     * Named rather than inferred: this was two booleans read back as "crew, else the other one", which
+     * is a shape that silently mis-files a pick the moment a THIRD dropdown exists -- and the restock
+     * just grew one. The scroll stays shared; only one menu is ever open.
+     */
+    private var layerMenuFor = -1
     private var layerMenuScroll = 0
 
     /** The CARD's ammo dropdown -- the ops one's twin, listing the same holds but arming ONE gun. */
@@ -291,7 +310,12 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                     ShipHelmButton(
                         left + PANEL_W - 8 - BACK_BTN_W, top + PANEL_H - 4 - BACK_BTN_H,
                         BACK_BTN_W, BACK_BTN_H, BACK_TEXT, font
-                    ) { PathNetworkingFabric.sendCrewOpenHelm(snapshot.helm) }
+                    ) {
+                        // A book opened on a wheel in the HAND has no block for the server to re-open a
+                        // menu at, so Back simply closes rather than asking for a helm that isn't there.
+                        if (snapshot.helm == CrewManifest.HELM_IN_HAND) onClose()
+                        else PathNetworkingFabric.sendCrewOpenHelm(snapshot.helm)
+                    }
                 )
             }
 
@@ -399,6 +423,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * built. A control that exists and refuses is a control a captain will keep pressing.
      */
     private fun initCrews() {
+        // First look at the crews. switchTab asks whenever the tab is ENTERED, which covers every normal
+        // route -- but a read-only book opens straight onto this tab and so is never switched into it.
+        if (crewRoll?.helm != snapshot.helm) CrewRoll.clientAsk(snapshot.helm)
         if (openCrew == null) return
 
         if (renamingOwnedCrew) {
@@ -415,16 +442,21 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         }
 
         val rowY = top + PANEL_H - 4 - BACK_BTN_H
-        addRenderableWidget(
-            ShipHelmButton(left + 6, rowY, CREW_SUMMON_BTN_W, BACK_BTN_H, CREW_SUMMON_TEXT, font) {
-                openCrew?.let { CrewRoll.clientSummon(snapshot.helm, it) }
-            }
-        )
-        addRenderableWidget(
-            ShipHelmButton(
-                left + 6 + CREW_SUMMON_BTN_W + 4, rowY, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
-            ) { beginOwnedCrewRename() }
-        )
+        // Not painted out: not built. Summoning needs a deck to summon onto and renaming is a change, and
+        // a book opened away from a ship is for reading. The articles themselves are already read-only
+        // here -- the duty and lock controls have never been built on this tab.
+        if (!snapshot.readOnly) {
+            addRenderableWidget(
+                ShipHelmButton(left + 6, rowY, CREW_SUMMON_BTN_W, BACK_BTN_H, CREW_SUMMON_TEXT, font) {
+                    openCrew?.let { CrewRoll.clientSummon(snapshot.helm, it) }
+                }
+            )
+            addRenderableWidget(
+                ShipHelmButton(
+                    left + 6 + CREW_SUMMON_BTN_W + 4, rowY, CREW_RENAME_BTN_W, BACK_BTN_H, RENAME_CREW_TEXT, font
+                ) { beginOwnedCrewRename() }
+            )
+        }
         // Back to the LIST of crews. It takes the corner while these articles are open -- see init, where
         // the helm's own Back stands down rather than sit beside it saying the same word.
         addRenderableWidget(
@@ -435,16 +467,30 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     private fun addTab(index: Int, text: Component, tab: Tab) {
+        // Read-only: Operations and Roster are about a SHIP -- guns to man, berths aboard a hull -- and
+        // there is no ship. They stay visible and dim rather than vanishing, so the book reads as the same
+        // book with two thirds of it unavailable, which is the true state of affairs.
+        val unavailable = snapshot.readOnly && tab != Tab.CREWS
         addRenderableWidget(
             ShipHelmTab(
                 left + TAB_MARGIN + (TAB_W + TAB_GAP) * index, top + TAB_Y, TAB_W, TAB_H, text, font,
-                ACCENT, { if (activeTab == tab) ShipHelmTab.State.ACTIVE else ShipHelmTab.State.IDLE }
+                ACCENT,
+                {
+                    when {
+                        unavailable -> ShipHelmTab.State.DISABLED
+                        activeTab == tab -> ShipHelmTab.State.ACTIVE
+                        else -> ShipHelmTab.State.IDLE
+                    }
+                }
             ) { switchTab(tab) }
-        )
+        ).also { it.active = !unavailable }
     }
 
     private fun switchTab(next: Tab) {
         if (activeTab == next) return
+        // The one road into the other two tabs, so the read-only refusal lives here rather than at each of
+        // the mouse, key and pad routes that reach it.
+        if (snapshot.readOnly && next != Tab.CREWS) return
         activeTab = next
         closeOpsMenus()
         if (renamingCrew) commitCrewRename(send = false)
@@ -468,12 +514,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     private fun closeOpsMenus() {
         ammoMenuOpen = false
         fuelPopupOpen = false
-        crewLayerMenuOpen = false
-        ctrlLayerMenuOpen = false
+        layerMenuFor = -1
     }
 
     /** Whether any Operations overlay is up. The body underneath is inert while one is. */
-    private fun opsMenuOpen(): Boolean = ammoMenuOpen || fuelPopupOpen || crewLayerMenuOpen || ctrlLayerMenuOpen
+    private fun opsMenuOpen(): Boolean = ammoMenuOpen || fuelPopupOpen || layerMenuFor >= 0
 
     /**
      * The Operations tab's real widgets: just the two count boxes. Every other control is painted. Their
@@ -806,7 +851,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             if (ammoMenuOpen && holds != null) {
                 val max = (holds.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
                 ammoMenuScroll = (ammoMenuScroll - scrollY.toInt()).coerceIn(0, max)
-            } else if (crewLayerMenuOpen || ctrlLayerMenuOpen) {
+            } else if (layerMenuFor >= 0) {
                 val max = (deckCounts.size + 1 - LAYER_MENU_ROWS).coerceAtLeast(0)
                 layerMenuScroll = (layerMenuScroll - scrollY.toInt()).coerceIn(0, max)
             } else if (!fuelPopupOpen) {
@@ -897,8 +942,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             fuelPopupOpen -> 5
             ammoMenuOpen -> 4
             cardAmmoMenuOpen -> 6
-            crewLayerMenuOpen -> 7
-            ctrlLayerMenuOpen -> 8
+            layerMenuFor >= 0 -> 7
             stationMenuOpen -> 2
             openCard != null -> 1
             activeTab == Tab.OPERATIONS -> 3
@@ -915,8 +959,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         if (step == 0 && !choose && !back) return
 
         when (context) {
-            8 -> padLayerMenu(step, choose, back, crew = false)
-            7 -> padLayerMenu(step, choose, back, crew = true)
+            7 -> padLayerMenu(step, choose, back)
             6 -> padCardAmmo(step, choose, back)
             5 -> padFuel(back, choose)
             4 -> padOpsAmmo(step, choose, back)
@@ -928,10 +971,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     /** One deck dropdown, walked entry by entry: "All decks" first, then every deck keel-up. */
-    private fun padLayerMenu(step: Int, choose: Boolean, back: Boolean, crew: Boolean) {
+    private fun padLayerMenu(step: Int, choose: Boolean, back: Boolean) {
         if (back) {
-            crewLayerMenuOpen = false
-            ctrlLayerMenuOpen = false
+            layerMenuFor = -1
             return
         }
         val entries = deckCounts.size + 1
@@ -942,9 +984,8 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             if (padSel >= layerMenuScroll + LAYER_MENU_ROWS) layerMenuScroll = padSel - LAYER_MENU_ROWS + 1
         }
         if (choose && padSel >= 0) {
-            if (crew) crewLayer = padSel else ctrlLayer = padSel
-            crewLayerMenuOpen = false
-            ctrlLayerMenuOpen = false
+            setLayer(layerMenuFor, padSel)
+            layerMenuFor = -1
         }
     }
 
@@ -1416,6 +1457,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             if (entry.aboard) ACCENT else DIM
         )
 
+        // No Delete on a read-only book. Not drawn at all rather than drawn dead: this list is a reading,
+        // and an unpressable button on every row would be the loudest thing on it.
+        if (snapshot.readOnly) return
+
         val armed = disbandArmed == entry.id
         val label = if (armed) CREW_DELETE_CONFIRM_TEXT else CREW_DELETE_TEXT
         guiGraphics.fill(
@@ -1458,6 +1503,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             my >= rowY + CREW_DEL_INSET && my < rowY + CREW_DEL_INSET + CREW_DEL_H
 
         if (onDelete) {
+            // Disbanding is a change, and a book opened away from a ship is for reading only. The box is
+            // not drawn in that mode either -- see drawCrewRow -- so this is the belt to that braces.
+            if (snapshot.readOnly) return true
             // Two presses, and the arming is per crew: aiming at one Delete must never fire another's.
             if (disbandArmed == entry.id) {
                 disbandArmed = null
@@ -1586,10 +1634,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         guiGraphics.fill(left + 8, opsRowY(OPS_V_SEP2), left + PANEL_W - 8, opsRowY(OPS_V_SEP2) + 1, SEPARATOR)
         small(guiGraphics, OPS_RESTOCK_TEXT, left + 8, opsRowY(OPS_V_RESTOCK_LABEL), DIM)
 
-        // Cannonballs first -- its own side, spending the controls' deck and round; then the engines;
-        // then powder, which takes no aim at all: every gun aboard, split evenly.
+        // Cannonballs first -- its own scope on the row below it, spending the controls' round; then the
+        // engines; then powder, which takes no aim at all: every gun aboard, split evenly.
         opsButton(guiGraphics, STOP_SHOT, OPS_RESTOCK_SHOT_TEXT, mouseX, mouseY)
-        drawSides(guiGraphics, STOP_SHOT_SIDE, opsRowY(OPS_V_ROW_SHOT), shotSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY)
+        drawSides(
+            guiGraphics, STOP_SHOT_SIDE, opsRowY(OPS_V_ROW_SHOT_SCOPE), shotSide, OPS_SIDE_ALL_TEXT, mouseX, mouseY
+        )
+        opsButton(guiGraphics, STOP_SHOT_LAYER, layerButtonText(shotLayer), mouseX, mouseY)
         opsButton(guiGraphics, STOP_REFUEL, OPS_REFUEL_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_FUEL_LIST, OPS_FUEL_LIST_TEXT, mouseX, mouseY)
         opsButton(guiGraphics, STOP_POWDER, OPS_RESTOCK_POWDER_TEXT, mouseX, mouseY)
@@ -1611,8 +1662,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
         // Popups last, over everything and outside the scissor, exactly as the station dropdown is.
         if (ammoMenuOpen) drawAmmoMenu(guiGraphics, mouseX, mouseY)
-        if (crewLayerMenuOpen) drawLayerMenu(guiGraphics, STOP_G_LAYER, crewLayer, mouseX, mouseY)
-        if (ctrlLayerMenuOpen) drawLayerMenu(guiGraphics, STOP_C_LAYER, ctrlLayer, mouseX, mouseY)
+        if (layerMenuFor >= 0) drawLayerMenu(guiGraphics, layerMenuFor, layerOf(layerMenuFor), mouseX, mouseY)
         if (fuelPopupOpen) drawFuelPopup(guiGraphics)
     }
 
@@ -1653,7 +1703,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             val index = layerMenuScroll + row
             if (index >= entries) break
             val rowY = y + 1 + row * LAYER_MENU_ROW_H
-            val hovered = ((padContext == 7 || padContext == 8) && padSel == index) ||
+            val hovered = (padContext == 7 && padSel == index) ||
                 (mouseX >= x && mouseX < x + OPS_LAYER_BTN_W && mouseY >= rowY && mouseY < rowY + LAYER_MENU_ROW_H)
             if (hovered) guiGraphics.fill(x + 1, rowY, x + OPS_LAYER_BTN_W - 1, rowY + LAYER_MENU_ROW_H, ACCENT)
             val text = if (index == 0) OPS_LAYER_ALL_TEXT else {
@@ -1871,7 +1921,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         STOP_AMMO_MENU -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_AMMO, OPS_AMMO_W, OPS_CTRL_H)
         STOP_FIRE_AT_WILL -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_FIRE_AT_WILL, OPS_WIDE_W, OPS_CTRL_H)
         STOP_SHOT -> intArrayOf(left + 8, OPS_V_ROW_SHOT, OPS_WIDE_W, OPS_CTRL_H)
-        STOP_SHOT_SIDE -> intArrayOf(left + OPS_SHOT_SIDES_X, OPS_V_ROW_SHOT, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_SHOT_SIDE ->
+            intArrayOf(left + OPS_SCOPE_SIDES_X, OPS_V_ROW_SHOT_SCOPE, SEG_W * 3 + SEG_GAP * 2, OPS_CTRL_H)
+        STOP_SHOT_LAYER -> intArrayOf(left + OPS_LAYER_X, OPS_V_ROW_SHOT_SCOPE, OPS_LAYER_BTN_W, OPS_CTRL_H)
         STOP_REFUEL -> intArrayOf(left + 8, OPS_V_ROW_REFUEL, OPS_WIDE_W, OPS_CTRL_H)
         STOP_FUEL_LIST -> intArrayOf(left + OPS_AMMO_X, OPS_V_ROW_REFUEL, OPS_FUEL_BTN_W, OPS_CTRL_H)
         STOP_POWDER -> intArrayOf(left + 8, OPS_V_ROW_POWDER, OPS_WIDE_W, OPS_CTRL_H)
@@ -1900,7 +1952,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_G_PLUS -> adjustCount(gunners = true, delta = +1)
             STOP_G_BOX -> gunnerCountBox?.let { this.focused = it }
             STOP_G_SIDE -> crewSide = pickSide(crewSide, STOP_G_SIDE, mouseX)
-            STOP_G_LAYER -> openLayerMenu(crew = true)
+            STOP_G_LAYER -> openLayerMenu(STOP_G_LAYER)
             STOP_G_MODE -> crewMode = nextMode(crewMode)
             STOP_G_ASSIGN ->
                 PathNetworkingFabric.sendCrewAssignGunners(snapshot.helm, gunnerCount, crewSide, crewLayer, crewMode)
@@ -1911,7 +1963,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             STOP_F_ASSIGN ->
                 PathNetworkingFabric.sendCrewAssignFirefighters(snapshot.helm, fireCount, fireMode)
             STOP_C_SIDE -> ctrlSide = pickSide(ctrlSide, STOP_C_SIDE, mouseX)
-            STOP_C_LAYER -> openLayerMenu(crew = false)
+            STOP_C_LAYER -> openLayerMenu(STOP_C_LAYER)
             STOP_LAY -> PathNetworkingFabric.sendCrewSetElevation(snapshot.helm, ctrlSide, elevIndex, ctrlLayer)
             STOP_ELEV_ANGLE -> elevIndex = pickAngle(mouseX)
             STOP_PWR -> PathNetworkingFabric.sendCrewSetPower(snapshot.helm, ctrlSide, powerLevel, ctrlLayer)
@@ -1932,9 +1984,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 PathNetworkingFabric.sendCrewFireAtWill(snapshot.helm, fireAtWill)
             }
             STOP_SHOT -> selectedAmmo?.let { (ball, charge) ->
-                PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, shotSide, ball, charge, ctrlLayer)
+                PathNetworkingFabric.sendCrewRestockShot(snapshot.helm, shotSide, ball, charge, shotLayer)
             }
             STOP_SHOT_SIDE -> shotSide = pickSide(shotSide, STOP_SHOT_SIDE, mouseX)
+            STOP_SHOT_LAYER -> openLayerMenu(STOP_SHOT_LAYER)
             STOP_POWDER -> PathNetworkingFabric.sendCrewRestockPowder(snapshot.helm)
             STOP_REFUEL -> PathNetworkingFabric.sendCrewRefuel(snapshot.helm)
             STOP_FUEL_LIST -> if (stores != null) fuelPopupOpen = true
@@ -1942,10 +1995,10 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     }
 
     /** Unfold one deck dropdown. With no guns censused there is nothing to list, so nothing opens. */
-    private fun openLayerMenu(crew: Boolean) {
+    private fun openLayerMenu(stop: Int) {
         if (deckCounts.isEmpty()) return
         layerMenuScroll = 0
-        if (crew) crewLayerMenuOpen = true else ctrlLayerMenuOpen = true
+        layerMenuFor = stop
     }
 
     private fun pickSide(current: CrewOperations.Side, stop: Int, mouseX: Int?): CrewOperations.Side {
@@ -1989,7 +2042,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             fuelPopupOpen = false
             return true
         }
-        if (crewLayerMenuOpen || ctrlLayerMenuOpen) {
+        if (layerMenuFor >= 0) {
             handleLayerMenuClick(mx, my)
             return true
         }
@@ -2027,8 +2080,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
 
     /** A click while a deck dropdown is up: an entry picks the scope, anywhere else just folds it. */
     private fun handleLayerMenuClick(mx: Int, my: Int) {
-        val crew = crewLayerMenuOpen
-        val anchor = opsStopRect(if (crew) STOP_G_LAYER else STOP_C_LAYER)
+        val anchor = opsStopRect(layerMenuFor)
         if (anchor != null) {
             val x = anchor[0]
             val menuY = anchor[1] + anchor[3]
@@ -2036,13 +2088,26 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             val visible = minOf(entries, LAYER_MENU_ROWS)
             if (mx >= x && mx < x + OPS_LAYER_BTN_W && my >= menuY + 1 && my < menuY + 1 + visible * LAYER_MENU_ROW_H) {
                 val index = layerMenuScroll + (my - (menuY + 1)) / LAYER_MENU_ROW_H
-                if (index in 0 until entries) {
-                    if (crew) crewLayer = index else ctrlLayer = index
-                }
+                if (index in 0 until entries) setLayer(layerMenuFor, index)
             }
         }
-        crewLayerMenuOpen = false
-        ctrlLayerMenuOpen = false
+        layerMenuFor = -1
+    }
+
+    /** File a picked deck against whichever scope its dropdown belongs to. */
+    private fun setLayer(stop: Int, index: Int) {
+        when (stop) {
+            STOP_G_LAYER -> crewLayer = index
+            STOP_C_LAYER -> ctrlLayer = index
+            STOP_SHOT_LAYER -> shotLayer = index
+        }
+    }
+
+    /** What that scope's dropdown should read while it is folded. */
+    private fun layerOf(stop: Int): Int = when (stop) {
+        STOP_G_LAYER -> crewLayer
+        STOP_SHOT_LAYER -> shotLayer
+        else -> ctrlLayer
     }
 
     private fun drawAmmoMenu(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
@@ -2140,6 +2205,11 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
                 CrewOperations.Side.entries.getOrNull(memory.crewSide)?.let { crewSide = it }
                 CrewOperations.Side.entries.getOrNull(memory.ctrlSide)?.let { ctrlSide = it }
                 CrewOperations.Side.entries.getOrNull(memory.shotSide)?.let { shotSide = it }
+                // Clamped here as well as by the stale-deck guard below, because that guard only catches
+                // a deck that is too HIGH -- a negative from a mangled payload would sail straight past it.
+                crewLayer = memory.crewLayer.coerceIn(0, decks.size)
+                ctrlLayer = memory.ctrlLayer.coerceIn(0, decks.size)
+                shotLayer = memory.shotLayer.coerceIn(0, decks.size)
                 CrewOperations.AssignMode.entries.getOrNull(memory.crewMode)?.let { crewMode = it }
                 CrewOperations.AssignMode.entries.getOrNull(memory.fireMode)?.let { fireMode = it }
                 val ball = Cannonball.entries.getOrNull(memory.ammoBall)
@@ -2158,6 +2228,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // back to All rather than pointing an order at nothing.
         if (crewLayer > decks.size) crewLayer = 0
         if (ctrlLayer > decks.size) ctrlLayer = 0
+        if (shotLayer > decks.size) shotLayer = 0
         val maxAmmo = (next.ammo.size - AMMO_MENU_ROWS).coerceAtLeast(0)
         ammoMenuScroll = ammoMenuScroll.coerceIn(0, maxAmmo)
         layerMenuScroll = layerMenuScroll.coerceIn(0, (decks.size + 1 - LAYER_MENU_ROWS).coerceAtLeast(0))
@@ -2813,6 +2884,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private var rememberedCtrlSide = CrewOperations.Side.BOTH
         private var rememberedShotSide = CrewOperations.Side.BOTH
 
+        // The decks those three scopes point at, 0 = all. Beside the sides because they are half of the
+        // same knob: a side remembered without its deck is the half-answer that made re-opening the book
+        // feel like it had forgotten something.
+        private var rememberedCrewLayer = 0
+        private var rememberedCtrlLayer = 0
+        private var rememberedShotLayer = 0
+
         /** The round chosen in the ammunition dropdown. Null means "not chosen yet"; see [selectedAmmo]. */
         private var rememberedAmmo: Pair<Cannonball, CannonCharge>? = null
 
@@ -2825,6 +2903,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             rememberedCrewSide = CrewOperations.Side.BOTH
             rememberedCtrlSide = CrewOperations.Side.BOTH
             rememberedShotSide = CrewOperations.Side.BOTH
+            rememberedCrewLayer = 0
+            rememberedCtrlLayer = 0
+            rememberedShotLayer = 0
             rememberedAmmo = null
         }
 
@@ -3026,8 +3107,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val OPS_V_SEP2 = 174
         private const val OPS_V_RESTOCK_LABEL = 180
         private const val OPS_V_ROW_SHOT = 190
-        private const val OPS_V_ROW_REFUEL = 208
-        private const val OPS_V_ROW_POWDER = 226
+        private const val OPS_V_ROW_SHOT_SCOPE = 208
+        private const val OPS_V_ROW_REFUEL = 226
+        private const val OPS_V_ROW_POWDER = 244
         private const val OPS_CONTENT_H = OPS_V_ROW_POWDER + OPS_CTRL_H + 4
 
         private const val OPS_HOLDS_Y = 219
@@ -3126,10 +3208,13 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         private const val STOP_FIRE_AT_WILL = 19
         private const val STOP_SHOT = 20
         private const val STOP_SHOT_SIDE = 21
-        private const val STOP_REFUEL = 22
-        private const val STOP_FUEL_LIST = 23
-        private const val STOP_POWDER = 24
-        private const val OPS_STOP_COUNT = 25
+        // INSERTED, not appended: padOps walks these in numeric order, so the restock's deck has to sit
+        // beside its side to be reached next rather than after the powder at the far end of the tab.
+        private const val STOP_SHOT_LAYER = 22
+        private const val STOP_REFUEL = 23
+        private const val STOP_FUEL_LIST = 24
+        private const val STOP_POWDER = 25
+        private const val OPS_STOP_COUNT = 26
 
         // endregion
 

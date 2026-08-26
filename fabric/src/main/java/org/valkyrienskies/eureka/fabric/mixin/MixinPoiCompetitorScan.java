@@ -16,14 +16,15 @@ import org.valkyrienskies.eureka.crew.CrewProfession;
  *
  * <p>Vanilla enforces one villager per workstation TWICE, and neither check consults the ticket count. This is
  * the first: any two villagers holding the same {@code JOB_SITE} position compete, and the one with less
- * trading XP has its memory erased outright. A ship helm is registered with 32 tickets precisely so that
- * thirty-two deckhands can share it, and this check was quietly collapsing that back to one -- which is why a
- * second villager never took the job however long you waited.
+ * trading XP has its memory erased outright. A ship helm is registered with many tickets ({@code
+ * crewmanHelmPoiTickets}, 64 by default) precisely so that a whole crew can share it, and this check was
+ * quietly collapsing that back to one -- which is why a second villager never took the job however long you
+ * waited.
  *
  * <p>The erase is also a slow leak, and that is the more damaging half. {@code AcquirePoi} spends a ticket
  * when a villager claims a site; this erases the memory WITHOUT releasing it (unlike the bed branch of
- * {@code ValidateNearbyPoi}, which does release). So every lost duel burned one of the helm's thirty-two
- * berths permanently. Two villagers cycling acquire-compete-erase drain a helm in a couple of minutes, after
+ * {@code ValidateNearbyPoi}, which does release). So every lost duel burned one of the helm's berths
+ * permanently. Two villagers cycling acquire-compete-erase drain a helm in a couple of minutes, after
  * which {@code Occupancy.HAS_SPACE} rejects it and the helm stops attracting anyone at all -- a helm that
  * worked when placed and then silently stopped.
  *

@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.material.MapColor
 import org.valkyrienskies.eureka.block.*
+import org.valkyrienskies.eureka.item.ShipHelmBlockItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.mod.common.blockProps
 import org.valkyrienskies.mod.common.hooks.VSGameEvents
@@ -260,7 +261,11 @@ object EurekaBlocks {
                 val props =
                     if (it.name == "cannon") itemProps().stacksTo(1).useBlockDescriptionPrefix()
                     else itemProps().useBlockDescriptionPrefix()
-                BlockItem(it.get(), props)
+                // A wheel in the hand opens its own interface on sneak+right-click -- it is the one block
+                // here that carries a name and a crew binding around with it, and both were unreadable
+                // until it was placed. See ShipHelmBlockItem.
+                val block = it.get()
+                if (block is ShipHelmBlock) ShipHelmBlockItem(block, props) else BlockItem(block, props)
             }
         }
     }

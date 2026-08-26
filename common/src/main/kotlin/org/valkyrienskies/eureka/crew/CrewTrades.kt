@@ -127,7 +127,7 @@ object CrewTrades {
      * or the pool is not a pool.
      *
      * The Heart of the Sea is Expert and Master only, on purpose: it is the currency berths are bought with,
-     * and going from four crew to thirty-two costs twenty-eight of them. It should be a voyage, not an errand.
+     * and going from four crew to a full sixty-four costs sixty of them. It should be a voyage, not an errand.
      */
     @JvmStatic
     fun listings(level: Int): List<VillagerTrades.ItemListing> = when (level) {

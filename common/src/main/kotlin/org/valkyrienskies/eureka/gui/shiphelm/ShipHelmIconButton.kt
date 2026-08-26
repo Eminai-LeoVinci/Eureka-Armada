@@ -22,8 +22,14 @@ class ShipHelmIconButton(
 ) : Button(x, y, width, height, text, onPress, DEFAULT_NARRATION) {
 
     override fun renderContents(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int, partialTicks: Float) {
-        guiGraphics.fill(x, y, x + width, y + height, BORDER)
-        guiGraphics.fill(x + 1, y + 1, x + width - 1, y + height - 1, if (isHovered) BG_HOVER else BG)
+        // Greyed when inactive, like every other widget in this menu. It drew its live colours regardless
+        // until the wheel gained modes where an icon button is DISABLED rather than absent -- Summon at a
+        // wheel held in the hand -- and a button that looks pressable and is not reads as a broken one.
+        guiGraphics.fill(x, y, x + width, y + height, if (active) BORDER else DIM_BORDER)
+        guiGraphics.fill(
+            x + 1, y + 1, x + width - 1, y + height - 1,
+            if (!active) DIM_BG else if (isHovered) BG_HOVER else BG
+        )
 
         // Centred label at a reduced scale; pose is a 2D Matrix3x2fStack in 1.21.11 so divide coords by scale.
         val pose = guiGraphics.pose()
@@ -32,7 +38,7 @@ class ShipHelmIconButton(
         val labelW = font.width(message) * LABEL_SCALE
         val tx = (x + (width - labelW) / 2f) / LABEL_SCALE
         val ty = (y + (height - font.lineHeight * LABEL_SCALE) / 2f) / LABEL_SCALE
-        guiGraphics.drawString(font, message, Math.round(tx), Math.round(ty), TEXT, false)
+        guiGraphics.drawString(font, message, Math.round(tx), Math.round(ty), if (active) TEXT else DIM_TEXT, false)
         pose.popMatrix()
     }
 
@@ -42,5 +48,8 @@ class ShipHelmIconButton(
         private const val BG = 0xFFC6C6C6.toInt()
         private const val BG_HOVER = 0xFFE0E0E0.toInt()
         private const val TEXT = 0xFF404040.toInt()
+        private const val DIM_BORDER = 0xFF5A5A5A.toInt()
+        private const val DIM_BG = 0xFF8B8B8B.toInt()
+        private const val DIM_TEXT = 0xFF6E6E6E.toInt()
     }
 }

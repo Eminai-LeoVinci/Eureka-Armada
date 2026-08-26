@@ -6,8 +6,11 @@ import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.client.input.KeyEvent
+import net.minecraft.core.component.DataComponents
 import net.minecraft.network.chat.Component
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.entity.player.Inventory
+import net.minecraft.world.item.BlockItem
 import net.minecraft.world.phys.BlockHitResult
 import org.lwjgl.glfw.GLFW
 import org.valkyrienskies.core.api.ships.Ship
@@ -373,7 +376,6 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
      * server, which uses the same `HelmNames.slugOf` this screen compares against below.
      */
     private fun toggleRename() {
-        val s = ship ?: return
         if (!renaming) {
             renameBox.value = shipName() ?: ""
             renameBox.visible = true
@@ -384,15 +386,22 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         } else {
             val typed = renameBox.value.trim()
             val helmPos = pos
-            if (helmPos != null && typed.isNotEmpty() && typed != (shipName() ?: "")) {
+            val s = ship
+            if (menu.inHand) {
+                // A wheel in the hand: the name goes on the STACK, and there is no position to send. Blank
+                // is allowed to clear it here -- on a hull it is not, because a ship must answer to
+                // something, but a blank wheel in a chest is an ordinary thing to want.
+                if (typed != (shipName() ?: "")) HelmNames.clientItemNameSender(typed)
+            } else if (helmPos != null && typed.isNotEmpty() && typed != (shipName() ?: "")) {
                 HelmNames.clientShipSender(helmPos, typed)
                 // Ask the server what it made of that, rather than trusting the optimistic echo below to be
                 // the last word: the name is slugged and length-capped on the way in, so what was typed and
                 // what the ship ends up called are not always the same string.
                 askedRollFor = null
                 // Shown until vs-core's own value comes back, so the box does not flicker to the old name for
-                // the round trip.
-                pendingNames[s.id] = typed
+                // the round trip. Only a hull has an id to key the echo on; a bare wheel reads its own name
+                // straight off its block entity, which the server updates in the same breath.
+                if (s != null) pendingNames[s.id] = typed
             }
             cancelRename()
         }
@@ -406,7 +415,23 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
      * version of it arrives.
      */
     private fun shipName(): String? {
-        val s = ship ?: return null
+        // A wheel in the hand IS its name -- there is no hull, no slug and no block entity, only the stack.
+        // Read live off the held item rather than cached, so a rename shows the moment the server answers.
+        if (menu.inHand) {
+            val mc = Minecraft.getInstance()
+            val held = mc.player?.let { p ->
+                InteractionHand.entries.map { p.getItemInHand(it) }
+                    .firstOrNull { (it.item as? BlockItem)?.block is ShipHelmBlock }
+            } ?: return null
+            return held.get(DataComponents.CUSTOM_NAME)?.string?.takeIf { it.isNotBlank() }
+        }
+        val s = ship
+        if (s == null) {
+            // Placed, but not yet assembled: the wheel's own name, which is what it will call the hull it
+            // assembles. Its block entity is right there on the client and syncs on every rename.
+            val wheel = pos?.let { Minecraft.getInstance().level?.getBlockEntity(it) } as? ShipHelmBlockEntity
+            return wheel?.helmName?.string?.takeIf { it.isNotBlank() }
+        }
         pendingNames[s.id]?.let { return it.ifEmpty { null } }
         // The WHEEL's copy first. `Ship.slug` on the client is only ever what the ship was called when it
         // loaded -- VS2 does not push later renames -- so a ship named by anything the player did not just
@@ -556,6 +581,10 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         }
 
         val isLookingAtShip = ship != null
+        // A wheel read in the HAND answers for nothing but itself: no hull to steer, weigh or take apart,
+        // and no position for anything to be sent about. Everything below folds through this, and the
+        // server refuses the same set anyway on the null block entity -- this is the half a player sees.
+        val inHand = menu.inHand
         // Whether THIS helm's ship is assembled, from the server-synced DataSlot -- NOT the crosshair raycast.
         // The raycast reads null while the menu is open at close range (the frozen camera points off-ship),
         // which used to grey out cruise / keep-active / the mode radio even on a fully assembled ship.
@@ -574,7 +603,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             viewedTab = activeTab
         }
 
-        assembleButton.active = !assembled && !childLocked
+        assembleButton.active = !assembled && !childLocked && !inHand
         disassembleButton.active = EurekaConfig.SERVER.allowDisassembly && assembled && !childLocked
         alignButton.active = disassembleButton.active
 
@@ -586,7 +615,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // being a boat. Hidden rather than greyed on the other tabs -- a permanently dead checkbox invites the
         // question of what would enable it, and the answer is "nothing".
         waterLockCheckbox.visible = viewedTab == ControlProfile.BOAT
-        waterLockCheckbox.active = !childLocked
+        waterLockCheckbox.active = !childLocked && !inHand
 
         // Armada role markers are mutually exclusive: a child can't be marked parent, and a parent (real or
         // just marked) can't be ticked child. Both need an assembled ship, since a bond is between two ships.
@@ -607,9 +636,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         updateCruiseBox(cruiseTurnBox, cruiseVisible, cruiseUsable, menu.cruiseTurn)
         updateCruiseBox(cruiseVerticalBox, cruiseVisible, cruiseUsable, menu.cruiseVertical)
 
-        // The book opens the articles, and articles hang off an assembled ship's wheel: unassembled, the
-        // server would only answer "assemble the ship first", so the cover says it first by greying.
-        crewBookButton.active = assembled
+        // The book opens the articles, and a captain's crews exist whether or not anything is afloat -- so
+        // it is live at every wheel, in the hand included. Unassembled it opens read-only, on the Crews tab.
+        crewBookButton.active = true
 
         // The crew list, from the last roll the server sent for THIS wheel. Kept statically because the
         // payload arrives with no screen in hand; matched on the wheel so a roll drawn up at another helm
@@ -625,8 +654,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         if (helmKey != null && roll != null && roll.helm == helmKey && rolledFor != helmKey) {
             applyRoll(roll)
         }
-        // Always usable: the list feeds Assemble as well as Summon, so an unassembled wheel still needs it.
-        crewList.enabled = true
+        // Usable at any wheel in the WORLD -- the list feeds Assemble as well as Summon, so an unassembled
+        // wheel still needs it. In the hand there is nothing to assemble and nothing to call the crew to.
+        crewList.enabled = !inHand
 
         // Summon needs a deck to put people on, and something to change. Calling the crew already aboard would
         // be free and do nothing, so the button says so by going grey rather than by refusing afterwards.
@@ -645,7 +675,11 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // Auto-Shipwright subs grey out while the section master is off; the section is per-player (no ship
         // needed) and stays fully usable on every tab, because it is set BEFORE a ship exists -- at which
         // point the ship has no category to gate it by, and you may well be building a hybrid.
-        val asmOn = menu.assemblerEnabled
+        // In the hand there is nothing to assemble, so the section that decides HOW to assemble goes with
+        // the button: it is a per-player preference, but one that only means anything at a wheel on a hull.
+        assemblerMasterCheckbox.active = !inHand
+        hudCheckbox.active = !inHand
+        val asmOn = menu.assemblerEnabled && !inHand
         assemblerFloaterCheckbox.active = asmOn
         assemblerBalloonCheckbox.active = asmOn
         assemblerReplaceAllCheckbox.active = asmOn && menu.assemblerBalloon
@@ -663,13 +697,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         if (shipWeightBox.value != weightStr) shipWeightBox.value = weightStr
 
         // Naming needs a WHEEL, not a ship. A helm sitting on the dock can be named before it has ever built
-        // anything -- which is the whole point of a name that travels with the block -- so this is gated on
-        // having a block position rather than on `isLookingAtShip` the way it was when it renamed the ship.
-        // Only a ship can be renamed, so an unassembled wheel has nothing to offer here. Naming the CREW is
-        // always available, but it lives in the crew menu.
-        renameButton.visible = isLookingAtShip
-        renameButton.active = isLookingAtShip
-        if (!isLookingAtShip && renaming) cancelRename()
+        // Naming needs a WHEEL, not a ship: in the hand, on the ground, or under way, a captain can always
+        // say what this one is called -- which is the whole point of a name that travels with the block.
+        // The three contexts differ only in what the name lands on; see toggleRename. Naming the CREW is a
+        // separate thing and lives in the crew menu.
+        val canName = inHand || pos != null
+        renameButton.visible = canName
+        renameButton.active = canName
+        if (!canName && renaming) cancelRename()
     }
 
     // Show a cruise box and, while it isn't being edited, keep it displaying the live synced value. [visible]
@@ -784,8 +819,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         drawFitPercent(guiGraphics, menu.floaterFitPercent, cruiseRowY(0))
         drawFitPercent(guiGraphics, menu.balloonFitPercent, cruiseRowY(1))
 
-        // The SHIP's name. Drawn only while there is a ship to name -- an unassembled wheel steers nothing yet,
-        // and the crew's name (the wheel's own) belongs to the crew menu, not here.
+        // Drawn even with no ship: this is what the WHEEL is called, which on a hull is the hull's name and
+        // off one is the name it will give the next hull it assembles. A captain carrying a wheel to a new
+        // build wants to read it before they place it, not after. See shipName() for the three sources.
         if (!renaming) {
             shipName()?.let { shown ->
                 guiGraphics.drawString(font, "Name: $shown", titleLabelX, titleLabelY, INFO_TEXT, false)

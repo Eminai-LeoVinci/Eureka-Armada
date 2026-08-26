@@ -334,7 +334,7 @@ object ShipCrews {
      * ## Signing the articles does not give anybody a job, and never did anybody a favour by trying
      *
      * Recruiting used to set the Crewman profession on any villager who was unemployed, because the helm had
-     * been taken OUT of `minecraft:acquirable_job_site` -- it carries 32 tickets against an ordinary bench's
+     * been taken OUT of `minecraft:acquirable_job_site` -- it carries 64 tickets against an ordinary bench's
      * one, so as an acquirable site it was the most claimable job for a long way in every direction and hired
      * every villager who briefly lost their own workstation.
      *
@@ -418,6 +418,31 @@ object ShipCrews {
     }
 
     /**
+     * The articles for a wheel in the HAND: the captain's crews, read-only, and nothing else.
+     *
+     * No reach test, because there is no wheel in the world to be near -- the credential is holding it.
+     * The snapshot is synthetic rather than built from a block entity: there is no station, no berths at
+     * any wheel, and no ship, so [CrewManifest.build]'s inputs simply do not exist. Every field it would
+     * have filled is blank by construction, and the crews the tab lists come from the LEDGER, which is
+     * the captain's own and needs no hull.
+     */
+    @JvmStatic
+    fun openArticlesInHand(level: ServerLevel, player: ServerPlayer) {
+        CrewManifest.sender(
+            player,
+            CrewManifest.Snapshot(
+                ship = "",
+                crew = "",
+                helm = CrewManifest.HELM_IN_HAND,
+                berths = CrewData.slots(player),
+                maxBerths = EurekaConfig.SERVER.crewSlotsMax,
+                rows = emptyList(),
+                readOnly = true
+            )
+        )
+    }
+
+    /**
      * The manifest's Back button: reopen the helm menu the book was pressed in. The same door swings both
      * ways -- and carries the same guard, because this request too arrives from a plain screen with no
      * container behind it to vouch for anything.
@@ -475,6 +500,12 @@ object ShipCrews {
      * thing being authorised is a captain reading their own papers at their own wheel.
      */
     fun requestCrewRoster(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID) {
+        // In the hand there is no wheel to stand near, and the credential is holding it. Ownership is
+        // still checked, by CrewRoll.roster itself -- reading is free, but only of your own papers.
+        if (helm == CrewManifest.HELM_IN_HAND) {
+            CrewRoll.roster(level, player, crewId)?.let { CrewRoll.rosterSender(player, it) }
+            return
+        }
         val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
         if (!withinBookReach(level, player, wheel)) return
         CrewRoll.roster(level, player, crewId)?.let { CrewRoll.rosterSender(player, it) }
@@ -581,7 +612,11 @@ object ShipCrews {
         }
         val ship = CrewStations.shipOf(level, helm)
         if (ship == null) {
-            PathMessages.send(player, "Assemble the ship first -- articles are kept by a ship's wheel.", PathMessages.Kind.ERROR)
+            // A wheel with no hull under it still has crews to show. It cannot ORDER anything -- there are
+            // no guns to man and no holds to draw on -- so the book opens read-only, on the Crews tab,
+            // exactly as a wheel held in the hand does. It used to refuse outright with "assemble the ship
+            // first", which is true of the Operations tab and of nothing else in the book.
+            CrewManifest.sender(player, CrewManifest.build(level, player, helm))
             return
         }
 

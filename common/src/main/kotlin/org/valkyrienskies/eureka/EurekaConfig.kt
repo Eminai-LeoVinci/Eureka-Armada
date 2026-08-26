@@ -1069,9 +1069,9 @@ object EurekaConfig {
                 "record the first time that block is seen, so lowering it does NOT evict villagers from helms " +
                 "that already exist. Beware the interaction with villages: an unemployed villager will notice a " +
                 "job site 48 blocks away, so a helm docked near one can pull this many villagers off their own " +
-                "workstations. Default 80."
+                "workstations. Default 64."
         )
-        var crewmanHelmPoiTickets = 80
+        var crewmanHelmPoiTickets = 64
 
         @JsonSchema(
             description = "How close, in blocks, a villager must get to a helm for it to count as having reached " +
@@ -1089,10 +1089,11 @@ object EurekaConfig {
         var crewSlotsBase = 4
 
         @JsonSchema(
-            description = "The most berths any player can ever hold. Each Heart of the Sea offered to a helm buys " +
-                "exactly one, so the default pair means a full crew costs 28 hearts. Default 80."
+            description = "The most berths any player can ever hold, and so the most hands any ONE crew can " +
+                "muster -- a crew can never outgrow its captain's berths. Each Heart of the Sea offered to a " +
+                "helm buys exactly one, so the default pair means a full crew costs 60 hearts. Default 64."
         )
-        var crewSlotsMax = 80
+        var crewSlotsMax = 64
 
         @JsonSchema(
             description = "Ender pearls charged per head when a crew is called to a ship they were not already " +

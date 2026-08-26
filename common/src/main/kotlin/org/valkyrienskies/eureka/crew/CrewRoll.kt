@@ -150,6 +150,29 @@ object CrewRoll {
     }
 
     /**
+     * The same list for a wheel held in the HAND, which has no position, no articles and no hull.
+     *
+     * A crew belongs to its CAPTAIN, not to any wheel -- [CrewLedger.crewsOf] is keyed on the player --
+     * so the roll is complete even with nothing to build it against. Nobody reads as `aboard`, because
+     * there is no deck to be aboard of, and every fare is therefore the plain per-head price.
+     */
+    fun buildInHand(captain: ServerPlayer): Roll {
+        val server = captain.level().server ?: return Roll(CrewManifest.HELM_IN_HAND, "", emptyList())
+        val perHead = if (captain.abilities.instabuild) 0 else EurekaConfig.SERVER.crewPassagePearls
+        val entries = CrewLedger.get(server).crewsOf(captain.uuid).map { crew ->
+            val heads = crew.berths.size
+            Entry(
+                id = crew.id,
+                name = crew.name,
+                heads = heads,
+                aboard = false,
+                fare = if (perHead <= 0) 0 else heads * perHead
+            )
+        }
+        return Roll(CrewManifest.HELM_IN_HAND, "", entries)
+    }
+
+    /**
      * One crew's articles for [captain], or null if the crew is gone or is not theirs.
      *
      * The fare quoted here is the plain per-head price, NOT the "free because they are already aboard" one:

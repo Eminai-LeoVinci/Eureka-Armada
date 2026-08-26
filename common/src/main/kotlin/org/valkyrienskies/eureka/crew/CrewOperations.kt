@@ -81,7 +81,10 @@ object CrewOperations {
         val crewMode: Int,
         val fireMode: Int,
         val ammoBall: Int,
-        val ammoCharge: Int
+        val ammoCharge: Int,
+        val crewLayer: Int,
+        val ctrlLayer: Int,
+        val shotLayer: Int
     )
 
     /**
@@ -191,6 +194,7 @@ object CrewOperations {
             it.opsGunnerCount = count.coerceIn(0, EurekaConfig.SERVER.crewSlotsMax)
             it.opsCrewSide = side.ordinal
             it.opsCrewMode = mode.ordinal
+            it.opsCrewLayer = layer
         }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
@@ -535,6 +539,7 @@ object CrewOperations {
             it.opsShotSide = side.ordinal
             it.opsAmmoBall = ball.ordinal
             it.opsAmmoCharge = charge.ordinal
+            it.opsShotLayer = layer
         }
         if (!storesManned(op)) return
         val labeled = GunLabels.labeled(level, op.ship)
@@ -627,7 +632,7 @@ object CrewOperations {
      */
     fun requestElevation(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, index: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
-        rememberOps(op) { it.opsCtrlSide = side.ordinal }
+        rememberOps(op) { it.opsCtrlSide = side.ordinal; it.opsCtrlLayer = layer }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -666,7 +671,7 @@ object CrewOperations {
      */
     fun requestPower(level: ServerLevel, player: ServerPlayer, helm: Long, side: Side, ordinal: Int, layer: Int) {
         val op = gate(level, player, helm) ?: return
-        rememberOps(op) { it.opsCtrlSide = side.ordinal }
+        rememberOps(op) { it.opsCtrlSide = side.ordinal; it.opsCtrlLayer = layer }
         val labeled = GunLabels.labeled(level, op.ship)
         if (labeled.isEmpty()) {
             PathMessages.send(player, "No bow to number the guns from -- the ship needs a crew-station wheel.", PathMessages.Kind.ERROR)
@@ -957,7 +962,8 @@ object CrewOperations {
                 it.opsGunnerCount, it.opsFireCount,
                 it.opsCrewSide, it.opsCtrlSide, it.opsShotSide,
                 it.opsCrewMode, it.opsFireMode,
-                it.opsAmmoBall, it.opsAmmoCharge
+                it.opsAmmoBall, it.opsAmmoCharge,
+                it.opsCrewLayer, it.opsCtrlLayer, it.opsShotLayer
             )
         }
         val tally = ShipStores.tally(level, ship)

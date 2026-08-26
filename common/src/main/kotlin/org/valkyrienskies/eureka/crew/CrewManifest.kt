@@ -65,6 +65,15 @@ object CrewManifest {
         val locked: Boolean = false
     )
 
+    /**
+     * The `helm` a book opened on a wheel in the HAND carries, in place of a packed block position.
+     *
+     * `Long.MIN_VALUE` rather than 0: the client compares this value for equality all over the manifest
+     * and helm screens to decide whether a payload is about the book in front of it, and `0L` is a real
+     * `BlockPos` -- the origin at y=0 -- which a wheel could genuinely occupy.
+     */
+    const val HELM_IN_HAND: Long = Long.MIN_VALUE
+
     data class Snapshot(
         /** The hull's name, for the heading. Blank on a wheel that is not part of a ship. */
         val ship: String,
@@ -79,7 +88,17 @@ object CrewManifest {
         val helm: Long,
         val berths: Int,
         val maxBerths: Int,
-        val rows: List<Row>
+        val rows: List<Row>,
+        /**
+         * Whether this book may only be READ: no ship under the wheel, so nothing can be ordered and
+         * nobody can be stationed. True for a wheel in the hand and for one placed but not yet assembled.
+         *
+         * Carried rather than inferred from a blank [ship]: a wheel can be nameless on a real hull, and a
+         * client working that out for itself would be a second definition of "is there a ship" waiting to
+         * disagree with the server's. Operations and Roster grey out; the Crews tab stays readable,
+         * because a crew is the captain's and exists whether or not anything is afloat.
+         */
+        val readOnly: Boolean = false
     )
 
     /**
@@ -235,7 +254,8 @@ object CrewManifest {
             helm = station.blockPos.asLong(),
             berths = CrewData.slots(player),
             maxBerths = EurekaConfig.SERVER.crewSlotsMax,
-            rows = rows
+            rows = rows,
+            readOnly = ship == null
         )
     }
 

@@ -1,12 +1,16 @@
 package org.valkyrienskies.eureka.crew
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.component.DataComponents
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.util.StringUtil
+import net.minecraft.world.InteractionHand
+import net.minecraft.world.item.BlockItem
 import org.joml.Vector3d
 import org.valkyrienskies.eureka.armada.ArmadaGroup
+import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
@@ -95,6 +99,45 @@ object HelmNames {
     @Volatile
     @JvmField
     var clientShipSender: (BlockPos, String) -> Unit = { _, _ -> }
+
+    /**
+     * The third seam: name the wheel the player is HOLDING. No position, because there isn't one.
+     *
+     * Same shape as the blueprint page's rename, and for the same reason -- the only wheel a captain can
+     * be reading in this mode is one in their own hands, and a slot index is a number a client could make
+     * up. The server looks in the two hands and nowhere else.
+     */
+    @Volatile
+    @JvmField
+    var clientItemNameSender: (String) -> Unit = { _ -> }
+
+    /**
+     * Write [raw] onto the ship's wheel in [player]'s hands.
+     *
+     * Vanilla's `CUSTOM_NAME` and nothing else, which is the whole trick: it is the same component the
+     * block entity reads back in `applyImplicitComponents`, the same one the loot tables copy out, and the
+     * one that draws the hover name -- so a wheel named in hand is named on the item, named when placed,
+     * and names the hull it goes on to assemble, with no new storage anywhere.
+     *
+     * Blank clears the name, exactly as it does at a placed wheel.
+     */
+    fun renameHeld(player: ServerPlayer, raw: String): Boolean {
+        val cleaned = StringUtil.filterText(raw).trim().take(MAX_NAME_LENGTH)
+        for (hand in InteractionHand.entries) {
+            val stack = player.getItemInHand(hand)
+            val item = stack.item
+            if (item !is BlockItem || item.block !is ShipHelmBlock) continue
+            // No pirate gate needed here, unlike every other naming path: the pirate mark is a BLOCK STATE
+            // property, applied when the manager places a wheel. Every helm item is the plain one.
+            if (cleaned.isEmpty()) {
+                stack.remove(DataComponents.CUSTOM_NAME)
+            } else {
+                stack.set(DataComponents.CUSTOM_NAME, Component.literal(cleaned))
+            }
+            return true
+        }
+        return false
+    }
 
     /**
      * Rename the CREW [player] keeps at the wheel at [pos]. Nothing to do with the wheel's own name.

@@ -85,6 +85,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedHelmPos1 = 0
     private var syncedHelmPos2 = 0
     private var syncedHelmPos3 = 0
+    private var syncedInHand = false // opened on a wheel in the hand: no ship, no position, no controls
 
     /** "2/8" for the header, or null when this wheel is not on a ship and so is not one of anything. */
     val helmNumber: String?
@@ -95,6 +96,12 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
      * reached yet. `0L` decodes to the origin at y=0, where no wheel lives, so treating the unsynced zero
      * as "not yet" costs nothing real. Never changes while the menu lives: a relocation closes menus.
      */
+    /**
+     * Whether this menu is reading a wheel in the player's HAND. Server-side the null block entity says so
+     * directly; on the client it is the synced slot, because there the block entity is always null.
+     */
+    val inHand: Boolean get() = if (blockEntity != null) false else syncedInHand
+
     val helmPos: BlockPos?
         get() {
             blockEntity?.let { return it.blockPos }
@@ -323,6 +330,14 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 48) and 0xFFFFL).toInt()
             override fun set(value: Int) { syncedHelmPos3 = value }
         })
+        // Whether this menu was opened on a wheel in the HAND rather than one in the world. Read from the
+        // server's copy, where a null block entity means exactly that -- the client's is always null and
+        // so can never tell the two apart on its own. The screen greys everything a ship would answer and
+        // leaves the two a bare wheel answers for itself: its name, and the articles.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = if (blockEntity == null) 1 else 0
+            override fun set(value: Int) { syncedInHand = value == 1 }
+        })
     }
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive
     // Server-authoritative, synced above: is this helm's ship assembled (the client's blockEntity is null).
@@ -395,7 +410,20 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     override fun stillValid(player: Player): Boolean = true
 
     override fun clickMenuButton(player: Player, id: Int): Boolean {
-        if (blockEntity == null) return false
+        // A wheel in the hand answers for nothing but itself. Every ship control is refused by this one
+        // line -- there is no ship, no position and nothing to steer -- with the articles carved out for
+        // the same reason the armada-child lock carves them out below: reading a crew is not ship control.
+        // The Rename control is not here at all; it travels as its own payload.
+        if (blockEntity == null) {
+            if (id != BUTTON_CREW_BOOK) return false
+            if (!player.level().isClientSide) {
+                val captain = player as? net.minecraft.server.level.ServerPlayer ?: return true
+                val serverLevel = captain.level() as? net.minecraft.server.level.ServerLevel ?: return true
+                captain.closeContainer()
+                org.valkyrienskies.eureka.crew.ShipCrews.openArticlesInHand(serverLevel, captain)
+            }
+            return true
+        }
         val server = !player.level().isClientSide
 
         // Pirate gate, door 9 of 14: the menu cannot OPEN on a pirate wheel, but a modified client can
