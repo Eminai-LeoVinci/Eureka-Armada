@@ -1,0 +1,68 @@
+{
+  "replace": false,
+  "values": [
+    "#vs_eureka:balloons",
+    "#vs_eureka:ship_helms",
+    {
+      "id": "vs_eureka:floater",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:ballast",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:engine",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:anchor",
+      "required": false
+    },
+    {
+      "id": "vs_eureka:cannon",
+      "required": false
+    },
+    "minecraft:tnt",
+    "minecraft:spawner",
+    {
+      "id": "minecraft:trial_spawner",
+      "required": false
+    },
+    {
+      "id": "minecraft:vault",
+      "required": false
+    },
+    "minecraft:command_block",
+    "minecraft:chain_command_block",
+    "minecraft:repeating_command_block",
+    "minecraft:structure_block",
+    "minecraft:jigsaw",
+    "minecraft:bedrock",
+    "minecraft:budding_amethyst",
+    "minecraft:sponge",
+    "minecraft:wet_sponge",
+    "minecraft:slime_block",
+    "minecraft:honey_block",
+    "minecraft:beacon",
+    "minecraft:conduit",
+    "minecraft:dispenser",
+    "minecraft:dropper",
+    "minecraft:observer",
+    "minecraft:piston",
+    "minecraft:sticky_piston",
+    "minecraft:note_block",
+    "minecraft:jukebox",
+    "minecraft:furnace",
+    "minecraft:blast_furnace",
+    "minecraft:smoker",
+    {
+      "id": "minecraft:respawn_anchor",
+      "required": false
+    },
+    {
+      "id": "minecraft:lodestone",
+      "required": false
+    }
+  ]
+}
