@@ -206,7 +206,7 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
  * rungs. No upper clamp on purpose: "150" as a chance is simply a certain block, which is a legitimate
  * way to raise a floor without touching the guaranteed key.
  */
-private object ChanceSpec {
+internal object ChanceSpec {
     val NONE = DoubleArray(0)
 
     private val cache = HashMap<String, DoubleArray>()

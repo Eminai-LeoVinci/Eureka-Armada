@@ -1452,26 +1452,43 @@ object EurekaConfig {
         @JsonSchema(description = "2x charge (2 gunpowder): blocks a cannonball travels each tick. Default 5.0.")
         var cannonShotSpeed2x = 5.0
 
-        @JsonSchema(description = "2x charge: blocks per tick squared the shot falls. Default 0.075.")
+        @JsonSchema(description = "2x charge: blocks per tick squared the shot falls. Default 0.05.")
         var cannonShotGravity2x = 0.05
 
         @JsonSchema(description = "2x charge: fraction of its speed a shot keeps each tick. Default 0.98.")
         var cannonShotDrag2x = 0.98
 
-        @JsonSchema(description = "2x charge: seconds a cannon takes to reload, per gun. Default 6.0.")
+        @JsonSchema(description = "2x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
         var cannonReloadSeconds2x = 4.0
 
         @JsonSchema(description = "3x charge (3 gunpowder): blocks a cannonball travels each tick. Default 6.5.")
         var cannonShotSpeed3x = 6.5
 
-        @JsonSchema(description = "3x charge: blocks per tick squared the shot falls. Default 0.05.")
+        @JsonSchema(description = "3x charge: blocks per tick squared the shot falls. Default 0.075.")
         var cannonShotGravity3x = 0.075
 
         @JsonSchema(description = "3x charge: fraction of its speed a shot keeps each tick. Default 0.99.")
         var cannonShotDrag3x = 0.99
 
-        @JsonSchema(description = "3x charge: seconds a cannon takes to reload, per gun. Default 4.0.")
+        @JsonSchema(description = "3x charge: seconds a cannon takes to reload, per gun. Default 6.0.")
         var cannonReloadSeconds3x = 6.0
+
+        @JsonSchema(
+            description = "Seconds a cannonball may fly before it is spent and vanishes. The ceiling on " +
+                "range for slow, low-gravity lobs: raise it and a shot can cross an ocean; the gunnery AI " +
+                "still plans at most ten seconds ahead as a CPU guard, so crews simply will not USE arcs " +
+                "longer than that -- hand-laid guns will. Default 10.0."
+        )
+        var cannonShotMaxFlightSeconds = 10.0
+
+        @JsonSchema(
+            description = "Whether a flying cannonball keeps the chunks along its path loaded and " +
+                "simulating (the ender-pearl treatment vanilla gave pearls in 1.21.2). Off, a shot that " +
+                "outruns the loaded area hangs frozen at the simulation edge until somebody comes near, " +
+                "impact delayed accordingly. Costs chunk loads along the flight line of every airborne " +
+                "shot; flip it live with /armada cannons chunk-loading. Default true."
+        )
+        var cannonballChunkLoading = true
 
         @JsonSchema(
             description = "How many cannonballs stack in an inventory slot, 1 to 99. Applied when items " +
@@ -1564,6 +1581,15 @@ object EurekaConfig {
                 "losing steam)."
         )
         var cannonArmorPiercingStrikePercents = "100,75,50,25"
+
+        @JsonSchema(
+            description = "Whether a cannonball exploding against WORLD terrain pushes the crater into " +
+                "Voxy's distant LODs right away (ship hits never do; disassembly already has its own " +
+                "path). Costs a chunk re-ingest per touched chunk per volley, so it is a toggle -- flip " +
+                "it live with /armada cannons voxy-lod. Does nothing when Voxy is not installed. " +
+                "Default false."
+        )
+        var cannonballVoxyLodUpdates = false
         // endregion
 
         @JsonSchema(
@@ -1674,6 +1700,28 @@ object EurekaConfig {
                 "whenever their parent is in range, however far out they trail. Default 100."
         )
         var shipwrightRepairBlockRange = 100.0
+
+        @JsonSchema(
+            description = "Whether right-clicking a shipwright VILLAGER opens the shipwright's book. Off, " +
+                "the villager waves you toward a bench instead -- but still files blueprints and still " +
+                "sells shelf space, so progression never dead-ends. Default true."
+        )
+        var shipwrightVillagerAccess = true
+
+        @JsonSchema(
+            description = "Whether right-clicking a Shipwright's Bench empty-handed opens the shipwright's " +
+                "book directly, no villager needed. The bench uses its own range " +
+                "(shipwrightBenchBlockRange), so a bench on the pier and the villager wandering behind it " +
+                "each see their own yard. Default true."
+        )
+        var shipwrightBenchAccess = true
+
+        @JsonSchema(
+            description = "How far from a Shipwright's Bench, in blocks, the BENCH itself can see and work " +
+                "on a ship when opened directly (shipwrightBenchAccess). The villager's own reach stays " +
+                "shipwrightRepairBlockRange. Default 100."
+        )
+        var shipwrightBenchBlockRange = 100.0
 
         // region Altering a set of plans
         // A captain may strike decoration off a design and build the hull without it, and may build a design
