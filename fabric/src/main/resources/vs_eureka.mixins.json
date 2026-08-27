@@ -5,6 +5,7 @@
   "mixins": [
     "MixinAnvilFreeRename",
     "MixinBlockEntityHoldTags",
+    "MixinCannonShotTracking",
     "MixinChestMenuHoldTags",
     "MixinCrewNoWheelVisit",
     "MixinCrewNoWorkAtWheel",
@@ -22,6 +23,7 @@
   "client": [
     "client.MixinRaycastUtils",
     "client.MixinCameraSubAir",
+    "client.MixinCannonShotSectionCull",
     "client.MixinContainerScreenHoldLabel",
     "client.MixinEntityRendererCrewNameTag"
   ],
