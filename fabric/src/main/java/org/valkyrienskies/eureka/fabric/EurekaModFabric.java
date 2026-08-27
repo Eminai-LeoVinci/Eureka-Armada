@@ -35,6 +35,7 @@ import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.CannonBlockEntityRenderer;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
+import org.valkyrienskies.eureka.cannon.CannonShot;
 import org.valkyrienskies.eureka.crew.CrewDuties;
 import org.valkyrienskies.eureka.crew.FireAtWill;
 import org.valkyrienskies.eureka.crew.FireBrigade;
@@ -288,9 +289,21 @@ public class EurekaModFabric implements ModInitializer {
 
             // A cannonball flies as whichever grade of shot was loaded, so copper and netherite are told
             // apart in the air. Same mechanism as the bottle: the entity reports its own stack each frame.
+            //
+            // Culling off: Sodium culls entities by the render SECTION they stand in, and a shot past the
+            // loaded-chunk line stands in no section at all -- tracked by the server
+            // (MixinCannonShotTracking) yet skipped by the renderer. The distance gate stays the entity's
+            // own shouldRenderAtSqrDistance, so /vs cannonball-render-distance still rules the draw.
+            // (1.21.1 does the same through Entity.noCulling; that field is gone here and the switch
+            // lives on the renderer.)
             EntityRenderers.register(
                 EurekaEntities.INSTANCE.getCANNON_SHOT().get(),
-                ThrownItemRenderer::new
+                context -> new ThrownItemRenderer<CannonShot>(context) {
+                    @Override
+                    protected boolean affectedByCulling(final CannonShot entity) {
+                        return false;
+                    }
+                }
             );
 
 
@@ -325,12 +338,12 @@ public class EurekaModFabric implements ModInitializer {
                         // "/vs cannonball-render-distance [blocks]": how far this CLIENT draws cannonballs.
                         // Genuinely client-local (a draw cull, not a server value), so unlike the toggles
                         // around it this one also works on a dedicated server. The server entity tracking
-                        // still caps visibility at 512 blocks regardless of what is set here.
+                        // still caps visibility at 1024 blocks regardless (MixinCannonShotTracking unlinks it from view distance).
                         .then(ClientCommandManager.literal("cannonball-render-distance")
                             .executes(ctx -> {
                                 ctx.getSource().sendFeedback(Component.literal(
                                     "Cannonball render distance: " + EurekaConfig.CLIENT.getCannonShotRenderDistance()
-                                        + " blocks (server tracking caps visibility at 512)"));
+                                        + " blocks (server tracking caps visibility at 1024)"));
                                 return 1;
                             })
                             .then(ClientCommandManager.argument("blocks", IntegerArgumentType.integer(0))
@@ -340,7 +353,7 @@ public class EurekaModFabric implements ModInitializer {
                                     EurekaConfigLoader.save();
                                     ctx.getSource().sendFeedback(Component.literal(
                                         "Cannonball render distance set to " + blocks
-                                            + " blocks (server tracking caps visibility at 512)"));
+                                            + " blocks (server tracking caps visibility at 1024)"));
                                     return 1;
                                 })))
                         .then(ClientCommandManager.literal("pocket-occluder")

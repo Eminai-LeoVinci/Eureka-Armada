@@ -196,6 +196,12 @@ object ArmadaTuningCommand {
                     .then(literal("on").executes { store(it, "voxy-lod", { cfg.cannonballVoxyLodUpdates = true }, "on") })
                     .then(literal("off").executes { store(it, "voxy-lod", { cfg.cannonballVoxyLodUpdates = false }, "off") })
             )
+            .then(
+                literal("chunk-loading")
+                    .executes { show(it, "chunk-loading", if (cfg.cannonballChunkLoading) "on" else "off") }
+                    .then(literal("on").executes { store(it, "chunk-loading", { cfg.cannonballChunkLoading = true }, "on") })
+                    .then(literal("off").executes { store(it, "chunk-loading", { cfg.cannonballChunkLoading = false }, "off") })
+            )
     }
 
     private fun cannonsInfo(ctx: CommandContext<CommandSourceStack>): Int {
@@ -210,6 +216,7 @@ object ArmadaTuningCommand {
             "fire-at-will crew = ${cfg.cannonFireAtWillFireRateSeconds} s, pirate = ${cfg.pirateFireAtWillFireRateSeconds} s",
             "max-flight-seconds = ${cfg.cannonShotMaxFlightSeconds} s",
             "voxy-lod = " + (if (cfg.cannonballVoxyLodUpdates) "on" else "off"),
+            "chunk-loading = " + (if (cfg.cannonballChunkLoading) "on" else "off"),
             "render distance is client-side -- each player sets it with /vs cannonball-render-distance"
         )
         for (line in lines) src.sendSuccess({ Component.literal("  $line").withStyle(ChatFormatting.AQUA) }, false)

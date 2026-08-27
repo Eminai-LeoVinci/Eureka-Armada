@@ -6,6 +6,7 @@ import net.minecraft.network.syncher.EntityDataAccessor
 import net.minecraft.network.syncher.EntityDataSerializers
 import net.minecraft.network.syncher.SynchedEntityData
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.TicketType
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.world.damagesource.DamageSource
@@ -13,6 +14,7 @@ import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.projectile.ItemSupplier
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.ClipContext
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.storage.ValueInput
@@ -65,6 +67,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * already outlived anything this would protect.
      */
     var firedBy: Entity? = null
+
+    /** The last chunk this shot bought a simulation ticket for -- see the ticket block in [tick]. */
+    private var lastTicketChunk = Long.MIN_VALUE
 
     /**
      * The blocks of the gun that fired this, which the shot passes straight through.
@@ -235,6 +240,20 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         if (age++ > flightCapTicks()) {
             discard()
             return
+        }
+
+        // The ender-pearl treatment: a shot that outruns the loaded area must keep flying, not hang
+        // frozen at the simulation edge until somebody wanders close and the impact lands minutes late.
+        // A short self-expiring ticket rides the shot chunk to chunk -- radius 3 keeps the next chunk
+        // already simulating when a fast ball crosses -- and expiry IS the cleanup, so a shot that dies
+        // anywhere, anyhow, leaks nothing. Rearmed on a timer too, for a slow lob hanging in one chunk.
+        if (EurekaConfig.SERVER.cannonballChunkLoading) {
+            val chunk = chunkPosition()
+            val key = ChunkPos.asLong(chunk.x, chunk.z)
+            if (key != lastTicketChunk || age % 40 == 0) {
+                lastTicketChunk = key
+                (level() as? ServerLevel)?.chunkSource?.addTicketWithRadius(CHUNK_TICKET, chunk, 3)
+            }
         }
 
         // Entities first: a round that punches through a crew to hit the hull behind them is not a
@@ -458,6 +477,14 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         /** The flight-time cap in ticks, from config; floored at one tick. Shared with [CannonSolver]. */
         internal fun flightCapTicks(): Long =
             (EurekaConfig.SERVER.cannonShotMaxFlightSeconds * 20.0).toLong().coerceAtLeast(1L)
+
+        /**
+         * Keeps a flying shot's chunks loaded and simulating without a player nearby -- what vanilla's own
+         * ENDER_PEARL ticket does for pearls, but self-expiring (60 ticks, re-bought in flight) instead of
+         * managed, so no cleanup path can be forgotten. Not persistent: a saved-and-reloaded world starts
+         * clean and the first server tick buys fresh tickets.
+         */
+        private val CHUNK_TICKET = TicketType(60L, TicketType.FLAG_LOADING or TicketType.FLAG_SIMULATION)
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
         private const val BURST_SPREAD = 2.0

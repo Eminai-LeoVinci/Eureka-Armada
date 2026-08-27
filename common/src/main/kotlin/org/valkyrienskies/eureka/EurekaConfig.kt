@@ -1482,6 +1482,15 @@ object EurekaConfig {
         var cannonShotMaxFlightSeconds = 10.0
 
         @JsonSchema(
+            description = "Whether a flying cannonball keeps the chunks along its path loaded and " +
+                "simulating (the ender-pearl treatment). Off, a shot that outruns the loaded area hangs " +
+                "frozen at the simulation edge until somebody comes near, impact delayed accordingly. " +
+                "Costs chunk loads along the flight line of every airborne shot; flip it live with " +
+                "/armada cannons chunk-loading. Default true."
+        )
+        var cannonballChunkLoading = true
+
+        @JsonSchema(
             description = "How many cannonballs stack in an inventory slot, 1 to 99. Applied when items " +
                 "register, so changing it needs a game restart. The guns' own magazines hold 64 a slot " +
                 "regardless -- this is about hauling and hold space, which is where the balance lever " +
