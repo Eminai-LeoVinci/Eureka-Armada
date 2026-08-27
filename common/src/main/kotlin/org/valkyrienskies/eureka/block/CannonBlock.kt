@@ -1,0 +1,466 @@
+package org.valkyrienskies.eureka.block
+
+import com.mojang.serialization.MapCodec
+import net.minecraft.core.BlockPos
+import net.minecraft.core.Direction
+import net.minecraft.network.chat.Component
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.ServerPlayer
+import net.minecraft.sounds.SoundEvents
+import net.minecraft.sounds.SoundSource
+import net.minecraft.world.Containers
+import net.minecraft.world.InteractionHand
+import net.minecraft.world.InteractionResult
+import net.minecraft.world.ItemInteractionResult
+import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
+import net.minecraft.world.item.SpawnEggItem
+import net.minecraft.world.item.context.BlockPlaceContext
+import net.minecraft.world.level.BlockGetter
+import net.minecraft.world.level.Level
+import net.minecraft.world.level.block.BaseEntityBlock
+import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.Blocks
+import net.minecraft.world.level.block.Mirror
+import net.minecraft.world.level.block.RenderShape
+import net.minecraft.world.level.block.Rotation
+import net.minecraft.world.level.block.SoundType
+import net.minecraft.world.level.block.entity.BlockEntity
+import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.world.level.storage.loot.LootParams
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams
+import net.minecraft.world.level.block.state.StateDefinition
+import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
+import net.minecraft.world.level.material.MapColor
+import net.minecraft.world.level.pathfinder.PathComputationType
+import net.minecraft.world.phys.BlockHitResult
+import net.minecraft.world.phys.shapes.CollisionContext
+import net.minecraft.world.phys.shapes.VoxelShape
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.mod.common.executeIf
+import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
+import org.valkyrienskies.eureka.EurekaProperties.ELEVATION
+import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.eureka.crew.GunnerMounts
+import org.valkyrienskies.eureka.item.CannonballItem
+import org.valkyrienskies.eureka.cannon.CannonFire
+import org.valkyrienskies.eureka.util.DirectionalShape
+import org.valkyrienskies.eureka.util.RotShapes
+import org.valkyrienskies.mod.common.blockProps
+
+/**
+ * A ship's gun: two blocks long, laid rear-to-front like a bed.
+ *
+ * ## Why two, having started at three
+ * The footprint follows the model, and the model got shorter. It began at 44 units -- 2.75 blocks -- where
+ * two blocks would have left three quarters of a block hanging outside the gun's own footprint, at the two
+ * places that most need to be clear: ahead of the muzzle, where the shot and the gunport go, and behind the
+ * trail, where the crew stands. Three blocks was the honest answer to that.
+ *
+ * Then the wagon was pitched back 22.5 degrees and its trail shortened to suit, and the barrel trimmed to
+ * match, which brought the gun to 34 units. At that length two blocks overhang by a single unit at each end
+ * and three blocks waste six -- so guns could not sit closer than three blocks apart on a broadside, and
+ * both end blocks looked empty. Two is now the better fit in both directions.
+ *
+ * It matters more than tidiness, because a cannon is **fired by right-clicking it**. Geometry that hangs
+ * outside its own blocks is geometry you can see but not click, so a player aiming at the muzzle would punch
+ * straight through it. One unit is small enough not to matter; twelve was not.
+ *
+ * The gun is 1.31 wide and 1.375 tall whatever we do, so it overhangs sideways and upward regardless. The
+ * footprint only ever bought the length axis, which is the one that carries the interaction.
+ *
+ * ## The layout is written down once
+ * [CannonPart]'s ordinal is the offset from the rear block along [HORIZONTAL_FACING], so every position is
+ * `rear.relative(facing, part.ordinal)` and the rear is always `pos.relative(facing.opposite, part.ordinal)`.
+ * Nothing else encodes the arrangement, which is why dropping from three blocks to two changed the enum and
+ * the collision shapes and no logic at all.
+ *
+ * [HORIZONTAL_FACING] is the direction the muzzle points, which is the direction the player was looking --
+ * *not* the `.opposite` that the helm and engine use. Those two want their faces turned toward you; a gun
+ * wants to fire away from you.
+ */
+class CannonBlock : BaseEntityBlock(
+    blockProps().mapColor(MapColor.METAL)
+        .requiresCorrectToolForDrops()
+        .strength(4.0F)
+        .sound(SoundType.METAL)
+        // The model is nowhere near a full cube; without this the game culls the faces of whatever it is
+        // stood against and you see straight through the hull behind it.
+        .noOcclusion()
+) {
+
+    init {
+        registerDefaultState(
+            stateDefinition.any()
+                .setValue(HORIZONTAL_FACING, Direction.NORTH)
+                .setValue(CANNON_PART, CannonPart.REAR)
+                .setValue(ELEVATION, EurekaProperties.ELEVATION_LEVEL)
+        )
+    }
+
+    override fun createBlockStateDefinition(builder: StateDefinition.Builder<Block, BlockState>) {
+        builder.add(HORIZONTAL_FACING).add(CANNON_PART).add(ELEVATION)
+    }
+
+    /**
+     * Claim both blocks, or neither.
+     *
+     * Returning null refuses the placement outright, which is what leaves the item in the player's hand
+     * instead of dropping half a cannon into a space too small for it.
+     */
+    override fun getStateForPlacement(ctx: BlockPlaceContext): BlockState? {
+        val facing = ctx.horizontalDirection
+        val rear = ctx.clickedPos
+
+        for (part in CannonPart.entries) {
+            if (part == CannonPart.REAR) continue
+            val pos = rear.relative(facing, part.ordinal)
+            if (!ctx.level.getBlockState(pos).canBeReplaced(ctx)) return null
+        }
+
+        return defaultBlockState()
+            .setValue(HORIZONTAL_FACING, facing)
+            .setValue(CANNON_PART, CannonPart.REAR)
+    }
+
+    /** Vanilla places only the block that was clicked; the other half is ours to fill in. */
+    override fun setPlacedBy(level: Level, pos: BlockPos, state: BlockState, placer: LivingEntity?, stack: ItemStack) {
+        super.setPlacedBy(level, pos, state, placer, stack)
+        if (level.isClientSide) return
+
+        val facing = state.getValue(HORIZONTAL_FACING)
+        for (part in CannonPart.entries) {
+            if (part == CannonPart.REAR) continue
+            level.setBlock(
+                pos.relative(facing, part.ordinal),
+                state.setValue(CANNON_PART, part),
+                Block.UPDATE_ALL
+            )
+        }
+    }
+
+    /**
+     * Break either half and the whole gun goes.
+     *
+     * The block that was actually broken has already dropped its own loot by the time this runs, and anything
+     * we clear here goes via `setBlock` to air, which never drops. That is what makes breaking either half yield
+     * exactly one cannon -- including when the cause was an explosion or a piston rather than a player.
+     */
+    // 1.21.1: the removal hook is onRemove (fires on any replacement, both sides); the modern
+    // affectNeighborsAfterRemoval fires only on true server-side removal, so that is re-created here:
+    // same-block state changes fall through to super alone, and the body runs server-side only.
+    override fun onRemove(state: BlockState, level: Level, pos: BlockPos, newState: BlockState, isMoving: Boolean) {
+        if (state.`is`(newState.block)) {
+            super.onRemove(state, level, pos, newState, isMoving)
+            return
+        }
+        super.onRemove(state, level, pos, newState, isMoving)
+        if (level !is ServerLevel) return
+
+        // Deferred ONE TICK on 1.21.1: ship assembly and disassembly relocate a multiblock part by part
+        // through raw chunk writes, and each part's removal lands here looking exactly like a player
+        // break. Clearing the siblings immediately gutted the gun mid-relocation -- only the first-moved
+        // block of every cannon survived a disassembly. One tick later the relocation has finished: a gun
+        // that MOVED has no parts left here to clear, and one genuinely broken still does. (1.21.11
+        // needs none of this: its removal hook never fires for chunk-level writes.)
+        //
+        // Clearing the other two re-enters this method for each of them. Block instances are singletons and
+        // this only ever runs on the server thread, so a plain flag is enough to stop the recursion.
+        val server = level.server
+        val at = server.tickCount
+        server.executeIf({ server.tickCount > at }) {
+            if (dismantling) return@executeIf
+            dismantling = true
+            try {
+                dismantleSiblings(state, level, pos)
+            } finally {
+                dismantling = false
+            }
+        }
+    }
+
+    private fun dismantleSiblings(state: BlockState, level: ServerLevel, pos: BlockPos) {
+        run {
+            val facing = state.getValue(HORIZONTAL_FACING)
+            val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+
+            for (part in CannonPart.entries) {
+                val other = rear.relative(facing, part.ordinal)
+                if (other == pos) continue
+
+                // Only clear a block that is genuinely part of THIS gun. Two cannons parked nose to tail
+                // otherwise take each other with them.
+                val there = level.getBlockState(other)
+                if (there.block !== this) continue
+                if (there.getValue(CANNON_PART) != part) continue
+                if (there.getValue(HORIZONTAL_FACING) != facing) continue
+
+                // SUPPRESS_DROPS because the half that was actually broken has already dropped the gun, and
+                // KNOWN_SHAPE because this also runs during bulk work -- assembling, bottling, a ship being
+                // deleted -- where a neighbour update knocks whatever was resting against the gun loose and
+                // drops that too.
+                //
+                // ## Why UPDATE_SUPPRESS_DROPS is not enough, and the magazine duplicated for weeks
+                //
+                // 1.21.11 moved a container's "spill your contents" from the old `Block.onRemove` path -- which
+                // honoured UPDATE_SUPPRESS_DROPS -- onto `BlockEntity.preRemoveSideEffects`, and gated THAT on
+                // a different, newer flag. `LevelChunk.setBlockState` reads it as
+                // `(flags & UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS) == 0`; UPDATE_SUPPRESS_DROPS (32) is never
+                // consulted. So a suppressed removal still emptied the magazine onto the floor.
+                //
+                // It bit cannons and nothing else because a cannon is the only two-block CONTAINER here. VS2's
+                // assembler clears and removes each block entity before it takes the block, so a chest is
+                // already empty by the time vanilla could spill it -- but a gun dismantles ITSELF from whichever
+                // half the assembler reaches first, and that runs while the other half's magazine is still
+                // loaded. The powder and shot were already safe in the copy at the destination, so what landed
+                // on the ground was a duplicate of a full magazine.
+                //
+                // Skipping the side effects is right only for bulk work. A player breaking the FRONT half
+                // depends on exactly this spill to get the magazine back, since playerWillDestroy only drops
+                // from the breech. `isMoving` separates the two: it is
+                // `(flags & UPDATE_MOVE_BY_PISTON) != 0`, which every VS2 relocation sets and no player break
+                // does -- so a gun broken by hand or blown up still gives its rounds back.
+                var flags = Block.UPDATE_CLIENTS or Block.UPDATE_KNOWN_SHAPE or Block.UPDATE_SUPPRESS_DROPS
+                level.setBlock(other, Blocks.AIR.defaultBlockState(), flags)
+            }
+        }
+    }
+
+    private var dismantling = false
+
+    /**
+     * Keep the muzzle pointing where it was pointing when a ship is assembled or disassembled.
+     *
+     * The base implementation is identity, which on a three-block structure is worse than merely cosmetic:
+     * the parts are moved to their rotated positions regardless, so a stale facing leaves each third looking
+     * for its neighbours along the wrong axis and the gun falls apart the first time anything touches it.
+     */
+    override fun rotate(state: BlockState, rotation: Rotation): BlockState =
+        state.setValue(HORIZONTAL_FACING, rotation.rotate(state.getValue(HORIZONTAL_FACING)))
+
+    override fun mirror(state: BlockState, mirror: Mirror): BlockState =
+        state.rotate(mirror.getRotation(state.getValue(HORIZONTAL_FACING)))
+
+    override fun getShape(
+        state: BlockState,
+        getter: BlockGetter,
+        pos: BlockPos,
+        ctx: CollisionContext
+    ): VoxelShape = when (state.getValue(CANNON_PART)) {
+        CannonPart.REAR -> REAR_SHAPE[state.getValue(HORIZONTAL_FACING)]
+        CannonPart.FRONT -> FRONT_SHAPE[state.getValue(HORIZONTAL_FACING)]
+    }
+
+    override fun isPathfindable(state: BlockState, type: PathComputationType): Boolean = false
+
+    /** Only the breech end carries the magazine; see [CannonBlockEntity]. */
+    override fun newBlockEntity(pos: BlockPos, state: BlockState): BlockEntity? =
+        if (state.getValue(CANNON_PART) == CannonPart.REAR) CannonBlockEntity(pos, state) else null
+
+    override fun getRenderShape(state: BlockState): RenderShape = RenderShape.MODEL
+
+    /**
+     * Strike a spark on the gun and it goes off.
+     *
+     * Flint and steel fires a cannon from any stance -- no crouch, no modifier, just the tool against the gun.
+     * The crouching case cannot arrive here, because vanilla never calls a block when a crouching player has a
+     * full hand; `CannonRegistrationsFabric` catches that one and fires it identically, which also stops the
+     * flint doing what it would otherwise do and setting the gun alight.
+     */
+    // 1.21.1 returns ItemInteractionResult where the modern branch returns InteractionResult; the legacy
+    // body below is kept verbatim (computing modern-style results) and this override maps them across.
+    // TRY_WITH_EMPTY_HAND has no 1.21.1 constant -- the body returns PASS there, and PASS maps to
+    // PASS_TO_DEFAULT_BLOCK_INTERACTION, which is the same fall-through to useWithoutItem.
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): ItemInteractionResult = when (useItemOnLegacy(stack, state, level, pos, player, hand, hit)) {
+        InteractionResult.SUCCESS -> ItemInteractionResult.SUCCESS
+        InteractionResult.CONSUME -> ItemInteractionResult.CONSUME
+        InteractionResult.FAIL -> ItemInteractionResult.FAIL
+        else -> ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION
+    }
+
+    private fun useItemOnLegacy(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        // An empty hand belongs to useWithoutItem -- the magazine, or the elevation if crouching.
+        //
+        // It has to be TRY_WITH_EMPTY_HAND and not PASS. Only TRY_WITH_EMPTY_HAND continues to
+        // useWithoutItem; PASS ends the interaction there and the block is never asked again. Returning PASS
+        // here is what silently killed both empty-hand gestures at once -- a right-click on a cannon simply
+        // did nothing, with no error to show for it.
+        if (stack.isEmpty) return InteractionResult.PASS
+
+        // Powder or shot in hand loads the gun where it stands. Serving a six-gun broadside by opening six
+        // magazines was most of the work of firing one, and the gesture a gun crew actually makes is to walk
+        // the round up to the piece -- so a right-click with either is that, and the screen is left for
+        // rearranging what is already aboard.
+        if (stack.`is`(Items.GUNPOWDER) || stack.item is CannonballItem) {
+            if (level.isClientSide) return InteractionResult.SUCCESS
+
+            val facing = state.getValue(HORIZONTAL_FACING)
+            val breech = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+            val magazine = level.getBlockEntity(breech) as? CannonBlockEntity ?: return InteractionResult.PASS
+
+            val loaded = magazine.load(stack, !player.hasInfiniteMaterials())
+            if (loaded == 0) {
+                // Full, or a round of another kind already up the spout. Consumed rather than passed, so the
+                // click never falls through to placing the block against the gun.
+                return InteractionResult.CONSUME
+            }
+
+            level.playSound(
+                null, breech, SoundEvents.ARMOR_EQUIP_GENERIC.value(), SoundSource.BLOCKS, 0.6f, 1.4f
+            )
+            return InteractionResult.CONSUME
+        }
+
+        // A spawn egg on a gun, in creative, aboard an assembled ship: hatch the mob MOUNTED as this gun's
+        // crew. The authoring gesture behind every crewed hull template -- see GunnerMounts. Survival play
+        // never sees this branch (the creative check), and the claim happens before the egg's own useOn can
+        // spawn a loose mob against the barrel.
+        if (stack.item is SpawnEggItem) {
+            if (!player.hasInfiniteMaterials()) return InteractionResult.PASS
+            if (level.isClientSide) return InteractionResult.SUCCESS
+
+            val facing = state.getValue(HORIZONTAL_FACING)
+            val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+            val refusal = GunnerMounts.mountFromEgg(
+                level as ServerLevel, rear, stack.item as SpawnEggItem, stack, player as? ServerPlayer
+            )
+            refusal?.let { player.displayClientMessage(Component.literal(it), true) }
+            return InteractionResult.CONSUME
+        }
+
+        // Anything else in hand does whatever it normally does, so a block can still be placed against a gun
+        // rather than every click being swallowed by it.
+        if (!CannonFire.isIgniter(stack.item)) return InteractionResult.PASS
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        CannonFire.strike(level as ServerLevel, pos, player as? ServerPlayer, stack, hand)
+        return InteractionResult.CONSUME
+    }
+
+    /**
+     * Empty-handed: crouching lays the barrel, standing opens the magazine.
+     *
+     * Either half of the gun answers. The front block has no block entity of its own, so it walks back to the
+     * rear rather than doing nothing: a player clicking the barrel means the same gun as one clicking the
+     * trail, and a menu that opened from one end only would read as a bug every time.
+     */
+    override fun useWithoutItem(
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hit: BlockHitResult
+    ): InteractionResult {
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val facing = state.getValue(HORIZONTAL_FACING)
+        val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+
+        if (player.isSecondaryUseActive) {
+            elevate(level, rear, facing, state.getValue(ELEVATION), player)
+            return InteractionResult.CONSUME
+        }
+
+        val magazine = level.getBlockEntity(rear) as? CannonBlockEntity ?: return InteractionResult.PASS
+        player.openMenu(magazine)
+        return InteractionResult.CONSUME
+    }
+
+    /**
+     * Lay the barrel one step, wrapping from the top back to the bottom.
+     *
+     * Both halves are written, because the elevation is a fact about the gun rather than about a block and
+     * the two models have to agree -- a barrel that elevated in the front block while the breech stayed level
+     * would tear the gun in half visually.
+     */
+    /** Lay the barrel from anywhere on the gun. Public so the crouch-with-flint hook can reach it. */
+    fun elevateFrom(level: Level, clicked: BlockPos, state: BlockState, player: Player) {
+        val facing = state.getValue(HORIZONTAL_FACING)
+        val rear = clicked.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
+        elevate(level, rear, facing, state.getValue(ELEVATION), player)
+    }
+
+    private fun elevate(level: Level, rear: BlockPos, facing: Direction, from: Int, player: Player) {
+        val next = (from + 1) % (ELEVATION.possibleValues.size)
+
+        for (part in CannonPart.entries) {
+            val pos = rear.relative(facing, part.ordinal)
+            val there = level.getBlockState(pos)
+            if (there.block !== this) continue
+            // UPDATE_CLIENTS only: this is a cosmetic re-pose, and asking for neighbour updates would rattle
+            // whatever is resting against the gun every time somebody adjusted the aim.
+            level.setBlock(pos, there.setValue(ELEVATION, next), Block.UPDATE_CLIENTS)
+        }
+
+        val degrees = EurekaProperties.elevationDegrees(next).toInt()
+        player.displayClientMessage(
+            Component.translatable(
+                "info.vs_eureka.cannon_elevation",
+                if (degrees > 0) "+$degrees" else "$degrees"
+            ),
+            true
+        )
+        level.playSound(null, rear, SoundEvents.LANTERN_PLACE, SoundSource.BLOCKS, 0.7f, 1.4f)
+    }
+
+    /**
+     * A pirate's gun gives nothing.
+     *
+     * Cannons are meant to come from a raider's HOLDS -- the loot tables -- and from nowhere else, which a
+     * conquered prize with sixty guns bolted to her decks would quietly undo: mine the deck, pocket sixty
+     * cannons. So a gun stamped by [CannonBlockEntity.pirate] drops no gun and, in [playerWillDestroy]
+     * below, no magazine either. She still fires, she still repairs, she simply cannot be sold for parts.
+     *
+     * The stamp rides the block entity rather than the blockstate so it survives every relocation a hull
+     * goes through -- assembly, bottling, a template save and place -- by the same route the gun's powder
+     * and shot do.
+     */
+    override fun getDrops(state: BlockState, builder: LootParams.Builder): MutableList<ItemStack> {
+        val be = builder.getOptionalParameter(LootContextParams.BLOCK_ENTITY)
+        if ((be as? CannonBlockEntity)?.pirate == true) return mutableListOf()
+        return super.getDrops(state, builder)
+    }
+
+    /** Spill the powder and shot when the gun is broken, like any other container. */
+    override fun playerWillDestroy(level: Level, pos: BlockPos, state: BlockState, player: Player): BlockState {
+        if (!level.isClientSide && state.getValue(CANNON_PART) == CannonPart.REAR) {
+            (level.getBlockEntity(pos) as? CannonBlockEntity)?.let { gun ->
+                // A raider's magazine is scenery, not stock: clearing it here is what makes the spill on
+                // the OTHER half give nothing either, since that path reads the same container.
+                if (gun.pirate) gun.clearContent() else Containers.dropContents(level, pos, gun)
+            }
+        }
+        return super.playerWillDestroy(level, pos, state, player)
+    }
+
+    override fun codec(): MapCodec<CannonBlock> = CODEC
+
+    companion object {
+        val CODEC: MapCodec<CannonBlock> = simpleCodec { CannonBlock() }
+
+        // Authored facing NORTH and rotated by DirectionalShape, matching how the blockstate rotates the
+        // models. Each is the part's own geometry clamped into its block: the rear carries wheels, carriage
+        // and breech and is close to solid, while the front is only barrel, so there is walkable air under
+        // a run-out gun rather than an invisible wall.
+        private val REAR_SHAPE = DirectionalShape(RotShapes.box(0.0, 0.0, 0.0, 16.0, 15.0, 16.0))
+        private val FRONT_SHAPE = DirectionalShape(RotShapes.box(3.0, 6.0, 0.0, 13.0, 16.0, 16.0))
+    }
+}
