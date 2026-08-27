@@ -10,7 +10,6 @@ import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.Clearable
 import net.minecraft.world.InteractionHand
 import net.minecraft.world.entity.Entity
-import net.minecraft.world.entity.decoration.BlockAttachedEntity
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.component.CustomData
 import net.minecraft.world.level.block.Block
@@ -224,12 +223,12 @@ object ShipBottle {
             ?: "unnamed ship"
 
         val templateName = templateNameFor(UUID.randomUUID())
-        when (val outcome = ShipTemplate.capture(level, ship, templateName, keepShipName = true)) {
+        val capturedEntities = when (val outcome = ShipTemplate.capture(level, ship, templateName, keepShipName = true)) {
             is ShipTemplate.Failed -> {
                 PathMessages.send(player, outcome.message, PathMessages.Kind.ERROR)
                 return null
             }
-            is ShipTemplate.Captured -> Unit
+            is ShipTemplate.Captured -> outcome.capturedEntities
             else -> return null
         }
 
@@ -249,24 +248,18 @@ object ShipBottle {
             }
         }
 
-        // The same for anything hanging on the hull. Item frames and paintings are ENTITIES, so deleting the
-        // ship's blocks does not delete them -- it pulls the wall out from behind them, and on the next tick
-        // each one notices it has nothing to hang on, breaks, and drops itself plus whatever it held. They are
-        // already safe in the template (captureEntities takes them), so that is pure duplication: the frames
-        // come back with the ship and a copy of every one is left floating where it used to be.
+        // Everything the template just captured is still standing alive in the level: captureEntities
+        // SERIALIZES and deliberately removes nothing, because its other callers are photographing ships
+        // that keep existing. Here the original hull is about to be deleted, so every live original left
+        // behind is pure duplication -- a frame drops off the vanished wall, an armour stand plunges into
+        // the sea still wearing its armour, and each comes back out of the bottle as well. Discarding
+        // exactly what was serialized (rather than sweeping the world box) also spares a dock-side frame
+        // that hangs NEAR the hull but was never aboard, which the old sweep used to void.
         //
-        // discard() rather than kill()/remove-with-drops: the original is being replaced by the captured copy,
-        // not destroyed, so it should leave nothing behind at all.
-        ship.worldAABB.let { hull ->
-            // A little slack, because a frame hangs on the OUTSIDE face of the block it is attached to and so
-            // sits fractionally beyond the hull's own box.
-            val box = AABB(
-                hull.minX() - 1.0, hull.minY() - 1.0, hull.minZ() - 1.0,
-                hull.maxX() + 1.0, hull.maxY() + 1.0, hull.maxZ() + 1.0
-            )
-            for (hanging in level.getEntitiesOfClass(BlockAttachedEntity::class.java, box)) {
-                hanging.discard()
-            }
+        // discard() rather than kill()/remove-with-drops: the original is being replaced by the captured
+        // copy, not destroyed, so it should leave nothing behind at all.
+        for (aboard in capturedEntities) {
+            if (!aboard.isRemoved) aboard.discard()
         }
 
         // The crew go into the articles before the deck goes away, so muster can put them back on release.

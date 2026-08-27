@@ -1,5 +1,6 @@
 package org.valkyrienskies.eureka.template
 
+import com.mojang.logging.LogUtils
 import net.minecraft.core.BlockPos
 import net.minecraft.core.registries.Registries
 import net.minecraft.nbt.CompoundTag
@@ -77,6 +78,8 @@ object ShipTemplate {
      * the scan, not the ship: a long thin hull is cheap, a 200-cube is not. Matched to the same order of magnitude
      * as [org.valkyrienskies.eureka.armada.SubAir]'s fill cap for consistency.
      */
+    private val LOGGER = LogUtils.getLogger()
+
     const val MAX_CAPTURE_CELLS = 8_000_000L
 
     /** How far past a hull's world box a mounted gun crew can sit and still count as aboard. */
@@ -87,7 +90,10 @@ object ShipTemplate {
 
     sealed interface Outcome
     class Failed(val message: String) : Outcome
-    class Captured(val id: Identifier, val blocks: Int, val entities: Int, val size: BlockPos) : Outcome
+    class Captured(val id: Identifier, val blocks: Int, val capturedEntities: List<Entity>, val size: BlockPos) : Outcome {
+        /** How many entities went into the template -- the live originals themselves are [capturedEntities]. */
+        val entities: Int get() = capturedEntities.size
+    }
     class Placed(val id: Identifier, val at: BlockPos, val size: BlockPos) : Outcome
 
     /**
@@ -183,6 +189,35 @@ object ShipTemplate {
             max
         )
 
+        // Sealed-cargo check, BEFORE anything downstream trusts this record. The fill reads each block
+        // entity with level.getBlockEntity and stores nbt = null when that returns null -- which it DOES,
+        // without a whisper of an exception, for a chunk whose block entities have not finished waking
+        // (seen once: a big moored hull bottled seconds after login with the server 160+ ticks behind on
+        // the async chunk pipeline; the bottle came back hollow and the deletion spilled the real cargo
+        // into the sea). A capture is re-runnable and destroys nothing, so the safe answer to unreadable
+        // holds is to refuse the whole thing and let the captain try again in a moment.
+        run {
+            var missing = 0
+            for (palette in template.palettes) {
+                for (info in palette.blocks()) {
+                    if (!info.state.hasBlockEntity()) continue
+                    if (info.nbt == null || info.nbt!!.isEmpty) missing++
+                }
+            }
+            if (missing > 0) {
+                manager.remove(id)
+                LOGGER.warn(
+                    "Refused to capture {}: {} block-entity blocks had no data to copy " +
+                        "(chunks not fully loaded?). Nothing was taken.",
+                    id, missing
+                )
+                return Failed(
+                    " of the ship's containers could not be read -- " +
+                        "she is not fully loaded yet. Give her a moment and try again."
+                )
+            }
+        }
+
         // MUST follow the fill: vs$fillFromVoxelSet ends by clearing entityInfoList, so anything added before it
         // would be silently dropped.
         val entities = captureEntities(level, ship, template, min, max, admitRaiders)
@@ -233,6 +268,12 @@ object ShipTemplate {
      * Loose items and experience orbs are skipped too, and for a different reason: they are not part of a
      * ship, and carrying them makes a bottle a duplicator -- restored on release, then captured again by the
      * next bottling, a copy deeper every cycle.
+     *
+     * ## Serialization only
+     * Nothing here removes the live originals -- most callers are photographing a standing ship (blueprints,
+     * `/vs template save`, pirate authoring) and must leave it untouched. The returned list is exactly what
+     * went into the template, so the one caller that IS about to delete the ship (the bottle) can discard
+     * those, and only those.
      */
     private fun captureEntities(
         level: ServerLevel,
@@ -241,7 +282,7 @@ object ShipTemplate {
         min: BlockPos,
         max: BlockPos,
         admitRaiders: Boolean = false
-    ): Int {
+    ): List<Entity> {
         val box = AABB(
             min.x.toDouble(), min.y.toDouble(), min.z.toDouble(),
             (max.x + 1).toDouble(), (max.y + 1).toDouble(), (max.z + 1).toDouble()
@@ -255,7 +296,7 @@ object ShipTemplate {
                 v.y >= -1.0 && v.y <= spanY + 1.0 &&
                 v.z >= -1.0 && v.z <= spanZ + 1.0
 
-        var captured = 0
+        val captured = ArrayList<Entity>()
         val candidates = level.getEntitiesOfClass(Entity::class.java, box) {
             it !is Player &&
                 // Passengers are excluded because whatever carries them writes them into its own NBT --
@@ -384,7 +425,7 @@ object ShipTemplate {
             )
 
             template.entityInfoList.add(StructureTemplate.StructureEntityInfo(relative, anchor, tag))
-            captured++
+            captured.add(entity)
         }
         return captured
     }
