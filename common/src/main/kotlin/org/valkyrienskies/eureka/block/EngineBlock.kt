@@ -8,9 +8,11 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.util.RandomSource
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -52,6 +54,40 @@ class EngineBlock : BaseEntityBlock(
 
     override fun newBlockEntity(blockPos: BlockPos, state: BlockState): BlockEntity =
         EngineBlockEntity(blockPos, state)
+
+    /**
+     * Fuel in hand stokes the firebox where it stands, mirroring how a cannon takes its round: walking a
+     * shovel of coal up to the engine should not detour through the screen. Anything the furnace registry
+     * refuses falls through untouched, so blocks can still be placed against the engine, and the empty hand
+     * keeps opening the firebox screen below.
+     */
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        // TRY_WITH_EMPTY_HAND, not PASS -- only it continues to useWithoutItem (see CannonBlock for the
+        // full account of the trap).
+        if (stack.isEmpty) return InteractionResult.TRY_WITH_EMPTY_HAND
+
+        val engine = level.getBlockEntity(pos) as? EngineBlockEntity ?: return InteractionResult.PASS
+        if (!engine.canPlaceItem(0, stack)) return InteractionResult.PASS
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val loaded = engine.load(stack, !player.hasInfiniteMaterials())
+        if (loaded == 0) {
+            // Full, or a different fuel already in the box. Consumed rather than passed, so the click never
+            // falls through to placing the fuel block against the engine.
+            return InteractionResult.CONSUME
+        }
+
+        level.playSound(null, pos, SoundEvents.GRAVEL_PLACE, SoundSource.BLOCKS, 0.6f, 0.8f)
+        return InteractionResult.CONSUME
+    }
 
     override fun useWithoutItem(
         state: BlockState,
