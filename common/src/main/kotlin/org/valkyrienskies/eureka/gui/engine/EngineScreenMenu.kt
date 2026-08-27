@@ -24,6 +24,12 @@ class EngineScreenMenu(syncId: Int, playerInv: Inventory, val blockEntity: Engin
     var fuelLeft by data
     var fuelTotal by data
 
+    /** Mirrors `EngineBlockEntity.fittingNumber`. */
+    var fittingNumber by data
+
+    // Mirrors EngineBlockEntity.fuelBarPermille (1.21.1: the raw fuel fields overflow short-based sync).
+    var fuelBarPermille by data
+
     init {
         // Add the fuel slot
         addSlot(FuelSlot(container, 0, 80, 57))

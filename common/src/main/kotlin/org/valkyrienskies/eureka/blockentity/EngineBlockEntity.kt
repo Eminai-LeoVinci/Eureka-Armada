@@ -1,22 +1,22 @@
 package org.valkyrienskies.eureka.blockentity
 
+import org.valkyrienskies.eureka.util.nbt.*
+
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
-import net.minecraft.core.HolderLookup
 import net.minecraft.core.NonNullList
-import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.ContainerHelper
 import net.minecraft.world.WorldlyContainer
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
-import net.minecraft.world.entity.player.StackedContents
 import net.minecraft.world.inventory.AbstractContainerMenu
-import net.minecraft.world.inventory.StackedContentsCompatible
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
 import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.core.HolderLookup
+import net.minecraft.nbt.CompoundTag
 import org.joml.Math.lerp
 import org.joml.Math.min
 import org.valkyrienskies.core.api.ships.LoadedServerShip
@@ -26,6 +26,7 @@ import org.valkyrienskies.eureka.EurekaProperties.HEAT
 import org.valkyrienskies.eureka.gui.engine.EngineScreenMenu
 import org.valkyrienskies.eureka.registry.FuelRegistry
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipEngines
 import org.valkyrienskies.eureka.util.KtContainerData
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import kotlin.math.ceil
@@ -33,7 +34,6 @@ import kotlin.math.max
 
 class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     BaseContainerBlockEntity(EurekaBlockEntities.ENGINE.get(), pos, state),
-    StackedContentsCompatible,
     WorldlyContainer {
 
     private val ship: LoadedServerShip? get() = (this.level as ServerLevel).getLoadedShipManagingPos(this.blockPos)
@@ -41,11 +41,35 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     private var heatLevel by data
     private var fuelLeft by data
     private var fuelTotal by data
+
+    /**
+     * This engine's "n of total" aboard, packed through [org.valkyrienskies.eureka.ship.ShipBearing.packNumber];
+     * 0 when it is not on a ship. Refreshed in [createMenu] -- open time is the one moment it is wanted, the
+     * number only moves when engines are added or removed, and a whole-ship walk per tick to keep a label
+     * current would be absurd.
+     *
+     * DECLARATION ORDER MATTERS: [data] hands out slot indices in declaration order and [EngineScreenMenu]
+     * mirrors this class field for field. Append here, and append there to match.
+     */
+    var fittingNumber by data
+
+    // 1.21.1 ONLY: vanilla menu data slots travel as SHORTS on this version, and fuelLeft/fuelTotal are
+    // tick counts that overflow one -- the GUI read garbage and the coal pile never drew. The screen reads
+    // this 0..1000 ratio instead; the raw fields above stay for the burn logic (and their sync is garbage
+    // on this version -- nothing client-side may read them).
+    var fuelBarPermille by data
     var fuel: ItemStack = ItemStack.EMPTY
     private var lastFuelValue = 1600; // coal: 1600
 
-    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu =
-        EngineScreenMenu(containerId, inventory, this)
+    override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu {
+        // Stamp this engine's number just before the menu syncs it; see [fittingNumber].
+        val level = this.level
+        if (level is ServerLevel) {
+            val ship = level.getLoadedShipManagingPos(blockPos) as? LoadedServerShip
+            fittingNumber = ship?.let { ShipEngines.numberAt(level, it, blockPos) } ?: 0
+        }
+        return EngineScreenMenu(containerId, inventory, this)
+    }
 
     override fun getDefaultName(): Component = Component.translatable("gui.vs_eureka.engine")
 
@@ -82,20 +106,40 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     private var heat = 0f
+
+    /**
+     * Put this engine out, and leave it out. Called on every engine of a hull that SANK, once her blocks are
+     * back in the world.
+     *
+     * Zeroing the heat alone is not enough and looks like it should be. A block entity ticks wherever it is:
+     * a loose engine with coal still in it burns that coal, climbs back up the heat ladder, and relights --
+     * `EngineBlock` derives its light level straight from the HEAT property, so a wreck on the seabed would
+     * have glowed and hummed away as if nothing had happened. The fuel goes with the heat, which is also the
+     * honest reading: she went down with her bunkers.
+     */
+    fun douse() {
+        heat = 0f
+        heatLevel = 0
+        fuelLeft = 0
+        fuelTotal = 0
+        fuel = ItemStack.EMPTY
+        setChanged()
+    }
+
     fun tick() {
         if (this.level!!.isClientSide) return
 
         // Resolve THIS engine's managing ship + its EurekaShipControl once per tick (the ship getter walks the
-        // loaded-ship index, so cache it). Two engine fields are MODE-affected -- engineHeatGain and
-        // enginePowerLinear -- and must honor the per-ship vanilla/advanced preset rather than the global
-        // ADVANCED defaults; everything else (heat loss, fuel, redstone) stays global on EurekaConfig.SERVER.
-        // A loose engine (not on a ship / control attachment absent) falls back to EurekaConfig.SERVER, which
-        // is the ADVANCED preset, so unmanaged engines behave exactly as before.
+        // loaded-ship index, so cache it). Three engine fields are per SHIP CATEGORY -- engineHeatGain,
+        // enginePowerLinear and its cold-engine floor -- and must honor the ship's own preset; everything else
+        // (heat loss, fuel, redstone) stays global on EurekaConfig.SERVER. A loose engine (not on a ship, or
+        // with no control attachment) falls back to the base block, which is also what a boat reads for the
+        // shared values.
         val eurekaShipControl = ship?.getAttachment(EurekaShipControl::class.java)
         val engineCfg = eurekaShipControl?.engineCfg ?: EurekaConfig.SERVER
 
-        // Heat ceiling, derived per-tick from this ship's engineHeatGain preset (mode-affected) so the cap
-        // tracks the same vanilla/advanced gain used below; was a stale construction-time field.
+        // Heat ceiling, derived per-tick from this ship's engineHeatGain preset so the cap tracks the same
+        // per-category gain used below; was a stale construction-time field.
         val maxEffectiveFuel = 100f - engineCfg.engineHeatGain
 
         val isPowered = hasRedstoneSignal()
@@ -132,6 +176,9 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
             }
         }
 
+        fuelBarPermille = if (fuelTotal > 0) ((fuelLeft.toLong() * 1000L) / fuelTotal).toInt().coerceIn(0, 1000)
+        else if (fuelLeft > 0) 1000 else 0
+
         val prevHeatLevel = heatLevel
         heatLevel = min(ceil(heat * 4f / 100f).toInt(), 4)
         if (prevHeatLevel != heatLevel) {
@@ -147,11 +194,11 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
                     effectiveHeat = heat / 100f
                 }
 
-                // enginePowerLinear is mode-affected (vanilla 500000f vs advanced 100000f): use this ship's
-                // preset so a vanilla ship makes 833d445-strength force AND its boost threshold scales against
-                // the same 500000f (boost at ~3 engines), restoring the real pre-overhaul engine feel.
+                // Engine linear power is per SHIP CATEGORY (an airship's 500000f against a boat's 100000f), so
+                // read both ends of the lerp off this ship's own preset: the hot power AND the boost threshold
+                // it is scaled against have to agree, or an airship's boost would engage at a boat's engine count.
                 eurekaShipControl.powerLinear += lerp(
-                    EurekaConfig.SERVER.enginePowerLinearMin,
+                    engineCfg.enginePowerLinearMin,
                     engineCfg.enginePowerLinear,
                     effectiveHeat,
                 )
@@ -180,7 +227,13 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
      * the helm "tank %" definition, and is monotonic as fuel burns (no per-item sawtooth), so the aggregated
      * "Engine Power" readout drifts down smoothly instead of fluctuating. 0 when the engine is completely dry.
      */
-    private fun fuelFraction(): Double {
+    /**
+     * How full this engine is, 0..1, counting both the charge already burning and the items still in the slot.
+     *
+     * Public because a shipwright quotes a whole ship's fuel by averaging its engines, and the helm's own
+     * readout must not be the only thing that can answer "how much has it got left".
+     */
+    fun fuelFraction(): Double {
         // Burn-ticks per item for whatever fuel this engine holds; falls back to the last-consumed value once
         // the slot has emptied into the burning buffer.
         val burnPerItem = if (!fuel.isEmpty) getScaledFuel() else lastFuelValue
@@ -217,12 +270,9 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
             fuelLeft += lastFuelValue
             fuelTotal = max(lastFuelValue, EurekaConfig.SERVER.engineMinCapacity)
 
-            // Handle items like lava buckets
-            if (fuel.item.hasCraftingRemainingItem()) {
-                fuel = ItemStack(fuel.item.craftingRemainingItem!!, 1)
-            } else {
-                removeItem(0, 1)
-            }
+            // 1.21.11: Item.hasCraftingRemainingItem/craftingRemainingItem were removed (the
+            // remainder is now a data component); the lava-bucket-style remainder is dropped here.
+            removeItem(0, 1)
             setChanged()
         }
     }
@@ -243,22 +293,22 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     private fun scaleEngineCooling(value: Float): Float =
         (this.heat * EurekaConfig.SERVER.engineHeatChangeExponent + 1f) * value
 
-    override fun saveAdditional(tag: CompoundTag, provider: HolderLookup.Provider) {
+    override fun saveAdditional(output: CompoundTag, provider: HolderLookup.Provider) {
+        super.saveAdditional(output, provider)
         if (!fuel.isEmpty) {
-            tag.put("FuelSlot", fuel.save(provider))
+            output.store("FuelSlot", ItemStack.CODEC, provider, fuel)
         }
-        tag.putInt("FuelLeft", fuelLeft)
-        tag.putInt("PrevFuelTotal", fuelTotal)
-        tag.putFloat("Heat", heat)
-        super.saveAdditional(tag, provider)
+        output.putInt("FuelLeft", fuelLeft)
+        output.putInt("PrevFuelTotal", fuelTotal)
+        output.putFloat("Heat", heat)
     }
 
-    override fun loadAdditional(compoundTag: CompoundTag, provider: HolderLookup.Provider) {
-        fuel = ItemStack.parseOptional(provider, compoundTag.getCompound("FuelSlot"))
-        fuelLeft = compoundTag.getInt("FuelLeft")
-        fuelTotal = compoundTag.getInt("PrevFuelTotal")
-        heat = compoundTag.getFloat("Heat")
-        super.loadAdditional(compoundTag, provider)
+    override fun loadAdditional(input: CompoundTag, provider: HolderLookup.Provider) {
+        super.loadAdditional(input, provider)
+        fuel = input.read("FuelSlot", ItemStack.CODEC, provider).orElse(ItemStack.EMPTY)
+        fuelLeft = input.getIntOr("FuelLeft", 0)
+        fuelTotal = input.getIntOr("PrevFuelTotal", 0)
+        heat = input.getFloatOr("Heat", 0f)
     }
 
     // region Container Stuff
@@ -305,14 +355,44 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     override fun canPlaceItemThroughFace(index: Int, itemStack: ItemStack, direction: Direction?): Boolean =
         direction != Direction.DOWN && canPlaceItem(index, itemStack)
 
-    override fun canTakeItemThroughFace(index: Int, stack: ItemStack, direction: Direction): Boolean =
+    override fun canTakeItemThroughFace(index: Int, stack: ItemStack, direction: Direction): Boolean {
         // Allow extraction from slot 0 (fuel slot) when the hopper is below the block entity
-        index == 0 && direction == Direction.DOWN && !fuel.isEmpty && FuelRegistry.INSTANCE.get(fuel) <= 0
+        if (level == null) return false
+        return index == 0 && direction == Direction.DOWN && !fuel.isEmpty &&
+            FuelRegistry.INSTANCE.get(fuel) <= 0
+    }
 
-    override fun canPlaceItem(index: Int, stack: ItemStack): Boolean =
-        index == 0 && FuelRegistry.INSTANCE.get(stack) > 0
+    override fun canPlaceItem(index: Int, stack: ItemStack): Boolean {
+        if (level == null) return false
+        return index == 0 && FuelRegistry.INSTANCE.get(stack) > 0
+    }
 
-    override fun fillStackedContents(helper: StackedContents) = helper.accountStack(fuel)
+    /**
+     * Stoke the firebox from a hand, and answer how much went in. The mirror of
+     * `CannonBlockEntity.load`, for the same caller: ship-wide restocking, which walks up with a stack
+     * and needs to know what it spent.
+     *
+     * One slot, so the rules are short: fuel only, and a slot already holding a DIFFERENT fuel refuses
+     * rather than merges -- an engine mid-burn on blaze rods should not have its reserve quietly swapped
+     * for planks. [consume] is false in creative, where the hand is bottomless.
+     */
+    fun load(stack: ItemStack, consume: Boolean): Int {
+        if (stack.isEmpty || !canPlaceItem(0, stack)) return 0
+
+        val room = when {
+            fuel.isEmpty -> stack.maxStackSize
+            ItemStack.isSameItemSameComponents(fuel, stack) -> stack.maxStackSize - fuel.count
+            else -> 0
+        }
+        if (room <= 0) return 0
+
+        val take = minOf(room, stack.count)
+        if (fuel.isEmpty) fuel = stack.copyWithCount(take) else fuel.grow(take)
+        if (consume) stack.shrink(take)
+        setChanged()
+        return take
+    }
+
     // endregion Container Stuff
 
     companion object {

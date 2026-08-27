@@ -7,32 +7,35 @@ import net.minecraft.network.chat.Component
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.world.entity.player.Inventory
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.ship.ShipBearing
 
 class EngineScreen(handler: EngineScreenMenu, playerInventory: Inventory, text: Component) :
     AbstractContainerScreen<EngineScreenMenu>(handler, playerInventory, text) {
 
     override fun renderBg(guiGraphics: GuiGraphics, partialTicks: Float, mouseX: Int, mouseY: Int) {
-        val xP = (width - imageWidth) / 2
-        val yP = (height - imageHeight) / 2
-
         // The layers below are stacked, and the two glass ones are translucent -- 35% alpha -- so they are
         // meant to TINT the coals behind them, not replace them. position_tex discards only a fully
         // transparent texel and writes everything else as-is, which leaves the tint entirely dependent on
-        // the blend state we happen to inherit. That state is no longer ours to assume: 1.21 moved the
-        // renderBg call out of render() and into renderBackground(), a different point in the frame. With
-        // blending off the glass paints flat over the fire hole and hides the coals and the container
-        // completely, while the fully transparent parts -- the panel's window, the notch over the fuel
-        // slot -- still come out right, because those are discarded rather than blended. Set it here.
+        // the blend state we happen to inherit. With blending off the glass paints flat over the fire hole
+        // and hides the coals and the container completely, while the fully transparent parts -- the
+        // panel's window, the notch over the fuel slot -- still come out right, because those are
+        // discarded rather than blended. Set it here. (1.21.11's GUI_TEXTURED pipeline owns its blend
+        // state, which is why the armada original has no such block.)
         RenderSystem.enableBlend()
         RenderSystem.defaultBlendFunc()
         // Likewise don't inherit a tint from whatever drew last; the layers want the texture's own colours.
         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f)
 
+        val xP = (width - imageWidth) / 2
+        val yP = (height - imageHeight) / 2
+
         // Every coordinate below is in the atlas's OWN 512x512 pixel space and draws 1:1 on screen.
         // The original path instead let blit assume Minecraft's classic 256x256 atlas and cancelled the
-        // resulting error with a 2x pose scale, which leaned on an implicit default.
+        // resulting error with a 2x pose scale -- it leaned on an implicit default, and it did not
+        // survive the jump to a render layer where the pose is no longer a 3D PoseStack.
         fun layer(x: Int, y: Int, u: Int, v: Int, w: Int, h: Int) = guiGraphics.blit(
-            TEXTURE, xP + x, yP + y, u.toFloat(), v.toFloat(), w, h, TEXTURE_SIZE, TEXTURE_SIZE
+            TEXTURE, xP + x, yP + y,
+            u.toFloat(), v.toFloat(), w, h, TEXTURE_SIZE, TEXTURE_SIZE
         )
 
         // Container behind the coals, in its heated variant once the engine is properly lit.
@@ -45,15 +48,12 @@ class EngineScreen(handler: EngineScreenMenu, playerInventory: Inventory, text: 
 
         // region COALS
         // Four stacked coal layers that sink as the charge burns down.
-        if (menu.fuelLeft != 0) {
-            // fuelTotal is 0 for the frame before the menu's synced data first arrives, and stays 0 on an
-            // engine whose in-progress burn was saved before the field existed. Treat that as a full
-            // charge instead of dividing by it: the old expression yielded -Infinity, which truncated to
-            // Int.MIN_VALUE and threw the whole pile off-screen -- in game, "the coals never render".
-            val burnt = if (menu.fuelTotal > 0)
-                1f - (menu.fuelLeft.toFloat() / menu.fuelTotal.toFloat()).coerceIn(0f, 1f)
-            else
-                0f
+        //
+        // Read off fuelBarPermille, NOT fuelLeft/fuelTotal: on 1.21.1 menu data slots travel as SHORTS,
+        // and the raw fields are tick counts that overflow one -- they arrive as garbage here. The ratio
+        // fits a short with room to spare.
+        if (menu.fuelBarPermille != 0) {
+            val burnt = 1f - (menu.fuelBarPermille.toFloat() / 1000f).coerceIn(0f, 1f)
             val t = burnt * COAL_MULTI_MAX
 
             fun coal(u: Int, v: Int, heightC: Int, mult: Float) = layer(
@@ -80,11 +80,31 @@ class EngineScreen(handler: EngineScreenMenu, playerInventory: Inventory, text: 
         layer(0, 0, 0, 0, imageWidth, imageHeight)
     }
 
+    /**
+     * The engine's number, and nothing else.
+     *
+     * `super` is deliberately not called: the vanilla labels are the container name and "Inventory", and this
+     * screen's art has no room reserved for either. What a captain actually needs here is which of their
+     * engines this one is -- an engine room is a wall of identical fireboxes, and "Engine: 14/35" is the
+     * difference between reporting a cold engine and reporting THAT cold engine.
+     *
+     * Drawn only when the engine is aboard a ship; a firebox on land is not one of anything.
+     */
     override fun renderLabels(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int) {
-        // super.renderLabels(poseStack, mouseX, mouseY)
+        val number = ShipBearing.unpackNumber(menu.fittingNumber) ?: return
+        guiGraphics.drawString(font, "Engine: $number", NUMBER_X, NUMBER_Y, NUMBER_COLOUR, false)
     }
 
-    companion object { // TEXTURE DATA -- all in the atlas's own 512x512 pixel space
+    companion object {
+        // Top-left of the panel, clear of the fire hole and the fuel slot.
+        private const val NUMBER_X = 8
+        private const val NUMBER_Y = 6
+        // 0xFF..., NOT the bare 0x404040 that vanilla's own label calls use. GuiGraphics honours the alpha
+        // byte, so a colour written without one is fully TRANSPARENT -- the text draws, occupies its space,
+        // and is simply never seen. Every colour constant in this mod carries its alpha for this reason.
+        private const val NUMBER_COLOUR = 0xFF404040.toInt()
+
+        // TEXTURE DATA -- all in the atlas's own 512x512 pixel space
         internal val TEXTURE = ResourceLocation.fromNamespaceAndPath(EurekaMod.MOD_ID, "textures/gui/engine.png")
 
         private const val TEXTURE_SIZE = 512
