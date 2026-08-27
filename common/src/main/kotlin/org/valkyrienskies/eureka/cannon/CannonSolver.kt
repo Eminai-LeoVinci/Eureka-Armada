@@ -31,7 +31,7 @@ import kotlin.math.sqrt
  *
  * Fix the flight time N and both invert exactly: `v_h = R/S_N`, `v_y = (H + sink_N)/S_N`. There is no
  * closed form over CONTINUOUS N (it lands in Lambert-W territory), but N is an integer at most
- * [MAX_FLIGHT_TICKS] -- so the solver sweeps N ascending and takes the FIRST time whose demanded speed
+ * the flight-tick bound -- so the solver sweeps N ascending and takes the FIRST time whose demanded speed
  * and pitch are within the gun's limits. First accepted = least flight time = flattest arc, which is
  * also the arc least upset by both hulls bobbing during the second the ball is in the air.
  *
@@ -124,7 +124,7 @@ object CannonSolver {
      */
     fun solve(drag: Double, gravity: Double, horizontal: Double, vertical: Double, maxSpeed: Double): Solution? {
         if (horizontal < MIN_RANGE || maxSpeed <= 0.0) return null
-        for (n in 1..MAX_FLIGHT_TICKS) {
+        for (n in 1..flightTickBound()) {
             val sn: Double
             val sink: Double
             if (abs(1.0 - drag) < 1.0e-9) {
@@ -204,6 +204,11 @@ object CannonSolver {
     /** The mount's mechanical limit, same as the player's elevation range. */
     private const val MAX_PITCH_DEGREES = 45.0
 
-    /** Matches [CannonShot]'s lifetime cap: an arc longer than the ball lives is not a solution. */
-    private const val MAX_FLIGHT_TICKS = 200
+    /**
+     * The sweep bound: an arc longer than the ball lives ([CannonShot.flightCapTicks]) is not a solution,
+     * and MAX_SOLVER_TICKS keeps one AI shot from sweeping an hour-long cap one tick at a time -- crews
+     * simply refuse arcs past ten seconds, where a hand-laid gun may fly them.
+     */
+    private fun flightTickBound(): Int = minOf(MAX_SOLVER_TICKS.toLong(), CannonShot.flightCapTicks()).toInt()
+    private const val MAX_SOLVER_TICKS = 200
 }

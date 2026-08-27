@@ -9,6 +9,7 @@ import net.minecraft.network.syncher.EntityDataAccessor
 import net.minecraft.network.syncher.EntityDataSerializers
 import net.minecraft.network.syncher.SynchedEntityData
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.server.level.TicketType
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.world.damagesource.DamageSource
@@ -16,6 +17,7 @@ import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.projectile.ItemSupplier
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.ClipContext
 import net.minecraft.world.level.Level
 import net.minecraft.world.phys.AABB
@@ -52,6 +54,15 @@ import org.valkyrienskies.eureka.item.CannonballItem
  */
 class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, level), ItemSupplier {
 
+    init {
+        // Culling is the client's business and the shot's enemy: Sodium culls entities by the render
+        // SECTION they stand in, and a shot past the loaded-chunk line stands in no section at all --
+        // tracked by the server (MixinCannonShotTracking) yet skipped by the renderer. noCulling skips
+        // section and frustum culling both; the distance gate stays shouldRenderAtSqrDistance, so the
+        // player's /vs cannonball-render-distance knob still rules the draw.
+        noCulling = true
+    }
+
     /**
      * What this round is and what is packed behind it. Only meaningful on the server; the client just needs
      * the sprite, and the sprite it gets is the **plain** ball of that metal -- a charge is a thing inside
@@ -66,6 +77,9 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * already outlived anything this would protect.
      */
     var firedBy: Entity? = null
+
+    /** The last chunk this shot bought a simulation ticket for -- see the ticket block in [tick]. */
+    private var lastTicketChunk = Long.MIN_VALUE
 
     /**
      * The blocks of the gun that fired this, which the shot passes straight through.
@@ -157,6 +171,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
     override fun defineSynchedData(builder: SynchedEntityData.Builder) {
         builder.define(SHOWN, ItemStack.EMPTY)
         builder.define(POWDER, PowderCharge.SINGLE.ordinal)
+        builder.define(GRAVITY, PowderCharge.SINGLE.gravity.toFloat())
+        builder.define(DRAG, PowderCharge.SINGLE.drag.toFloat())
     }
 
     override fun getItem(): ItemStack = entityData.get(SHOWN)
@@ -165,10 +181,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * How much powder threw this, which is what decides its whole arc.
      *
      * **Synced, and it has to be.** The client integrates the flight itself rather than being told where the
-     * ball is (see [tick]), so it needs the same gravity and drag the server is using. Muzzle velocity does
-     * not need syncing -- it is spent once and rides along inside the spawn packet's velocity -- but gravity
-     * and drag are read every tick on both sides, and a client applying the 1x pair to a 3x shot would draw
-     * the ball drifting off a path the server never flew it down.
+     * ball is (see [tick]). Muzzle velocity does not need syncing -- it is spent once and rides along inside
+     * the spawn packet's velocity -- and gravity and drag now ride their own [GRAVITY]/[DRAG] values, frozen
+     * at launch, so a live /armada retune or a guest's stale local file cannot bend an arc mid-flight. The
+     * ordinal still syncs for everything else that reads the measure off the shot.
      */
     val charge: PowderCharge get() = PowderCharge.of(entityData.get(POWDER))
 
@@ -189,6 +205,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         this.impactsLeft = load.impacts
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         entityData.set(POWDER, charge.ordinal)
+        // Frozen at launch: an /armada gravity change mid-flight must not bend an arc already flying, and a
+        // guest client's local config must not disagree with the number the server integrates. See GRAVITY.
+        entityData.set(GRAVITY, charge.gravity.toFloat())
+        entityData.set(DRAG, charge.drag.toFloat())
         setPos(from.x, from.y, from.z)
         // The override is the AI's solved muzzle speed -- spent once, right here, so it needs no syncing
         // and no persistence: the client reads the resulting velocity off the spawn packet like any other,
@@ -221,16 +241,30 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // the shot on impact and the client simply stops seeing it.
         if (level().isClientSide) {
             setPos(to.x, to.y, to.z)
-            val charge = this.charge
-            deltaMovement = deltaMovement.scale(charge.drag)
-                .subtract(0.0, charge.gravity, 0.0)
+            deltaMovement = deltaMovement.scale(entityData.get(DRAG).toDouble())
+                .subtract(0.0, entityData.get(GRAVITY).toDouble(), 0.0)
             smoke()
             return
         }
 
-        if (age++ > MAX_TICKS) {
+        if (age++ > flightCapTicks()) {
             discard()
             return
+        }
+
+        // The ender-pearl treatment: a shot that outruns the loaded area must keep flying, not hang
+        // frozen at the simulation edge until somebody wanders close and the impact lands minutes late
+        // (1.21.2+ pearls got exactly this from vanilla; 1.21.1 predates it, so the shot buys its own).
+        // A short self-expiring ticket rides the shot chunk to chunk -- radius 3 keeps the next chunk
+        // already simulating when a fast ball crosses -- and expiry IS the cleanup, so a shot that dies
+        // anywhere, anyhow, leaks nothing. Rearmed on a timer too, for a slow lob hanging in one chunk.
+        if (EurekaConfig.SERVER.cannonballChunkLoading) {
+            val chunk = chunkPosition()
+            val key = ChunkPos.asLong(chunk.x, chunk.z)
+            if (key != lastTicketChunk || age % 40 == 0) {
+                lastTicketChunk = key
+                (level() as? ServerLevel)?.chunkSource?.addRegionTicket(CHUNK_TICKET, chunk, 3, chunk)
+            }
         }
 
         // Entities first: a round that punches through a crew to hit the hull behind them is not a
@@ -273,9 +307,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         }
 
         setPos(to.x, to.y, to.z)
-        val charge = this.charge
-        deltaMovement = deltaMovement.scale(charge.drag)
-            .subtract(0.0, charge.gravity, 0.0)
+        deltaMovement = deltaMovement.scale(entityData.get(DRAG).toDouble())
+            .subtract(0.0, entityData.get(GRAVITY).toDouble(), 0.0)
         smoke()
     }
 
@@ -402,6 +435,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             CannonCharge.entries.getOrNull(input.getIntOr("Charge", 0)) ?: CannonCharge.PLAIN
         )
         entityData.set(POWDER, input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal))
+        // Not saved: a reloaded shot re-arms against the charge's CURRENT config numbers, matching how the
+        // rest of this method re-reads the world it wakes into.
+        entityData.set(GRAVITY, charge.gravity.toFloat())
+        entityData.set(DRAG, charge.drag.toFloat())
         entityData.set(SHOWN, input.read("Shown", ItemStack.CODEC, registryAccess()).orElse(ItemStack.EMPTY))
         // After load, which sets what "all of them" means for this round.
         impactsLeft = input.getIntOr("ImpactsLeft", load.impacts)
@@ -430,11 +467,36 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         private val POWDER: EntityDataAccessor<Int> =
             SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.INT)
 
+        /**
+         * The gravity and drag this shot flies under, in blocks/tick^2 and fraction-kept-per-tick, FROZEN at
+         * launch. Synced as their own values rather than derived from [POWDER], because the config numbers
+         * behind a powder charge can change mid-flight now (/armada cannons gravity ...) and can differ
+         * between a guest client's local file and the server's -- either would bend the client's
+         * self-integrated arc off the path the server actually flies.
+         */
+        private val GRAVITY: EntityDataAccessor<Float> =
+            SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.FLOAT)
+        private val DRAG: EntityDataAccessor<Float> =
+            SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.FLOAT)
+
         // Speed, gravity and drag live on EurekaConfig.SERVER, cut three ways by powder charge, so an arc can
-        // be dialled in against a real ship with a /reload rather than a rebuild. Only the lifetime cap stays
-        // here -- it is a safety net rather than a tuning knob, and a config value that could strand shots in
-        // the sky forever is not one worth exposing.
-        private const val MAX_TICKS = 200
+        // be dialled in against a real ship with a /reload rather than a rebuild. The lifetime cap used to be
+        // a hard 200 ticks on the old "not worth exposing" reasoning -- reversed once /armada cannons could
+        // retune gravity live: a slow low-gravity lob needs more sky than ten seconds, and stranded shots are
+        // now the operator's own rope. CannonSolver clamps its sweep to min(200, this) so the AI never plans
+        // past what a ball lives -- or burns a frame sweeping an hour-long arc.
+        /** The flight-time cap in ticks, from config; floored at one tick. Shared with [CannonSolver]. */
+        internal fun flightCapTicks(): Long =
+            (EurekaConfig.SERVER.cannonShotMaxFlightSeconds * 20.0).toLong().coerceAtLeast(1L)
+
+        /**
+         * Keeps a flying shot's chunks loaded and simulating without a player nearby -- what 1.21.2+
+         * gives ender pearls from vanilla, hand-rolled here because 1.21.1 predates it. Self-expiring
+         * (60 ticks, re-bought in flight) rather than managed, so no cleanup path can be forgotten; not
+         * persistent, so a saved world starts clean and the first server tick buys fresh tickets.
+         */
+        private val CHUNK_TICKET: TicketType<ChunkPos> =
+            TicketType.create("vs_eureka:cannonball", Comparator.comparingLong(ChunkPos::toLong), 60)
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
         private const val BURST_SPREAD = 2.0
