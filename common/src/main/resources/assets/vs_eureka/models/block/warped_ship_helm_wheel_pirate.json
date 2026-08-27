@@ -1,0 +1,11 @@
+{
+    "parent": "vs_eureka:block/template_ship_helm_wheel",
+    "textures": {
+        "log": "block/warped_stem",
+        "log_top": "block/warped_stem_top",
+        "planks": "block/warped_planks",
+        "iron_block": "block/iron_block",
+        "particle": "block/warped_planks",
+        "gold_block": "block/black_concrete_powder"
+    }
+}

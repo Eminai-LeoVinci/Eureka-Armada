@@ -1,31 +1,76 @@
 {
   "variants": {
-    "": {
+    "wood=oak,mark=normal": {
       "model": "vs_eureka:block/oak_ship_helm_wheel"
     },
-    "wood=oak": {
-      "model": "vs_eureka:block/oak_ship_helm_wheel"
+    "wood=oak,mark=pirate": {
+      "model": "vs_eureka:block/oak_ship_helm_wheel_pirate"
     },
-    "wood=acacia": {
+    "wood=oak,mark=taken": {
+      "model": "vs_eureka:block/oak_ship_helm_wheel_taken"
+    },
+    "wood=acacia,mark=normal": {
       "model": "vs_eureka:block/acacia_ship_helm_wheel"
     },
-    "wood=birch": {
+    "wood=acacia,mark=pirate": {
+      "model": "vs_eureka:block/acacia_ship_helm_wheel_pirate"
+    },
+    "wood=acacia,mark=taken": {
+      "model": "vs_eureka:block/acacia_ship_helm_wheel_taken"
+    },
+    "wood=birch,mark=normal": {
       "model": "vs_eureka:block/birch_ship_helm_wheel"
     },
-    "wood=crimson": {
+    "wood=birch,mark=pirate": {
+      "model": "vs_eureka:block/birch_ship_helm_wheel_pirate"
+    },
+    "wood=birch,mark=taken": {
+      "model": "vs_eureka:block/birch_ship_helm_wheel_taken"
+    },
+    "wood=crimson,mark=normal": {
       "model": "vs_eureka:block/crimson_ship_helm_wheel"
     },
-    "wood=dark_oak": {
+    "wood=crimson,mark=pirate": {
+      "model": "vs_eureka:block/crimson_ship_helm_wheel_pirate"
+    },
+    "wood=crimson,mark=taken": {
+      "model": "vs_eureka:block/crimson_ship_helm_wheel_taken"
+    },
+    "wood=dark_oak,mark=normal": {
       "model": "vs_eureka:block/dark_oak_ship_helm_wheel"
     },
-    "wood=jungle": {
+    "wood=dark_oak,mark=pirate": {
+      "model": "vs_eureka:block/dark_oak_ship_helm_wheel_pirate"
+    },
+    "wood=dark_oak,mark=taken": {
+      "model": "vs_eureka:block/dark_oak_ship_helm_wheel_taken"
+    },
+    "wood=jungle,mark=normal": {
       "model": "vs_eureka:block/jungle_ship_helm_wheel"
     },
-    "wood=spruce": {
+    "wood=jungle,mark=pirate": {
+      "model": "vs_eureka:block/jungle_ship_helm_wheel_pirate"
+    },
+    "wood=jungle,mark=taken": {
+      "model": "vs_eureka:block/jungle_ship_helm_wheel_taken"
+    },
+    "wood=spruce,mark=normal": {
       "model": "vs_eureka:block/spruce_ship_helm_wheel"
     },
-    "wood=warped": {
+    "wood=spruce,mark=pirate": {
+      "model": "vs_eureka:block/spruce_ship_helm_wheel_pirate"
+    },
+    "wood=spruce,mark=taken": {
+      "model": "vs_eureka:block/spruce_ship_helm_wheel_taken"
+    },
+    "wood=warped,mark=normal": {
       "model": "vs_eureka:block/warped_ship_helm_wheel"
+    },
+    "wood=warped,mark=pirate": {
+      "model": "vs_eureka:block/warped_ship_helm_wheel_pirate"
+    },
+    "wood=warped,mark=taken": {
+      "model": "vs_eureka:block/warped_ship_helm_wheel_taken"
     }
   }
 }
