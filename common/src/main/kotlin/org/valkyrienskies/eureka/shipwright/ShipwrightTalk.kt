@@ -804,7 +804,9 @@ object ShipwrightTalk {
             "Room for another set of plans -- ${ledger.libraryOf(player.uuid).slots} in all.",
             PathMessages.Kind.GOOD, PathMessages.Topic.SHIPWRIGHT_PLANS
         )
-        openShelf(level, player, villager)
+        // Deliberately NOT openShelf: an offering is a gesture, not a visit. The chat line and the conduit
+        // chime already say it worked, and the screen popping over the player's view every time they feed
+        // the shipwright a heart read as a misclick.
     }
 
     /**
