@@ -15,6 +15,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
 import net.minecraft.client.renderer.entity.EntityRenderers;
@@ -35,6 +36,7 @@ import org.valkyrienskies.eureka.armada.ArmadaCommand;
 import org.valkyrienskies.eureka.blockentity.renderer.CannonBlockEntityRenderer;
 import org.valkyrienskies.eureka.blockentity.renderer.ShipHelmBlockEntityRenderer;
 import org.valkyrienskies.eureka.blueprint.BlueprintPages;
+import org.valkyrienskies.eureka.cannon.CannonShot;
 import org.valkyrienskies.eureka.crew.CrewDuties;
 import org.valkyrienskies.eureka.crew.FireAtWill;
 import org.valkyrienskies.eureka.crew.FireBrigade;
@@ -292,6 +294,27 @@ public class EurekaModFabric implements ModInitializer {
                 EurekaEntities.INSTANCE.getCANNON_SHOT().get(),
                 ThrownItemRenderer::new
             );
+
+            // A shot past the loaded-chunk line stops being ticked by the client, but keeps receiving
+            // the server's per-tick positions -- and the renderer draws every entity lerped from the
+            // xo/yo/zo anchors, which only setOldPosAndRot() advances and only ticking calls. Frozen
+            // anchor + moving position = every frame sweeping the ball between the loaded-chunk line
+            // and wherever it really is: a rubber-band ghost that reads as several balls at once. So
+            // after the world's own entity ticking, advance exactly the shots vanilla starved, anchor
+            // first and then tick, in the same order tickNonPassenger does it -- the anchor half is
+            // the whole cure, and skipping it was the difference between this working and not. Near
+            // shots ticked normally this tick and are skipped, so nothing ever runs twice.
+            ClientTickEvents.END_WORLD_TICK.register(clientLevel -> {
+                for (final var candidate : clientLevel.entitiesForRendering()) {
+                    if (!(candidate instanceof CannonShot shot)) {
+                        continue;
+                    }
+                    if (shot.getLastClientTick() != clientLevel.getGameTime()) {
+                        shot.setOldPosAndRot();
+                        shot.tick();
+                    }
+                }
+            });
 
 
 

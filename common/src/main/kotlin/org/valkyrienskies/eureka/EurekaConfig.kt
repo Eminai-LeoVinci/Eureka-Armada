@@ -167,11 +167,11 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "How far away a cannonball in flight stays visible, in blocks. Vanilla culled a " +
-                "shot-sized entity at about 77 blocks, which made long shots vanish mid-arc. The server " +
-                "stops tracking shots past 512 blocks, so values beyond that show nothing further. " +
-                "Default 230 (about 3x vanilla)."
+                "shot-sized entity at about 77 blocks, which made long shots vanish mid-arc. Visibility " +
+                "no longer bends to render distance; the server stops tracking shots past 1024 blocks, " +
+                "so values beyond that show nothing further. Default 512."
         )
-        var cannonShotRenderDistance = 230
+        var cannonShotRenderDistance = 512
 
         @JsonSchema(
             description = "How fast a cannon's barrel visibly swings to a new elevation order, in degrees " +
@@ -1587,9 +1587,9 @@ object EurekaConfig {
                 "Voxy's distant LODs right away (ship hits never do; disassembly already has its own " +
                 "path). Costs a chunk re-ingest per touched chunk per volley, so it is a toggle -- flip " +
                 "it live with /armada cannons voxy-lod. Does nothing when Voxy is not installed. " +
-                "Default false."
+                "Default true."
         )
-        var cannonballVoxyLodUpdates = false
+        var cannonballVoxyLodUpdates = true
         // endregion
 
         @JsonSchema(
