@@ -1384,7 +1384,9 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
             guiGraphics.fill(lx + 2, y + 7, lx + 3, y + 9, ROW_BG)       // shackle's window
             dutyRight = lx - 3
         }
-        if (row.duty != CrewDuty.NONE) {
+        // Every duty is shown, the default included: a roster where "Crewman" is a blank reads as a row
+        // with no assignment at all.
+        run {
             val duty = dutyName(row.duty)
             small(
                 guiGraphics, duty,
