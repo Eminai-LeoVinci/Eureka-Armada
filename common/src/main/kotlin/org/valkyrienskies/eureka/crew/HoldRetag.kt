@@ -1,0 +1,108 @@
+package org.valkyrienskies.eureka.crew
+
+import net.minecraft.core.BlockPos
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.CompoundContainer
+import net.minecraft.world.Container
+import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
+
+/**
+ * Teaching a box what it is for, by watching what a captain puts in it.
+ *
+ * There is no registration step and no special block: fill a barrel with cannonballs, shut the lid, and it
+ * is a shot locker from then on. Take them all out again and it stops being one. That is the whole
+ * interface, and it is deliberately the one a player was going to perform anyway.
+ *
+ * ## Only aboard
+ * A box on land is just a box. Tags describe a SHIP's stores, so nothing here touches a container that is
+ * not part of an assembled hull -- which also keeps the world's chests from carrying a field they will never
+ * read.
+ *
+ * ## Two entrances
+ * Closing the lid is one. The other is ASSEMBLY: a captain who built their magazine before raising the ship
+ * would otherwise have to open and shut every box to teach it what it already obviously holds, so
+ * [tagAllAboard] reads the lot at the moment the hull becomes a ship.
+ */
+object HoldRetag {
+
+    /**
+     * The boxes a chest menu is looking at: one for a barrel or a single chest, two for a double.
+     *
+     * Each half of a double chest is tagged separately, which is the same way [ShipStores] already counts
+     * them -- and correct rather than merely convenient, since a captain can perfectly well keep powder in
+     * the left half and shot in the right.
+     */
+    fun holdsOf(container: Container): List<BaseContainerBlockEntity> = when (container) {
+        is CompoundContainer -> listOfNotNull(
+            container.container1 as? BaseContainerBlockEntity,
+            container.container2 as? BaseContainerBlockEntity
+        ).filter { HoldTags.isHold(it) }
+
+        is BaseContainerBlockEntity -> if (HoldTags.isHold(container)) listOf(container) else emptyList()
+        else -> emptyList()
+    }
+
+    /** Which categories are actually in [hold] right now, shulkers included. */
+    fun categoriesIn(level: ServerLevel, hold: BaseContainerBlockEntity): Set<HoldTag> {
+        val found = HashSet<HoldTag>(3)
+        for (slot in 0 until hold.containerSize) {
+            val stack = hold.getItem(slot)
+            if (stack.isEmpty) continue
+            HoldTags.categoriesIn(stack, found)
+            if (found.size == HoldTag.entries.size) break
+        }
+        return found
+    }
+
+    /**
+     * What each box held when the menu opened, for [applyOnClose] to compare against. Empty for a container
+     * that is not aboard a ship.
+     */
+    fun snapshot(level: ServerLevel, container: Container): Map<BlockPos, Int> {
+        val holds = holdsOf(container).filter { level.getLoadedShipManagingPos(it.blockPos) != null }
+        if (holds.isEmpty()) return emptyMap()
+        return holds.associate { it.blockPos to HoldTags.toMask(categoriesIn(level, it)) }
+    }
+
+    /**
+     * Retag every box of [container] now the lid is shut.
+     *
+     * Per category: present now means TAGGED, absent now means cleared **only if it was present at open**.
+     * That asymmetry is the entire point -- see [HoldOpenSnapshot]. A box a restock drained keeps its tag,
+     * because the restock never came through here and the captain who later looks inside finds it already
+     * empty, so there is nothing for their visit to have removed.
+     *
+     * A container with no snapshot (opened before the ship existed, or not aboard one) is left alone
+     * entirely rather than guessed at.
+     */
+    fun applyOnClose(level: ServerLevel, container: Container, opened: Map<BlockPos, Int>?) {
+        if (opened.isNullOrEmpty()) return
+        for (hold in holdsOf(container)) {
+            val before = opened[hold.blockPos] ?: continue
+            val now = HoldTags.toMask(categoriesIn(level, hold))
+            val had = HoldTags.toMask(HoldTags.tagsOf(hold))
+
+            // Keep everything it already had, add whatever is in there now, and drop only those categories
+            // the captain personally took out during this visit.
+            val removed = before and now.inv()
+            HoldTags.setTags(hold, HoldTags.fromMask((had or now) and removed.inv()))
+        }
+    }
+
+    /**
+     * Read every hold aboard a freshly assembled ship and tag it from its contents.
+     *
+     * A captain who stocked their magazine before raising the ship has already said what each room is for;
+     * making them open and shut forty barrels to repeat it would be a chore invented by the implementation.
+     * Additive only -- a box that comes aboard empty keeps whatever it was taught before, because an empty
+     * shot locker between voyages is still a shot locker.
+     */
+    fun tagAllAboard(level: ServerLevel, holds: List<BaseContainerBlockEntity>) {
+        for (hold in holds) {
+            val found = categoriesIn(level, hold)
+            if (found.isEmpty()) continue
+            HoldTags.setTags(hold, HoldTags.tagsOf(hold) + found)
+        }
+    }
+}
