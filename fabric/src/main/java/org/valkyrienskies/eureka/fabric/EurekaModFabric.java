@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka.fabric;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.terraformersmc.modmenu.api.ConfigScreenFactory;
 import com.terraformersmc.modmenu.api.ModMenuApi;
 import net.fabricmc.api.ClientModInitializer;
@@ -55,6 +56,7 @@ import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
 import org.valkyrienskies.eureka.path.ShipPaths;
 import org.valkyrienskies.eureka.client.EurekaSpeedHud;
+import org.valkyrienskies.eureka.command.ArmadaTuningCommand;
 import org.valkyrienskies.eureka.command.EurekaAssemblerCommand;
 import org.valkyrienskies.eureka.command.PirateCommand;
 import org.valkyrienskies.eureka.pirate.PirateGunnery;
@@ -110,6 +112,8 @@ public class EurekaModFabric implements ModInitializer {
             ArmadaCommand.INSTANCE.register(dispatcher);
             // "/armada route list|info|rename|delete|stop" -- merges onto the same "armada" literal.
             PathCommand.INSTANCE.register(dispatcher);
+            // "/armada cannons|cannonballs ..." -- live gunnery tuning; merges onto the same "armada" literal.
+            ArmadaTuningCommand.INSTANCE.register(dispatcher);
         });
 
         // Register the S2C armada-bond snapshot payload (both sides need the codec).
@@ -316,6 +320,27 @@ public class EurekaModFabric implements ModInitializer {
                                     ctx.getSource().sendFeedback(
                                         Component.literal("Eureka cruise-cancel debug " + (enabled ? "enabled" : "disabled"))
                                     );
+                                    return 1;
+                                })))
+                        // "/vs cannonball-render-distance [blocks]": how far this CLIENT draws cannonballs.
+                        // Genuinely client-local (a draw cull, not a server value), so unlike the toggles
+                        // around it this one also works on a dedicated server. The server entity tracking
+                        // still caps visibility at 512 blocks regardless of what is set here.
+                        .then(ClientCommandManager.literal("cannonball-render-distance")
+                            .executes(ctx -> {
+                                ctx.getSource().sendFeedback(Component.literal(
+                                    "Cannonball render distance: " + EurekaConfig.CLIENT.getCannonShotRenderDistance()
+                                        + " blocks (server tracking caps visibility at 512)"));
+                                return 1;
+                            })
+                            .then(ClientCommandManager.argument("blocks", IntegerArgumentType.integer(0))
+                                .executes(ctx -> {
+                                    int blocks = IntegerArgumentType.getInteger(ctx, "blocks");
+                                    EurekaConfig.CLIENT.setCannonShotRenderDistance(blocks);
+                                    EurekaConfigLoader.save();
+                                    ctx.getSource().sendFeedback(Component.literal(
+                                        "Cannonball render distance set to " + blocks
+                                            + " blocks (server tracking caps visibility at 512)"));
                                     return 1;
                                 })))
                         .then(ClientCommandManager.literal("pocket-occluder")
