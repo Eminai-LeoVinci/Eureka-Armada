@@ -8,9 +8,12 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.sounds.SoundEvents
 import net.minecraft.sounds.SoundSource
 import net.minecraft.util.RandomSource
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
+import net.minecraft.world.ItemInteractionResult
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -50,6 +53,60 @@ class EngineBlock : BaseEntityBlock(
 
     override fun newBlockEntity(blockPos: BlockPos, state: BlockState): BlockEntity =
         EngineBlockEntity(blockPos, state)
+
+    /**
+     * Fuel in hand stokes the firebox where it stands, mirroring how a cannon takes its round: walking a
+     * shovel of coal up to the engine should not detour through the screen. Anything the furnace registry
+     * refuses falls through untouched, so blocks can still be placed against the engine, and the empty hand
+     * keeps opening the firebox screen below.
+     */
+    // 1.21.1 returns ItemInteractionResult where the modern branch returns InteractionResult; the legacy
+    // body below is kept verbatim (computing modern-style results) and this override maps them across.
+    // TRY_WITH_EMPTY_HAND has no 1.21.1 constant -- the body returns PASS there, and PASS maps to
+    // PASS_TO_DEFAULT_BLOCK_INTERACTION, which is the same fall-through to useWithoutItem.
+    override fun useItemOn(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): ItemInteractionResult = when (useItemOnLegacy(stack, state, level, pos, player, hand, hit)) {
+        InteractionResult.SUCCESS -> ItemInteractionResult.SUCCESS
+        InteractionResult.CONSUME -> ItemInteractionResult.CONSUME
+        InteractionResult.FAIL -> ItemInteractionResult.FAIL
+        else -> ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private fun useItemOnLegacy(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        // An empty hand belongs to useWithoutItem -- on 1.21.1 the legacy body returns PASS for it (see the
+        // mapping note above).
+        if (stack.isEmpty) return InteractionResult.PASS
+
+        val engine = level.getBlockEntity(pos) as? EngineBlockEntity ?: return InteractionResult.PASS
+        if (!engine.canPlaceItem(0, stack)) return InteractionResult.PASS
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val loaded = engine.load(stack, !player.hasInfiniteMaterials())
+        if (loaded == 0) {
+            // Full, or a different fuel already in the box. Consumed rather than passed, so the click never
+            // falls through to placing the fuel block against the engine.
+            return InteractionResult.CONSUME
+        }
+
+        level.playSound(null, pos, SoundEvents.GRAVEL_PLACE, SoundSource.BLOCKS, 0.6f, 0.8f)
+        return InteractionResult.CONSUME
+    }
 
     override fun useWithoutItem(
         state: BlockState,
