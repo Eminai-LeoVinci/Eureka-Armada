@@ -156,6 +156,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
     override fun defineSynchedData(builder: SynchedEntityData.Builder) {
         builder.define(SHOWN, ItemStack.EMPTY)
         builder.define(POWDER, PowderCharge.SINGLE.ordinal)
+        builder.define(GRAVITY, PowderCharge.SINGLE.gravity.toFloat())
+        builder.define(DRAG, PowderCharge.SINGLE.drag.toFloat())
     }
 
     override fun getItem(): ItemStack = entityData.get(SHOWN)
@@ -164,10 +166,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      * How much powder threw this, which is what decides its whole arc.
      *
      * **Synced, and it has to be.** The client integrates the flight itself rather than being told where the
-     * ball is (see [tick]), so it needs the same gravity and drag the server is using. Muzzle velocity does
-     * not need syncing -- it is spent once and rides along inside the spawn packet's velocity -- but gravity
-     * and drag are read every tick on both sides, and a client applying the 1x pair to a 3x shot would draw
-     * the ball drifting off a path the server never flew it down.
+     * ball is (see [tick]). Muzzle velocity does not need syncing -- it is spent once and rides along inside
+     * the spawn packet's velocity -- and gravity and drag now ride their own [GRAVITY]/[DRAG] values, frozen
+     * at launch, so a live /armada retune or a guest's stale local file cannot bend an arc mid-flight. The
+     * ordinal still syncs for everything else that reads the measure off the shot.
      */
     val charge: PowderCharge get() = PowderCharge.of(entityData.get(POWDER))
 
@@ -188,6 +190,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         this.impactsLeft = load.impacts
         entityData.set(SHOWN, shownAs.copyWithCount(1))
         entityData.set(POWDER, charge.ordinal)
+        // Frozen at launch: an /armada gravity change mid-flight must not bend an arc already flying, and a
+        // guest client's local config must not disagree with the number the server integrates. See GRAVITY.
+        entityData.set(GRAVITY, charge.gravity.toFloat())
+        entityData.set(DRAG, charge.drag.toFloat())
         setPos(from.x, from.y, from.z)
         // The override is the AI's solved muzzle speed -- spent once, right here, so it needs no syncing
         // and no persistence: the client reads the resulting velocity off the spawn packet like any other,
@@ -220,14 +226,13 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // the shot on impact and the client simply stops seeing it.
         if (level().isClientSide) {
             setPos(to.x, to.y, to.z)
-            val charge = this.charge
-            deltaMovement = deltaMovement.scale(charge.drag)
-                .subtract(0.0, charge.gravity, 0.0)
+            deltaMovement = deltaMovement.scale(entityData.get(DRAG).toDouble())
+                .subtract(0.0, entityData.get(GRAVITY).toDouble(), 0.0)
             smoke()
             return
         }
 
-        if (age++ > MAX_TICKS) {
+        if (age++ > flightCapTicks()) {
             discard()
             return
         }
@@ -272,9 +277,8 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         }
 
         setPos(to.x, to.y, to.z)
-        val charge = this.charge
-        deltaMovement = deltaMovement.scale(charge.drag)
-            .subtract(0.0, charge.gravity, 0.0)
+        deltaMovement = deltaMovement.scale(entityData.get(DRAG).toDouble())
+            .subtract(0.0, entityData.get(GRAVITY).toDouble(), 0.0)
         smoke()
     }
 
@@ -401,6 +405,10 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             CannonCharge.entries.getOrNull(input.getIntOr("Charge", 0)) ?: CannonCharge.PLAIN
         )
         entityData.set(POWDER, input.getIntOr("PowderCharge", PowderCharge.SINGLE.ordinal))
+        // Not saved: a reloaded shot re-arms against the charge's CURRENT config numbers, matching how the
+        // rest of this method re-reads the world it wakes into.
+        entityData.set(GRAVITY, charge.gravity.toFloat())
+        entityData.set(DRAG, charge.drag.toFloat())
         entityData.set(SHOWN, input.read("Shown", ItemStack.CODEC).orElse(ItemStack.EMPTY))
         // After load, which sets what "all of them" means for this round.
         impactsLeft = input.getIntOr("ImpactsLeft", load.impacts)
@@ -429,11 +437,27 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         private val POWDER: EntityDataAccessor<Int> =
             SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.INT)
 
+        /**
+         * The gravity and drag this shot flies under, in blocks/tick^2 and fraction-kept-per-tick, FROZEN at
+         * launch. Synced as their own values rather than derived from [POWDER], because the config numbers
+         * behind a powder charge can change mid-flight now (/armada cannons gravity ...) and can differ
+         * between a guest client's local file and the server's -- either would bend the client's
+         * self-integrated arc off the path the server actually flies.
+         */
+        private val GRAVITY: EntityDataAccessor<Float> =
+            SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.FLOAT)
+        private val DRAG: EntityDataAccessor<Float> =
+            SynchedEntityData.defineId(CannonShot::class.java, EntityDataSerializers.FLOAT)
+
         // Speed, gravity and drag live on EurekaConfig.SERVER, cut three ways by powder charge, so an arc can
-        // be dialled in against a real ship with a /reload rather than a rebuild. Only the lifetime cap stays
-        // here -- it is a safety net rather than a tuning knob, and a config value that could strand shots in
-        // the sky forever is not one worth exposing.
-        private const val MAX_TICKS = 200
+        // be dialled in against a real ship with a /reload rather than a rebuild. The lifetime cap used to be
+        // a hard 200 ticks on the old "not worth exposing" reasoning -- reversed once /armada cannons could
+        // retune gravity live: a slow low-gravity lob needs more sky than ten seconds, and stranded shots are
+        // now the operator's own rope. CannonSolver clamps its sweep to min(200, this) so the AI never plans
+        // past what a ball lives -- or burns a frame sweeping an hour-long arc.
+        /** The flight-time cap in ticks, from config; floored at one tick. Shared with [CannonSolver]. */
+        internal fun flightCapTicks(): Long =
+            (EurekaConfig.SERVER.cannonShotMaxFlightSeconds * 20.0).toLong().coerceAtLeast(1L)
 
         /** How far the extra explosion puffs scatter from the point of impact, in blocks. */
         private const val BURST_SPREAD = 2.0
