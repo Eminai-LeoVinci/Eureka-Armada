@@ -23,7 +23,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The Eureka Assembler. Runs during helm assembly (from ShipHelmBlockEntity.assemble), AFTER the
+ * The Eureka Auto-Shipwright. Runs during helm assembly (from ShipHelmBlockEntity.assemble), AFTER the
  * connected block set is collected but BEFORE the ship object is created, so it can replace hull
  * blocks in the world and cancel cleanly (no ship, no world mutation) if requirements aren't met.
  *
@@ -33,35 +33,26 @@ import kotlin.math.min
  *    across the whole material whitelist (oak plank, then spruce, then logs -- config order) before the
  *    next layer up, so the buoyancy stays packed as low as possible.
  *  - `balloon`: computes how many balloons let the ship ASCEND (sized for a target climb speed, not just
- *    neutral hover -- see [GRAVITY_MAGNITUDE] / assemblerBalloonAscendRate) and replaces whitelisted hull
- *    blocks (wool by default) with balloons, LAYER BY LAYER FROM THE TOP DOWN (same per-layer whitelist
+ *    neutral hover -- see [BuoyancyMath.ascendFactor] / assemblerBalloonAscendRate) and replaces whitelisted
+ *    hull blocks (wool by default) with balloons, LAYER BY LAYER FROM THE TOP DOWN (same per-layer whitelist
  *    drain), so the lift stays packed as high as possible.
- *  - both: balloons sized for flight + floaters sized for the resting waterline; Eureka's water
- *    altitude-hold then pins the keel at the surface until the ship flies.
+ *  - `balloonReplaceAll`: skips the sizing for balloons entirely and converts EVERY whitelisted block in the
+ *    hull. For a ship built to be all lift, where the right answer is "as many as this will hold" and typing
+ *    a percentage over a computed target is a guess at the same thing. Floaters have no equivalent: more
+ *    floaters than the waterline calls for just makes a boat ride high and roll, whereas more balloons
+ *    straightforwardly climb better.
+ *  - both floater and balloon: balloons sized for flight + floaters sized for the resting waterline; Eureka's
+ *    water altitude-hold then pins the keel at the surface until the ship flies.
  *
  * Nothing is free in survival: the player must have the required floater/balloon items in inventory or the
  * whole assembly is cancelled with a chat message (kept in the chat history, press T) so the player can read
  * the full multi-line shortfall detail. In CREATIVE the items are drawn from the game's infinite supply and
  * nothing is consumed, the same way placing a block by hand is free there. Counts are solved against the ship's FINAL
- * post-swap mass (each replacement changes the total), using the exact thresholds from
- * [org.valkyrienskies.eureka.command.ShipWeightCommand] so /vs get-ship-weight agrees with what the
- * assembler builds. Block masses are read live from [BlockStateInfo], so pack rebalances are honored.
+ * post-swap mass (each replacement changes the total), through [BuoyancyMath] -- the same code
+ * `/vs get-ship-weight` and the helm's "now +N%" readout use, so all three agree. Block masses are read live
+ * from [BlockStateInfo], so pack rebalances are honored.
  */
 object EurekaAssembler {
-
-    // Mirrors ShipWeightCommand's calibration. The "keel at waterline, interior dry" target is DRY.
-    private const val AFLOAT_ADDED_FACTOR = 1.0
-    private const val DRY_ADDED_FACTOR = 7.5
-    private const val SAFETY_MARGIN = 1
-
-    // |EurekaShipControl.GRAVITY| (10.0). Balloon lift only cancels weight at the neutral-hover count; a
-    // ship sized to exactly hover holds itself up but never climbs, because physTick caps the vertical
-    // force at the balloons' lift, so the usable CLIMB force is the SURPLUS over weight. Terminal climb
-    // velocity when balloon-limited is balloonForce/mass - g, so the balloon count for a target climb speed
-    // V is the neutral-hover count times (1 + V/g). Sizing by this factor (not a flat margin) makes the
-    // surplus scale WITH mass, so light and heavy ships alike ascend at ~the configured rate. Keep in step
-    // with EurekaShipControl.GRAVITY.
-    private const val GRAVITY_MAGNITUDE = 10.0
 
     // The count<->mass feedback (each swap changes ship mass, which changes the count needed) is a
     // fast-converging fixpoint; this is a generous cap so it always terminates.
@@ -69,7 +60,12 @@ object EurekaAssembler {
 
     sealed interface Outcome
     class Cancelled(val message: Component) : Outcome
-    class Applied(val floatersPlaced: Int, val balloonsPlaced: Int, val fromCreative: Boolean) : Outcome
+    class Applied(
+        val floatersPlaced: Int,
+        val balloonsPlaced: Int,
+        val fromCreative: Boolean,
+        val balloonsReplacedAll: Boolean = false
+    ) : Outcome
 
     private fun massOf(state: BlockState): Double = BlockStateInfo.get(state)?.first ?: 0.0
 
@@ -150,7 +146,9 @@ object EurekaAssembler {
      * @param floaterBonusPercent extra % (0..) added on top of the auto-calculated floater target -- the helm
      *   menu's per-assembly "Auto Floaters + N%" nudge for a ship that rides too low
      * @param balloonBonusPercent extra % (0..) added on top of the auto-calculated balloon target -- the helm
-     *   menu's per-assembly "Auto Balloons + N%" nudge for a ship that ascends too weakly
+     *   menu's per-assembly "Fit Balloons + N%" nudge for a ship that ascends too weakly
+     * @param balloonReplaceAll convert EVERY whitelisted block to a balloon instead of sizing a target.
+     *   Overrides [balloonBonusPercent], which is why the helm greys the % box out while this is ticked.
      */
     fun apply(
         level: ServerLevel,
@@ -161,7 +159,8 @@ object EurekaAssembler {
         existingFloaters: Int,
         existingBalloons: Int,
         floaterBonusPercent: Int = 0,
-        balloonBonusPercent: Int = 0
+        balloonBonusPercent: Int = 0,
+        balloonReplaceAll: Boolean = false
     ): Outcome {
         val cfg = EurekaConfig.SERVER
 
@@ -178,9 +177,9 @@ object EurekaAssembler {
             if (balloonMode) candidates(level, positions, cfg.assemblerBalloonReplaceWhitelist, bottomUp = false) else emptyList()
 
         val baseMass = positions.sumOf { massOf(level.getBlockState(it)) }
-        val liftPerBalloon = cfg.massPerBalloon * cfg.balloonLiftMultiplier
-        // Size for a real climb, not just neutral hover (see GRAVITY_MAGNITUDE). factor 1.0 = old hover-only.
-        val balloonAscendFactor = 1.0 + max(0.0, cfg.assemblerBalloonAscendRate) / GRAVITY_MAGNITUDE
+        // Replace All takes every candidate there is, so there is no target to solve and no percentage to
+        // add to it -- the answer does not depend on mass at all.
+        val replaceAll = balloonMode && balloonReplaceAll
         // Manual helm-menu nudges: each adds its % on top of the auto-calculated target for THIS assembly only.
         val floaterBonusMul = 1.0 + max(0, floaterBonusPercent) / 100.0
         val balloonBonusMul = 1.0 + max(0, balloonBonusPercent) / 100.0
@@ -189,7 +188,7 @@ object EurekaAssembler {
         // actually place (target minus what's already on the ship, clamped to available blocks); the
         // mass estimate uses those so it reflects the real assembled ship.
         var placeF = 0
-        var placeB = 0
+        var placeB = if (replaceAll) balloonCandidates.size else 0
         var targetF = 0
         var targetB = 0
         repeat(MAX_SOLVE_ITERATIONS) {
@@ -198,22 +197,18 @@ object EurekaAssembler {
                 balloonCandidates.take(placeB).sumOf { balloonMass - it.mass }
             if (finalMass <= 0.0) return@repeat
 
-            targetB = if (balloonMode && liftPerBalloon > 0.0)
+            targetB = when {
+                replaceAll -> existingBalloons + balloonCandidates.size
                 // The ascend factor already provides genuine climb headroom (>= 1 balloon of surplus for any
-                // real ship via ceil), so it supersedes the old flat +SAFETY_MARGIN for balloons. The bonus
+                // real ship via ceil), so it supersedes a flat safety margin for balloons. The bonus
                 // multiplier then adds the player's manual % on top.
-                ceil(finalMass * balloonAscendFactor / liftPerBalloon * balloonBonusMul).toInt()
-            else 0
+                balloonMode -> ceil(BuoyancyMath.recommendedBalloons(finalMass) * balloonBonusMul).toInt()
+                else -> 0
+            }
 
-            val perFloater = min(cfg.floaterBuoyantFactorPerKg / finalMass, 15.0 * cfg.maxFloaterBuoyantFactor)
-            targetF = if (floaterMode && perFloater > 0.0)
-                ceil(
-                    max(
-                        ceil(DRY_ADDED_FACTOR / perFloater).toInt(),
-                        ceil(AFLOAT_ADDED_FACTOR / perFloater).toInt() + SAFETY_MARGIN
-                    ) * floaterBonusMul
-                ).toInt()
-            else 0
+            targetF = if (floaterMode) {
+                ceil(BuoyancyMath.recommendedFloaters(finalMass) * floaterBonusMul).toInt()
+            } else 0
 
             val newPlaceF = min(max(0, targetF - existingFloaters), floaterCandidates.size)
             val newPlaceB = min(max(0, targetB - existingBalloons), balloonCandidates.size)
@@ -286,16 +281,14 @@ object EurekaAssembler {
             // ...but broadcastChanges() emits a containerId-0 sync, and assembly runs from the helm menu's
             // clickMenuButton, so the open container is the helm menu (a non-zero containerId). The client
             // drops a containerId-0 slot update for non-hotbar slots while another menu is open, leaving a
-            // ghost stack in the main inventory. 1.21.1 has no ClientboundSetPlayerInventoryPacket (added in
-            // 1.21.2); instead send ClientboundContainerSetSlotPacket with the vanilla containerId -2 sentinel,
-            // which the client writes straight into player.getInventory().setItem(slot, ...) regardless of the
-            // open container, so the consumed floaters/balloons vanish immediately.
+            // ghost stack in the main inventory. A direct per-slot player-inventory packet is applied by the
+            // client regardless of the open container, so the consumed floaters/balloons vanish immediately.
             for (slot in changedSlots) {
                 player.connection.send(ClientboundContainerSetSlotPacket(-2, 0, slot, inv.getItem(slot)))
             }
         }
 
-        return Applied(needF, needB, creative)
+        return Applied(needF, needB, creative, replaceAll)
     }
 
     /**
@@ -308,16 +301,22 @@ object EurekaAssembler {
         if (outcome.floatersPlaced > 0) parts.add("${outcome.floatersPlaced} ${plural(outcome.floatersPlaced, "floater")}")
         if (outcome.balloonsPlaced > 0) parts.add("${outcome.balloonsPlaced} ${plural(outcome.balloonsPlaced, "balloon")}")
 
-        val msg = Component.literal("Eureka Assembler").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+        val msg = Component.literal("Eureka Auto-Shipwright").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
         if (parts.isEmpty()) {
             // The ship already met both targets, so nothing was swapped. Say so rather than nothing at all,
-            // otherwise an enabled assembler looks broken when it was simply not needed.
+            // otherwise an enabled Auto-Shipwright looks broken when it was simply not needed.
             msg.append(
                 Component.literal(" -- already had enough; nothing placed").withStyle(ChatFormatting.GRAY)
             )
             return msg
         }
-        msg.append(Component.literal(" -- placed ${parts.joinToString(" and ")}").withStyle(ChatFormatting.GREEN))
+        msg.append(Component.literal(" -- fitted ${parts.joinToString(" and ")}").withStyle(ChatFormatting.GREEN))
+        if (outcome.balloonsReplacedAll) {
+            msg.append(
+                Component.literal(" (Replace All: every convertible block)")
+                    .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
+            )
+        }
         if (outcome.fromCreative) {
             msg.append(Component.literal(" (Creative: no materials used)").withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC))
         }
@@ -377,7 +376,7 @@ object EurekaAssembler {
         floaterMode: Boolean, balloonMode: Boolean,
         needF: Int, availF: Int, needB: Int, availB: Int
     ): Component {
-        val msg = Component.literal("Eureka Assembler -- can't assemble this ship")
+        val msg = Component.literal("Eureka Auto-Shipwright -- can't assemble this ship")
             .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
         if (floaterMode && needF > availF) {
             msg.append(newline())
@@ -395,7 +394,7 @@ object EurekaAssembler {
         }
         msg.append(newline())
         msg.append(
-            Component.literal("Build the hull with more of those blocks, or turn it off with /vs eureka-assembler.")
+            Component.literal("Build the hull with more of those blocks, or turn it off with /vs auto-shipwright.")
                 .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
         )
         return msg
@@ -408,7 +407,7 @@ object EurekaAssembler {
         needF: Int, haveF: Int,
         balloonShort: Map<Block, Pair<Int, Int>>
     ): Component {
-        val msg = Component.literal("Eureka Assembler -- missing materials")
+        val msg = Component.literal("Eureka Auto-Shipwright -- missing materials")
             .withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
         if (floaterMode && needF > haveF) {
             msg.append(newline())
@@ -425,7 +424,7 @@ object EurekaAssembler {
         }
         msg.append(newline())
         msg.append(
-            Component.literal("Put these in your inventory, or turn it off with /vs eureka-assembler <floater|balloon> false.")
+            Component.literal("Put these in your inventory, or turn it off with /vs auto-shipwright <floater|balloon> false.")
                 .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
         )
         return msg
