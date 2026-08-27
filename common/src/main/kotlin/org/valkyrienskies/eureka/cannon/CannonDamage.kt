@@ -3,10 +3,14 @@ package org.valkyrienskies.eureka.cannon
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.block.BaseFireBlock
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.gameevent.GameEvent
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.pirate.PirateHelm
+import org.valkyrienskies.mod.common.getShipManagingPos
+import org.valkyrienskies.mod.compat.voxy.VoxyLodRefresh
 
 /**
  * Taking a measured bite out of whatever the shot hit.
@@ -85,6 +89,7 @@ object CannonDamage {
         for ((index, pos) in taken.withIndex()) {
             if (index < shown) level.destroyBlock(pos, false) else remove(level, pos)
         }
+        markLods(level, origin, taken)
         return shown
     }
 
@@ -123,6 +128,7 @@ object CannonDamage {
         if (count <= 0) return
 
         var lit = 0
+        val litPositions = ArrayList<BlockPos>(count)
         val seen = HashSet<BlockPos>()
         val queue = ArrayDeque<BlockPos>()
 
@@ -135,12 +141,34 @@ object CannonDamage {
             if (level.getBlockState(pos).isAir && BaseFireBlock.canBePlacedAt(level, pos, Direction.UP)) {
                 level.setBlock(pos, BaseFireBlock.getState(level, pos), Block.UPDATE_ALL)
                 lit++
+                litPositions.add(pos)
             }
 
             if (seen.size > SEARCH_LIMIT) break
             for (face in Direction.entries) {
                 val next = pos.relative(face)
                 if (seen.add(next)) queue.add(next)
+            }
+        }
+
+        markLods(level, origin, litPositions)
+    }
+
+    /**
+     * Push the crater into Voxy's distant LODs, when the operator asked for it (/armada cannons voxy-lod).
+     *
+     * WORLD hits only: [origin] is shipyard coordinates for a hit on a ship (see the class doc), and ship
+     * chunks have no world LODs to refresh -- VoxyLodRefresh filters shipyard chunks anyway, but one lookup
+     * here spares it the whole batch. The refresh itself is VS2's batched two-pass flush, so a broadside's
+     * craters coalesce into one ingest per touched chunk, and it costs nothing when Voxy is not installed.
+     */
+    private fun markLods(level: ServerLevel, origin: BlockPos, changed: List<BlockPos>) {
+        if (!EurekaConfig.SERVER.cannonballVoxyLodUpdates || changed.isEmpty()) return
+        if (level.getShipManagingPos(origin) != null) return
+        val chunks = HashSet<Long>()
+        for (pos in changed) {
+            if (chunks.add(ChunkPos.asLong(pos.x shr 4, pos.z shr 4))) {
+                VoxyLodRefresh.mark(level, pos.x shr 4, pos.z shr 4)
             }
         }
     }
