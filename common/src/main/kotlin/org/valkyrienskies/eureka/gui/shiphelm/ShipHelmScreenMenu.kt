@@ -1,5 +1,6 @@
 package org.valkyrienskies.eureka.gui.shiphelm
 
+import net.minecraft.core.BlockPos
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
@@ -8,7 +9,11 @@ import net.minecraft.world.item.ItemStack
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaScreens
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.blockentity.FIT_PERCENT_NONE
 import org.valkyrienskies.eureka.command.AssemblerPreferences
+import org.valkyrienskies.eureka.pirate.PirateHelm
+import org.valkyrienskies.eureka.ship.ControlProfile
+import org.valkyrienskies.eureka.ship.ShipBearing
 import kotlin.math.roundToInt
 
 class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEntity: ShipHelmBlockEntity?) :
@@ -16,10 +21,18 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
 
     constructor(syncId: Int, playerInv: Inventory) : this(syncId, playerInv, null)
 
-    // The player who opened this helm. Needed server-side to read/write that player's Eureka Assembler
+    // The player who opened this helm. Needed server-side to read/write that player's Eureka Auto-Shipwright
     // preferences (per-player, not per-ship). On the client this is the local player and is only used as a
     // harmless fallback -- the assembler checkbox states come from the synced DataSlot, not from here.
     private val player: Player = playerInv.player
+
+    /**
+     * Whether this menu is reading [helm] itself -- the object, not the position.
+     *
+     * Identity is the question that matters: a helm that assembles or disassembles is relocated, and the
+     * menu keeps pointing at the discarded copy. That is exactly what this is used to find and close.
+     */
+    fun viewsHelm(helm: ShipHelmBlockEntity): Boolean = blockEntity === helm
 
     // TODO this isn't synced...
     val aligning = blockEntity?.aligning ?: false
@@ -33,7 +46,9 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedBlockHigh = 0  // remaining high bits (a DataSlot transmits only a 16-bit short)
     private var syncedTopSpeed = 0
     private var syncedWaterHold = false
-    private var syncedVanilla = false
+    // Ship category, bit-packed: bits 0-3 the ControlProfile ordinal, bit4 "this vessel is a hybrid and can
+    // switch", bit5 "the whole vessel is under water".
+    private var syncedProfile = 0
     private var syncedEnginePower = -1 // -1 = ship has no engines (helm shows "--")
     private var syncedCruiseFlags = 0  // bit0 cruising, bit1 speedArmed, bit2 turnArmed, bit3 verticalArmed
     // Cruise readouts, each in signed thousandths split low/high (a DataSlot transmits only a 16-bit short):
@@ -44,12 +59,59 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedCruiseTurnHigh = 0
     private var syncedCruiseVerticalLow = 0
     private var syncedCruiseVerticalHigh = 0
-    private var syncedAssembler = 0    // bit0 enabled, bit1 floater, bit2 balloon
+    private var syncedAssembler = 0    // bit0 enabled, bit1 floater, bit2 balloon, bit3 balloon Replace All
+    // How far this ship's fitted floaters/balloons already sit over the recommendation, in percent, or
+    // FIT_PERCENT_NONE when there is nothing to compare against.
+    private var syncedFloaterFit = FIT_PERCENT_NONE
+    private var syncedBalloonFit = FIT_PERCENT_NONE
+    // Environment readouts for the per-category info boxes, in blocks; -1 = not known.
+    private var syncedSeabed = -1
+    private var syncedSurface = -1
+    private var syncedGround = -1
+    private var syncedShore = -1
     private var syncedFloaterBonus = 0 // transient "Auto Floaters + N%" textbox value (per-player)
     private var syncedBalloonBonus = 0 // transient "Auto Balloons + N%" textbox value (per-player)
     private var syncedMassLow = 0      // low 16 bits of the ship mass (kg) for the read-only weight box
     private var syncedMassHigh = 0     // remaining high bits (a DataSlot transmits only a 16-bit short)
     private var syncedAssembled = false // is THIS helm's ship assembled (authoritative, not the client raycast)
+    private var syncedDamageSpeedLoss = 0 // percent of top speed lost to hull damage (0 = sound, hides suffix)
+    private var syncedDamageSink = 0      // damage settle rate in TENTHS of m/s, as the physics applied it
+    private var syncedDamageLostLow = 0   // blocks lost to damage, low 16 bits (counts can exceed a short)
+    private var syncedDamageLostHigh = 0  // blocks lost to damage, high bits
+    private var syncedIsChild = false   // is THIS helm's ship an armada child (its controls are read-only)
+    private var syncedArmadaParent = 0  // bit0 leads an armada (has children), bit1 marked as parent by this player
+    private var syncedHelmNumber = 0    // this wheel's "n of total" on its hull; 0 = not aboard a ship
+    private var syncedHelmPos0 = 0      // the wheel's packed BlockPos in 16-bit chunks (see helmPos below)
+    private var syncedHelmPos1 = 0
+    private var syncedHelmPos2 = 0
+    private var syncedHelmPos3 = 0
+    private var syncedInHand = false // opened on a wheel in the hand: no ship, no position, no controls
+
+    /** "2/8" for the header, or null when this wheel is not on a ship and so is not one of anything. */
+    val helmNumber: String?
+        get() = ShipBearing.unpackNumber(blockEntity?.fittingNumber ?: syncedHelmNumber)
+
+    /**
+     * The wheel this menu is open on, as the SERVER said -- or null on a client mirror the slots have not
+     * reached yet. `0L` decodes to the origin at y=0, where no wheel lives, so treating the unsynced zero
+     * as "not yet" costs nothing real. Never changes while the menu lives: a relocation closes menus.
+     */
+    /**
+     * Whether this menu is reading a wheel in the player's HAND. Server-side the null block entity says so
+     * directly; on the client it is the synced slot, because there the block entity is always null.
+     */
+    val inHand: Boolean get() = if (blockEntity != null) false else syncedInHand
+
+    val helmPos: BlockPos?
+        get() {
+            blockEntity?.let { return it.blockPos }
+            val packed = (syncedHelmPos0.toLong() and 0xFFFFL) or
+                ((syncedHelmPos1.toLong() and 0xFFFFL) shl 16) or
+                ((syncedHelmPos2.toLong() and 0xFFFFL) shl 32) or
+                ((syncedHelmPos3.toLong() and 0xFFFFL) shl 48)
+            return if (packed == 0L) null else BlockPos.of(packed)
+        }
+
     init {
         addDataSlot(object : DataSlot() {
             override fun get(): Int = if (blockEntity?.keepActive ?: syncedKeepActive) 1 else 0
@@ -70,15 +132,40 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = blockEntity?.estimatedTopSpeed ?: 0
             override fun set(value: Int) { syncedTopSpeed = value }
         })
+        // Damage readouts for the "... from Damage" suffixes: speed loss %, settle rate (tenths of m/s),
+        // and blocks lost (split like the block count -- a big ship can lose more than a short holds).
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.damageSpeedLossPercent ?: 0
+            override fun set(value: Int) { syncedDamageSpeedLoss = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.damageSinkTenths ?: 0
+            override fun set(value: Int) { syncedDamageSink = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (blockEntity?.damageBlocksLost ?: 0) and 0xFFFF
+            override fun set(value: Int) { syncedDamageLostLow = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (blockEntity?.damageBlocksLost ?: 0) ushr 16
+            override fun set(value: Int) { syncedDamageLostHigh = value }
+        })
         // Water altitude-hold (global server flag) so the checkbox reflects the real value.
         addDataSlot(object : DataSlot() {
             override fun get(): Int = if (blockEntity?.waterAltitudeHold == true) 1 else 0
             override fun set(value: Int) { syncedWaterHold = value == 1 }
         })
-        // Vanilla controls (per-ship) so the checkbox reflects the controlled ship's mode.
+        // Ship category (per-ship, derived) so the tab strip can show which one is live, whether this vessel
+        // is a hybrid that can switch, and whether it is under water.
         addDataSlot(object : DataSlot() {
-            override fun get(): Int = if (blockEntity?.vanillaControls == true) 1 else 0
-            override fun set(value: Int) { syncedVanilla = value == 1 }
+            override fun get(): Int {
+                val be = blockEntity ?: return 0
+                var f = be.controlProfile.ordinal
+                if (be.isHybridVessel) f = f or 0x10
+                if (be.isSubmerged) f = f or 0x20
+                return f
+            }
+            override fun set(value: Int) { syncedProfile = value }
         })
         // Engine power (fuel-tank %) 0..100, or -1 when the ship has no engines.
         addDataSlot(object : DataSlot() {
@@ -134,7 +221,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = if (blockEntity?.assembled == true) 1 else 0
             override fun set(value: Int) { syncedAssembled = value == 1 }
         })
-        // Eureka Assembler preferences (per-player, bit-packed): master + floater + balloon.
+        // Eureka Auto-Shipwright preferences (per-player, bit-packed): master + floater + balloon + Replace All.
         addDataSlot(object : DataSlot() {
             override fun get(): Int {
                 if (blockEntity == null) return 0
@@ -143,9 +230,37 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
                 if (p.enabled) f = f or 1
                 if (p.floater) f = f or 2
                 if (p.balloon) f = f or 4
+                if (p.balloonReplaceAll) f = f or 8
                 return f
             }
             override fun set(value: Int) { syncedAssembler = value }
+        })
+        // How far the ASSEMBLED ship already sits over the recommended floater/balloon counts, in percent --
+        // the "now +N%" beside each Fit row. Small signed values, one slot each.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.floaterFitPercent ?: FIT_PERCENT_NONE
+            override fun set(value: Int) { syncedFloaterFit = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.balloonFitPercent ?: FIT_PERCENT_NONE
+            override fun set(value: Int) { syncedBalloonFit = value }
+        })
+        // Environment readouts for the per-category info boxes. -1 = not known; the screen draws those as "--".
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.seabedDistance ?: -1
+            override fun set(value: Int) { syncedSeabed = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.surfaceDistance ?: -1
+            override fun set(value: Int) { syncedSurface = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.groundDistance ?: -1
+            override fun set(value: Int) { syncedGround = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.shoreDistance ?: -1
+            override fun set(value: Int) { syncedShore = value }
         })
         // The two manual bonus percentages (per-player, 0..MAX_BONUS -- fit one slot each). They reset to 0
         // server-side after a successful assemble, and this sync pushes that 0 back so the textboxes clear.
@@ -167,15 +282,98 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = (blockEntity?.shipMass ?: 0) ushr 16
             override fun set(value: Int) { syncedMassHigh = value }
         })
+        // Whether THIS helm's ship is an armada child (server-authoritative). The screen greys out the ship's
+        // controls when set; the client's blockEntity is null so it relies on this synced flag.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = if (blockEntity?.isArmadaChild == true) 1 else 0
+            override fun set(value: Int) { syncedIsChild = value == 1 }
+        })
+        // Armada Parent checkbox state, bit-packed: it ticks either because this ship really leads an armada
+        // (bit0) or because this player has only just marked it as the parent to bind to (bit1, per-player --
+        // hence read against the opener, not globally).
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int {
+                val be = blockEntity ?: return 0
+                var f = 0
+                if (be.isArmadaParent) f = f or 1
+                if (be.isArmadaParentMarkedBy(player)) f = f or 2
+                return f
+            }
+            override fun set(value: Int) { syncedArmadaParent = value }
+        })
+        // APPENDED: data slots are matched by index, so new slots go at the END, never inserted above.
+        // Stamped once at open (see ShipHelmBlockEntity.fittingNumber) rather than recomputed here -- this
+        // getter runs on every broadcast, and a hull walk at that rate would be absurd for a label that
+        // never moves.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = blockEntity?.fittingNumber ?: 0
+            override fun set(value: Int) { syncedHelmNumber = value }
+        })
+        // The wheel's own position, in 16-bit chunks -- the mass/blockCount idiom, because A SLOT TRANSMITS
+        // A SHORT. The screen's crosshair raycast is a GUESS at which wheel this menu is on, and it guesses
+        // wrong exactly when it matters: a seated player's frozen camera points anywhere, and sit() opens
+        // this menu with no aim at all. A wrong guess made the screen skip both authoritative name sources
+        // and fall back to the client's frozen Ship.slug -- the rare generated-name flicker on open.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = ((blockEntity?.blockPos?.asLong() ?: 0L) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos0 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 16) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos1 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 32) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos2 = value }
+        })
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = (((blockEntity?.blockPos?.asLong() ?: 0L) ushr 48) and 0xFFFFL).toInt()
+            override fun set(value: Int) { syncedHelmPos3 = value }
+        })
+        // Whether this menu was opened on a wheel in the HAND rather than one in the world. Read from the
+        // server's copy, where a null block entity means exactly that -- the client's is always null and
+        // so can never tell the two apart on its own. The screen greys everything a ship would answer and
+        // leaves the two a bare wheel answers for itself: its name, and the articles.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = if (blockEntity == null) 1 else 0
+            override fun set(value: Int) { syncedInHand = value == 1 }
+        })
     }
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive
     // Server-authoritative, synced above: is this helm's ship assembled (the client's blockEntity is null).
     val assembled: Boolean get() = blockEntity?.assembled ?: syncedAssembled
+    // Server-authoritative, synced above: is this helm's ship an armada child (controls read-only if so).
+    val isArmadaChild: Boolean get() = blockEntity?.isArmadaChild ?: syncedIsChild
+
+    // Whether the "Armada Parent" box shows ticked: this ship leads an armada, or the viewer has marked it as
+    // the parent their next children bind to.
+    val isArmadaParent: Boolean get() =
+        blockEntity?.let { it.isArmadaParent || it.isArmadaParentMarkedBy(player) } ?: (syncedArmadaParent != 0)
     val blockCount: Int get() = blockEntity?.assembledBlockCount
         ?: ((syncedBlockHigh shl 16) or (syncedBlockLow and 0xFFFF))
     val topSpeed: Int get() = blockEntity?.estimatedTopSpeed ?: syncedTopSpeed
+    // The damage suffixes' numbers. All zero on a sound ship, which is what hides the suffixes entirely.
+    val damageSpeedLossPercent: Int get() = blockEntity?.damageSpeedLossPercent ?: syncedDamageSpeedLoss
+    val damageSinkTenths: Int get() = blockEntity?.damageSinkTenths ?: syncedDamageSink
+    val damageBlocksLost: Int get() = blockEntity?.damageBlocksLost
+        ?: ((syncedDamageLostHigh shl 16) or (syncedDamageLostLow and 0xFFFF))
     val waterAltitudeHold: Boolean get() = blockEntity?.waterAltitudeHold ?: syncedWaterHold
-    val vanillaControls: Boolean get() = blockEntity?.vanillaControls ?: syncedVanilla
+
+    // The category this vessel is actually steering by. The helm's tab strip follows this; clicking a tab is
+    // a client-side view change only and never reaches the server, because nothing about the category is a
+    // setting -- it is derived from what the ship is built out of.
+    val controlProfile: ControlProfile get() =
+        blockEntity?.controlProfile ?: PROFILES.getOrElse(syncedProfile and 0xF) { ControlProfile.BOAT }
+    /** This vessel has both floaters and balloons, so its category changes with the waterline. */
+    val isHybridVessel: Boolean get() = blockEntity?.isHybridVessel ?: (syncedProfile and 0x10 != 0)
+    /** The whole vessel is under water. Detection only until submarine handling lands. */
+    val isSubmerged: Boolean get() = blockEntity?.isSubmerged ?: (syncedProfile and 0x20 != 0)
+
+    // Environment readouts, in blocks; -1 = not known.
+    val seabedDistance: Int get() = blockEntity?.seabedDistance ?: syncedSeabed
+    val surfaceDistance: Int get() = blockEntity?.surfaceDistance ?: syncedSurface
+    val groundDistance: Int get() = blockEntity?.groundDistance ?: syncedGround
+    val shoreDistance: Int get() = blockEntity?.shoreDistance ?: syncedShore
 
     // Engine power: -1 (client mirror) or the real value; hasEngines tells the screen to show "--" vs "N%".
     val enginePower: Int get() = blockEntity?.let { if (it.engineCount > 0) it.enginePowerPercent else -1 } ?: syncedEnginePower
@@ -195,10 +393,14 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     val cruiseVertical: Int get() = blockEntity?.cruiseVerticalThousandths
         ?: ((syncedCruiseVerticalHigh shl 16) or (syncedCruiseVerticalLow and 0xFFFF))
 
-    // Eureka Assembler prefs (per-player).
+    // Eureka Auto-Shipwright prefs (per-player).
     val assemblerEnabled: Boolean get() = syncedAssembler and 1 != 0
     val assemblerFloater: Boolean get() = syncedAssembler and 2 != 0
     val assemblerBalloon: Boolean get() = syncedAssembler and 4 != 0
+    val assemblerReplaceAll: Boolean get() = syncedAssembler and 8 != 0
+    // "now +N%" per row; FIT_PERCENT_NONE when there's nothing to compare (no ship / no recommendation).
+    val floaterFitPercent: Int get() = blockEntity?.floaterFitPercent ?: syncedFloaterFit
+    val balloonFitPercent: Int get() = blockEntity?.balloonFitPercent ?: syncedBalloonFit
     // Manual per-assembly bonus percentages (server-side read live off the player's prefs, else the synced mirror).
     val assemblerFloaterBonus: Int get() = blockEntity?.let { AssemblerPreferences.get(player.uuid).floaterBonusPercent } ?: syncedFloaterBonus
     val assemblerBalloonBonus: Int get() = blockEntity?.let { AssemblerPreferences.get(player.uuid).balloonBonusPercent } ?: syncedBalloonBonus
@@ -208,8 +410,32 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     override fun stillValid(player: Player): Boolean = true
 
     override fun clickMenuButton(player: Player, id: Int): Boolean {
-        if (blockEntity == null) return false
+        // A wheel in the hand answers for nothing but itself. Every ship control is refused by this one
+        // line -- there is no ship, no position and nothing to steer -- with the articles carved out for
+        // the same reason the armada-child lock carves them out below: reading a crew is not ship control.
+        // The Rename control is not here at all; it travels as its own payload.
+        if (blockEntity == null) {
+            if (id != BUTTON_CREW_BOOK) return false
+            if (!player.level().isClientSide) {
+                val captain = player as? net.minecraft.server.level.ServerPlayer ?: return true
+                val serverLevel = captain.level() as? net.minecraft.server.level.ServerLevel ?: return true
+                captain.closeContainer()
+                org.valkyrienskies.eureka.crew.ShipCrews.openArticlesInHand(serverLevel, captain)
+            }
+            return true
+        }
         val server = !player.level().isClientSide
+
+        // Pirate gate, door 9 of 14: the menu cannot OPEN on a pirate wheel, but a modified client can
+        // still send clicks at one. Swallow everything server-side -- same shape as the armada-child
+        // lock just below.
+        if (server && PirateHelm.gated(blockEntity.blockState)) return true
+
+        // A ship bound as an armada child is read-only from its own helm: swallow every ship-control action
+        // server-side (the client greys these out too, but a modified client could still send the click). The
+        // assembler + HUD ids are per-player prefs, not ship control, so they pass through. Only "/armada unbind"
+        // (later, the helm's Child checkbox) releases it.
+        if (server && blockEntity.isArmadaChild && isChildLockedButton(id)) return true
 
         // Manual assembler bonus entry ("Auto Floaters/Balloons + N%"). Encoded into a wide button id ABOVE the
         // cruise band, so it must be decoded first (the cruise check below is an open `id >= CRUISE_VALUE_BASE`).
@@ -243,6 +469,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             12 -> { if (server) AssemblerPreferences.setEnabled(player.uuid, !AssemblerPreferences.get(player.uuid).enabled); return true }
             13 -> { if (server) AssemblerPreferences.setFloater(player.uuid, !AssemblerPreferences.get(player.uuid).floater); return true }
             14 -> { if (server) AssemblerPreferences.setBalloon(player.uuid, !AssemblerPreferences.get(player.uuid).balloon); return true }
+            17 -> { if (server) AssemblerPreferences.setBalloonReplaceAll(player.uuid, !AssemblerPreferences.get(player.uuid).balloonReplaceAll); return true }
         }
 
         if (id == 0 && !assembled && server) {
@@ -266,15 +493,35 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             return true
         }
 
-        // "Water Altitude Lock" checkbox -> flip the GLOBAL enableWaterAltitudeHold server config.
+        // "Water Lock" checkbox -> flip enableWaterAltitudeHold on the BOATS & SHIPS settings block, which is
+        // where the checkbox lives and why a ship only gets the hold while it is being a boat.
         if (id == 5 && server) {
             blockEntity.toggleWaterAltitudeHold()
             return true
         }
 
-        // "Vanilla Controls" / "Advanced Controls" radio -> select THIS ship's per-ship control mode.
-        if (id == 6 && server) { blockEntity.setVanillaControls(true); return true }
-        if (id == 7 && server) { blockEntity.setVanillaControls(false); return true }
+        // Id 2 was the Keep Name checkbox the master-helm rework retired. Freed, not reused: a stale client
+        // could still send it, and the wrong feature answering would be worse than silence.
+
+        // The Crew & Operations book: close this menu and hand the player the articles -- the same screen
+        // the crew key opens at the wheel. The close must run FIRST: the container-close packet has to land
+        // before the manifest payload, or it closes the book it is meant to be replaced by. Deliberately
+        // NOT child-locked -- reading the articles is not ship control. (Id 7 remains free; 6 and 7 were
+        // the Advanced / Vanilla radio the ship-category tabs replaced.)
+        if (id == BUTTON_CREW_BOOK) {
+            if (server) {
+                val captain = player as? net.minecraft.server.level.ServerPlayer ?: return true
+                val serverLevel = captain.level() as? net.minecraft.server.level.ServerLevel ?: return true
+                captain.closeContainer()
+                org.valkyrienskies.eureka.crew.ShipCrews.openArticles(serverLevel, captain, blockEntity)
+            }
+            return true
+        }
+
+        // "Armada Parent" / "Armada Child" markers. 16 is deliberately NOT child-locked: unticking Child is how
+        // a bound ship gets released, so it has to stay live at a child's otherwise read-only helm.
+        if (id == 15 && server) { blockEntity.toggleArmadaParent(player); return true }
+        if (id == 16 && server) { blockEntity.toggleArmadaChild(player); return true }
 
         // "Cruise Control" master -> toggle cruise; 9/10/11 arm the speed/turn/vertical sets.
         if (id == 8 && server) { blockEntity.setCruise(!blockEntity.cruising); return true }
@@ -285,6 +532,15 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
         return super.clickMenuButton(player, id)
     }
 
+    // Which helm buttons drive THIS ship (and so are locked while it's an armada child): the cruise value-entry
+    // band and the ship-control ids. The assembler-bonus band (>= ASSEMBLER_BONUS_BASE) and the assembler
+    // toggles (12/13/14) are per-player prefs, not ship control, so they stay usable at a child's helm.
+    private fun isChildLockedButton(id: Int): Boolean = when {
+        id >= ASSEMBLER_BONUS_BASE -> false
+        id >= CRUISE_VALUE_BASE -> true
+        else -> id in CHILD_LOCKED_IDS
+    }
+
     override fun quickMoveStack(player: Player, index: Int): ItemStack {
         // Do nothing
         return ItemStack.EMPTY
@@ -292,6 +548,19 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
 
     companion object {
         val factory: (syncId: Int, playerInv: Inventory) -> ShipHelmScreenMenu = ::ShipHelmScreenMenu
+
+        // Ship-control button ids locked while this helm's ship is an armada child (see isChildLockedButton):
+        // 0 assemble, 1 align, 3 disassemble, 4 keep-active, 5 water-lock, 8 cruise master,
+        // 9/10/11 cruise speed/turn/vertical arms, 15 armada-parent (a child can't lead an armada). The cruise
+        // value-entry band is handled separately (by range). 16 (armada-child) is the one control a child keeps:
+        // it's the release. 17 (Replace All) is a per-player preference like 12/13/14, so it isn't locked.
+        private val CHILD_LOCKED_IDS = setOf(0, 1, 3, 4, 5, 8, 9, 10, 11, 15)
+
+        /** The Crew & Operations book. One of the two ids the old Advanced/Vanilla radio freed up. */
+        const val BUTTON_CREW_BOOK = 6
+
+        // Indexed by the low nibble of the synced category, so a value from a newer server can't throw.
+        private val PROFILES = ControlProfile.values()
 
         // Manual cruise value entry rides the vanilla container button-click channel (buttonId is a full VarInt
         // on the wire), so no new packet is needed. The client encodes {axis, value} as one large id; the server
