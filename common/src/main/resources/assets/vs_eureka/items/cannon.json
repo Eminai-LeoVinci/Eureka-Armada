@@ -4,7 +4,7 @@
     "property": "minecraft:display_context",
     "cases": [
       {
-        "when": ["gui", "ground", "fixed", "on_shelf"],
+        "when": ["ground", "fixed", "on_shelf"],
         "model": {
           "type": "minecraft:model",
           "model": "vs_eureka:item/cannon"

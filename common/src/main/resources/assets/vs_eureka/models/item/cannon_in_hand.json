@@ -1,11 +1,17 @@
 {
-  "_comment": "The held cannon: the rear carriage, the front carriage one block along its facing, and the barrel where CannonBlockEntityRenderer poses it at zero elevation -- composed into one model and shifted so its centroid is the block centre. Generated from the three deployed models, so re-run the generator rather than hand-editing this. Scales are cut from the vanilla block-item defaults because a cannon is two blocks long, not one; the inventory icon is NOT this model, it is the drawn sprite at item/cannon.",
+  "_comment": "The held cannon: the rear carriage, the front carriage one block along its facing, and the barrel where CannonBlockEntityRenderer poses it at zero elevation -- composed into one model and shifted so its centroid is the block centre. The geometry below was generated from the three deployed models; the display transforms are authored by hand. Scales are cut from the vanilla block-item defaults because a cannon is two blocks long, not one. This model IS the inventory icon: items/cannon.json routes gui here and leaves only ground, fixed and on_shelf on the drawn sprite at item/cannon.",
   "parent": "block/block",
   "textures": {
     "particle": "vs_eureka:block/cannon",
     "cannon": "vs_eureka:block/cannon"
   },
   "display": {
+    "gui": {
+      "_comment": "Centred by construction -- the composition is shifted onto the block centre -- so only a rotation and a fit-the-slot scale are needed. Same values the 1.21.1 branch uses, where this model is the icon in every context.",
+      "rotation": [ 30, 225, 0 ],
+      "translation": [ 0, 0, 0 ],
+      "scale": [ 0.34, 0.34, 0.34 ]
+    },
     "thirdperson_righthand": {
       "rotation": [
         75,
