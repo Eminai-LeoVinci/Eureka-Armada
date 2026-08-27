@@ -18,6 +18,7 @@ import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.EntityBlock
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
@@ -201,6 +202,12 @@ object ShipTemplate {
             for (palette in template.palettes) {
                 for (info in palette.blocks()) {
                     if (!info.state.hasBlockEntity()) continue
+                    // hasBlockEntity is a claim about the BLOCK; a multi-part block only backs it at one
+                    // part (a cannon's breech, never its muzzle half), and vanilla answers that per STATE
+                    // through newBlockEntity -- null there means this state never owns data to copy, so
+                    // a null template tag for it is correct, not a miscarried capture.
+                    val owner = info.state.block as? EntityBlock ?: continue
+                    if (owner.newBlockEntity(min.offset(info.pos), info.state) == null) continue
                     if (info.nbt == null || info.nbt!!.isEmpty) missing++
                 }
             }
