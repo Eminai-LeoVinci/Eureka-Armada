@@ -1,0 +1,21 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:glowstone",
+    "minecraft:sea_lantern",
+    "minecraft:shroomlight",
+    "minecraft:redstone_lamp",
+    "minecraft:jack_o_lantern",
+    "minecraft:end_rod",
+    "minecraft:torch",
+    "minecraft:wall_torch",
+    "minecraft:soul_torch",
+    "minecraft:soul_wall_torch",
+    "minecraft:campfire",
+    "minecraft:soul_campfire",
+    "minecraft:glow_lichen",
+    { "id": "minecraft:ochre_froglight", "required": false },
+    { "id": "minecraft:verdant_froglight", "required": false },
+    { "id": "minecraft:pearlescent_froglight", "required": false }
+  ]
+}
