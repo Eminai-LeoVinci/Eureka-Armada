@@ -35,6 +35,4 @@
   "gui.vs_eureka.disassemble": "해체",
   "gui.vs_eureka.align": "정렬",
   "gui.vs_eureka.aligning": "정렬 중...",
-  "hud.vs_eureka.start_cruising": "크루즈 제어 활성화됨",
-  "hud.vs_eureka.stop_cruising": "크루즈 제어 비활성화됨"
 }

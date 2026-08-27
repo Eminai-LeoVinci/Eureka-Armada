@@ -5,6 +5,7 @@ import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.flag.FeatureFlags
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.inventory.MenuType
+import org.valkyrienskies.eureka.gui.cannon.CannonScreenMenu
 import org.valkyrienskies.eureka.gui.engine.EngineScreenMenu
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
 import org.valkyrienskies.eureka.registry.DeferredRegister
@@ -17,6 +18,7 @@ object EurekaScreens {
 
     val SHIP_HELM = ShipHelmScreenMenu.factory withName "ship_helm"
     val ENGINE = EngineScreenMenu.factory withName "engine"
+    val CANNON = CannonScreenMenu.factory withName "cannon"
 
     fun register() {
         SCREENS.applyAll()

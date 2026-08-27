@@ -1,10 +1,29 @@
 {
   "required": true,
   "package": "org.valkyrienskies.eureka.fabric.mixin",
-  "compatibilityLevel": "JAVA_17",
+  "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "MixinAnvilFreeRename",
+    "MixinBlockEntityHoldTags",
+    "MixinChestMenuHoldTags",
+    "MixinCrewNoWheelVisit",
+    "MixinCrewNoWorkAtWheel",
+    "MixinCrewProjectileBoost",
+    "MixinCrewStrollAnywhere",
+    "MixinEntitySubAir",
+    "MixinGunnerSeatPersists",
+    "MixinPoiCompetitorScan",
+    "MixinShipBlockCensus",
+    "MixinShipFireContainment",
+    "MixinVSCoreTeleport",
+    "MixinVillagerCrewTenure",
+    "MixinYieldJobSite"
   ],
   "client": [
+    "client.MixinRaycastUtils",
+    "client.MixinCameraSubAir",
+    "client.MixinContainerScreenHoldLabel",
+    "client.MixinEntityRendererCrewNameTag"
   ],
   "injectors": {
     "defaultRequire": 1
