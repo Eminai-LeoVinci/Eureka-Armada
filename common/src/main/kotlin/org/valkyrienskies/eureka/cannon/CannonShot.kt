@@ -68,6 +68,13 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
      */
     var firedBy: Entity? = null
 
+    /**
+     * Game time of the last CLIENT tick that ran, so the far-flight pass in EurekaModFabric can tell
+     * a vanilla-ticked shot from one starved past the loaded-chunk line -- see that hook for the
+     * frozen-anchor story. Server-side it just sits at its initial value.
+     */
+    var lastClientTick = Long.MIN_VALUE
+
     /** The last chunk this shot bought a simulation ticket for -- see the ticket block in [tick]. */
     private var lastTicketChunk = Long.MIN_VALUE
 
@@ -230,6 +237,7 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
         // "visible at the muzzle then gone" it produced. Any drift is irrelevant because the server discards
         // the shot on impact and the client simply stops seeing it.
         if (level().isClientSide) {
+            lastClientTick = level().gameTime
             setPos(to.x, to.y, to.z)
             deltaMovement = deltaMovement.scale(entityData.get(DRAG).toDouble())
                 .subtract(0.0, entityData.get(GRAVITY).toDouble(), 0.0)
