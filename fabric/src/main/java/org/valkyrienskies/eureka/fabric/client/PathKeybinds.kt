@@ -231,7 +231,7 @@ object PathKeybinds {
         while (crew.consumeClick()) claimCrew(client)
         while (show.consumeClick()) pendingShow = true
         val claimed = pendingFollow || pendingCrew || pendingCrewAll || pendingShow || pendingBroadside ||
-            record.isDown || play.isDown
+            keyHeld(client, record) || keyHeld(client, play)
         if (!claimed) return
         for (mapping in client.options.keyMappings) {
             if (ours.any { it === mapping }) continue
@@ -301,7 +301,7 @@ object PathKeybinds {
         //
         // Firing at nothing is harmless: the server refuses unless the player is aboard a ship with guns and
         // gunners, so a stray press ashore costs a line of text at worst.
-        if (broadside.consumeClick()) {
+        if (broadside.consumeClick() || keyPressed(client, broadside)) {
             PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_BROADSIDE)
         }
 
@@ -346,9 +346,9 @@ object PathKeybinds {
         // A press arriving here rather than through the layer joins the same flags, so both routes are folded
         // in one place below and an action can never be counted twice.
         if (sneaking) {
-            if (follow.consumeClick()) pendingFollow = true
-            if (crew.consumeClick()) claimCrew(client)
-            if (show.consumeClick()) pendingShow = true
+            if (follow.consumeClick() || keyPressed(client, follow)) pendingFollow = true
+            if (crew.consumeClick() || keyPressed(client, crew)) claimCrew(client)
+            if (show.consumeClick() || keyPressed(client, show)) pendingShow = true
         } else if (!pendingFollow && !pendingCrew && !pendingCrewAll && !pendingShow && !pendingBroadside) {
             drainClicks(show, follow, crew)
             return
@@ -401,7 +401,7 @@ object PathKeybinds {
         onTap: () -> Unit,
         onHold: () -> Unit
     ): Float {
-        if (armed && gesture.mapping.isDown) {
+        if (armed && keyHeld(client, gesture.mapping)) {
             // The leading edge, and the only tick the modifier is read on -- see Gesture.ctrl.
             if (gesture.held == 0) gesture.ctrl = isControlDown(client)
             gesture.held++
@@ -433,6 +433,46 @@ object PathKeybinds {
      * `PATH_RECORDING_NOTES.md`). `InputConstants.isKeyDown` is what those helpers called anyway -- and it is
      * also why CTRL alone could never serve a controller, which no window scan can see.
      */
+
+    /** Physical state of the keys behind [ours], remembered so a press can be told from a hold. */
+    private val keyWasDown = HashMap<String, Boolean>()
+
+    /**
+     * Whether this binding's key is physically down, read from the window rather than from the KeyMapping.
+     *
+     * Minecraft keeps exactly ONE KeyMapping per key: the lookup it dispatches presses through is rebuilt by
+     * iterating a hash map, so when two bindings share a key the winner is decided by hash order and the
+     * loser never sees the key at all -- no press, no click, no isDown, and nothing to log. On this instance
+     * vanilla won both Play (shared with Social Interactions) and Follow (shared with Swap Offhand), so those
+     * two hotkeys were silently dead, while Record -- which shares R with Iris's reload and happened to win --
+     * worked perfectly. That draw differs per instance and per version, which is exactly why the same code
+     * behaves differently on 1.21.11.
+     *
+     * Reading the hardware makes our side of the chord independent of that draw. The conflicting binding is
+     * still drained by suppressVanillaCollisions while crouching, so the vanilla action it would otherwise
+     * have run does not also fire -- and outside the chord, that binding keeps working normally.
+     *
+     * Mouse buttons and unbound mappings have no key to scan and fall back to the mapping itself.
+     */
+    private fun keyHeld(client: Minecraft, mapping: KeyMapping): Boolean {
+        if (mapping.isDown) return true
+        val key = KeyBindingHelper.getBoundKeyOf(mapping)
+        if (key.type != InputConstants.Type.KEYSYM || key.value == InputConstants.UNKNOWN.value) return false
+        return InputConstants.isKeyDown(client.window.window, key.value)
+    }
+
+    /**
+     * True on the tick this binding's key goes down, whichever route it arrived by.
+     *
+     * Edge-triggered off [keyHeld] and latched per mapping, so several call sites may poll the same binding
+     * in one tick and the press still counts exactly once.
+     */
+    private fun keyPressed(client: Minecraft, mapping: KeyMapping): Boolean {
+        val now = keyHeld(client, mapping)
+        val was = keyWasDown.put(mapping.name, now) ?: false
+        return now && !was
+    }
+
     private fun isControlDown(client: Minecraft): Boolean =
         replay.isDown ||
             InputConstants.isKeyDown(client.window.window, GLFW.GLFW_KEY_LEFT_CONTROL) ||
