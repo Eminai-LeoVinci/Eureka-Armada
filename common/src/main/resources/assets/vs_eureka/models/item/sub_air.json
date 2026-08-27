@@ -1,0 +1,7 @@
+{
+  "_comment": "Creative-only placer for the submarine air block; the block itself is invisible by design, so the item shows the barrier-style icon.",
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "minecraft:item/structure_void"
+  }
+}
