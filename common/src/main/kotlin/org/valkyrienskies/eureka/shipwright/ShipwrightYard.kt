@@ -38,9 +38,15 @@ object ShipwrightYard {
      *     individually within reach. A formation arrives as one thing, and being told half of it is too far
      *     away would be nonsense when the children are welded to a parent that is right there.
      */
-    fun visible(level: ServerLevel, bench: BlockPos): List<Pair<LoadedServerShip, Boolean>> {
+    fun visible(
+        level: ServerLevel,
+        bench: BlockPos,
+        // The counter's own reach: the villager's repair range by default, the bench's own key when the
+        // book was opened at the bench directly -- see ShipwrightTalk.Counter.reach().
+        reachBlocks: Double = ShipRepair.reach
+    ): List<Pair<LoadedServerShip, Boolean>> {
         val dimension = level.dimensionId
-        val reach = ShipRepair.reach * ShipRepair.reach
+        val reach = reachBlocks * reachBlocks
         val found = LinkedHashMap<Long, Pair<LoadedServerShip, Boolean>>()
 
         // A bench aboard a ship has a SHIPYARD position, and ships report their transform in WORLD space.

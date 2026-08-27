@@ -14,19 +14,21 @@ import net.minecraft.world.entity.npc.villager.Villager
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
+import org.joml.Vector3d
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaItems
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.ShipManifest
 import org.valkyrienskies.eureka.template.ShipTemplate
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 
 /**
  * Talking to a shipwright: every interaction the profession has.
  *
  * Handing over a blueprint or a Heart of the Sea is done by holding it out; everything else happens in the
- * screen. Deliberately all on the villager rather than on its bench -- a workbench that answered questions
- * would make the shipwright decorative, and the point of the profession is that a harbor without one cannot
- * build you anything.
+ * screen. The counter is the villager by default, and (config permitting) the bench itself -- see [Counter]
+ * and the shipwright*Access keys: a server may keep the profession load-bearing, make the bench a
+ * self-service desk, or both at once, each measuring the yard with its own reach.
  */
 object ShipwrightTalk {
 
@@ -49,17 +51,108 @@ object ShipwrightTalk {
             return true
         }
 
-        openShelf(level, player, villager)
+        if (!EurekaConfig.SERVER.shipwrightVillagerAccess) {
+            // The counter is closed, not the trade: the click is still claimed, or vanilla's empty trade
+            // screen and the head-shake would answer instead of this line.
+            PathMessages.send(player, "The shipwright waves you toward the bench.", PathMessages.Kind.WARN)
+            return true
+        }
+        openShelf(level, player, Counter.AtVillager(villager))
         return true
     }
 
     fun isShipwright(villager: Villager): Boolean =
         villager.villagerData.profession().`is`(ShipwrightProfession.PROFESSION_KEY)
 
+    /**
+     * The shelf snapshot's counter id when the session is at a bench: no villager entity stands behind it,
+     * and entity ids are never negative, so -1 travels the same varint the villager id does. The screen
+     * only echoes the number back; the server resolves it against [benchSessionOf].
+     */
+    const val BENCH_WIRE_ID = -1
+
+    /**
+     * Which counter the captain is standing at: the villager, or (config permitting) the bench itself.
+     *
+     * The whole shelf session -- the shelf, the yard, every action -- is the same trade either way. What a
+     * counter decides is where the yard is measured from, how far it reaches, and whether there is anybody
+     * standing behind it to hold at attention.
+     */
+    sealed class Counter {
+        class AtVillager(val villager: Villager) : Counter()
+        class AtBench(val anchor: BlockPos) : Counter()
+
+        /**
+         * Where the yard is measured from, and where a built hull is set down.
+         *
+         * For a villager: the **bench**, not the villager -- a bench sits on a dock with the water in
+         * front of it, which is exactly where a hull wants to go, whereas the villager could be anywhere
+         * it happens to have wandered. Falls back to the villager only if it has somehow lost its
+         * workstation.
+         */
+        fun yard(): BlockPos = when (this) {
+            is AtVillager -> {
+                val site: GlobalPos? = villager.brain.getMemory(MemoryModuleType.JOB_SITE).orElse(null)
+                site?.pos() ?: villager.blockPosition()
+            }
+            is AtBench -> anchor
+        }
+
+        /** How far this counter's yard reaches -- each kind carries its own config range. */
+        fun reach(): Double = when (this) {
+            is AtVillager -> ShipRepair.reach
+            is AtBench -> EurekaConfig.SERVER.shipwrightBenchBlockRange.coerceAtLeast(0.0)
+        }
+
+        /** What the shelf snapshot reports as its counter. */
+        fun wireId(): Int = when (this) {
+            is AtVillager -> villager.id
+            is AtBench -> BENCH_WIRE_ID
+        }
+    }
+
+    /** One bench session per player, deadline-swept like [Attention] and for the same failsafe reason. */
+    private class BenchSession(val anchor: BlockPos, var until: Long)
+
+    private val benchSessions = HashMap<UUID, BenchSession>()
+
+    /** Empty hand on a bench: open the shelf with the BENCH as the counter. */
+    fun openBenchShelf(level: ServerLevel, player: ServerPlayer, anchor: BlockPos) {
+        benchSessions[player.uuid] = BenchSession(anchor, level.gameTime + ATTENTION_TICKS)
+        openShelf(level, player, Counter.AtBench(anchor))
+    }
+
+    /**
+     * The bench this player's open book belongs to, or null when there is no live session. Refreshes the
+     * deadline, so a browsing captain is never cut off mid-claim; the receiver re-validates the bench
+     * block and the reach on every action regardless, so a stale anchor refuses safely.
+     */
+    fun benchSessionOf(level: ServerLevel, player: ServerPlayer): BlockPos? {
+        val session = benchSessions[player.uuid] ?: return null
+        if (level.gameTime > session.until) {
+            benchSessions.remove(player.uuid)
+            return null
+        }
+        session.until = level.gameTime + ATTENTION_TICKS
+        return session.anchor
+    }
+
+    /**
+     * Where the desk actually stands in the world: a bench aboard an assembled ship holds SHIPYARD
+     * coordinates (the same lift [ShipwrightYard.visible] documents), so reach must be measured against
+     * the lifted position; on solid ground the transform is the identity. Lives HERE rather than in the
+     * loader's receiver because VS2's ship lookups are Kotlin extensions that only resolve in the common
+     * module -- the same constraint ShipBottle documents.
+     */
+    fun benchWorldPosition(level: ServerLevel, anchor: BlockPos): Vector3d {
+        val here = Vector3d(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5)
+        return level.getLoadedShipManagingPos(anchor)?.shipToWorld?.transformPosition(here) ?: here
+    }
+
     /** Send this player their whole shelf, as the screen draws it. */
-    fun openShelf(level: ServerLevel, player: ServerPlayer, villager: Villager) {
-        attend(level, player, villager)
-        val shelf = shelfFor(level, player, villager)
+    fun openShelf(level: ServerLevel, player: ServerPlayer, counter: Counter) {
+        if (counter is Counter.AtVillager) attend(level, player, counter.villager)
+        val shelf = shelfFor(level, player, counter)
         sender?.invoke(player, shelf)
     }
 
@@ -131,18 +224,18 @@ object ShipwrightTalk {
         for (id in gone) attending.remove(id)
     }
 
-    fun shelfFor(level: ServerLevel, player: ServerPlayer, villager: Villager): ShipwrightMenu.Shelf {
+    fun shelfFor(level: ServerLevel, player: ServerPlayer, counter: Counter): ShipwrightMenu.Shelf {
         reconcileOrphans(level, player)
         val shelf = ShipwrightMenu.snapshot(
             ledger = ShipwrightLedger.get(level.server),
             owner = player.uuid,
-            villager = villager.id,
+            villager = counter.wireId(),
             hasFreeBottle = Shipwright.freeBottle(player) != null,
             detail = { template -> detailOf(level, template) }
         )
         return ShipwrightMenu.Shelf(
             shelf.villager, shelf.slots, shelf.hasFreeBottle, shelf.rows,
-            vesselsFor(level, player, villager),
+            vesselsFor(level, player, counter),
             repairEnabled = EurekaConfig.SERVER.shipwrightRepair,
             partialRepair = EurekaConfig.SERVER.shipwrightPartialRepair,
             hasBlankBlueprint = Shipwright.blankBlueprint(player) != null,
@@ -207,16 +300,16 @@ object ShipwrightTalk {
     private fun vesselsFor(
         level: ServerLevel,
         player: ServerPlayer,
-        villager: Villager
+        counter: Counter
     ): List<ShipwrightMenu.Vessel> {
         // With repair off there is no Yard page, so assessing every hull in range would be work nobody
         // can ever see.
         if (!EurekaConfig.SERVER.shipwrightRepair) return emptyList()
 
         val ledger = ShipwrightLedger.get(level.server)
-        val bench = yard(villager)
+        val bench = counter.yard()
 
-        return ShipwrightYard.visible(level, bench).mapNotNull { (ship, isChild) ->
+        return ShipwrightYard.visible(level, bench, counter.reach()).mapNotNull { (ship, isChild) ->
             // Tight block bounds, the same measure a template uses -- see ShipRepair.bounds.
             val hull = ShipRepair.bounds(level, ship) ?: return@mapNotNull null
             val slug = ship.slug ?: return@mapNotNull null
@@ -296,7 +389,7 @@ object ShipwrightTalk {
     fun act(
         level: ServerLevel,
         player: ServerPlayer,
-        villager: Villager,
+        counter: Counter,
         action: ShipwrightMenu.Action,
         shipName: String,
         argument: String = "",
@@ -306,7 +399,10 @@ object ShipwrightTalk {
 
         // Closing the book names nothing at all, so it resolves before any lookup could refuse it.
         if (action == ShipwrightMenu.Action.CLOSED) {
-            dismissAttention(villager)
+            when (counter) {
+                is Counter.AtVillager -> dismissAttention(counter.villager)
+                is Counter.AtBench -> benchSessions.remove(player.uuid)
+            }
             return
         }
 
@@ -316,16 +412,16 @@ object ShipwrightTalk {
             action == ShipwrightMenu.Action.PAY_REPAIR ||
             action == ShipwrightMenu.Action.REPAIR
         ) {
-            yardAction(level, player, villager, action, shipName, argument)
-            openShelf(level, player, villager)
+            yardAction(level, player, counter, action, shipName, argument)
+            openShelf(level, player, counter)
             return
         }
 
         // Dismantling names a hull; claiming names a pile. Neither is a set of plans, so both resolve here
         // rather than falling through the plans lookup below and being refused as a missing blueprint.
         if (action == ShipwrightMenu.Action.DISMANTLE) {
-            dismantle(level, player, villager, shipName)
-            openShelf(level, player, villager)
+            dismantle(level, player, counter, shipName)
+            openShelf(level, player, counter)
             return
         }
         if (action == ShipwrightMenu.Action.CLAIM_ALL ||
@@ -334,7 +430,7 @@ object ShipwrightTalk {
             action == ShipwrightMenu.Action.SALVAGE_DISMISS_ALL
         ) {
             salvageAction(level, player, action, shipName, argument, argument2)
-            openShelf(level, player, villager)
+            openShelf(level, player, counter)
             return
         }
 
@@ -342,7 +438,7 @@ object ShipwrightTalk {
 
         if (plans == null) {
             PathMessages.send(player, "Those plans are no longer on file.", PathMessages.Kind.WARN)
-            openShelf(level, player, villager)
+            openShelf(level, player, counter)
             return
         }
 
@@ -361,7 +457,7 @@ object ShipwrightTalk {
                 if (!plans.ready) {
                     PathMessages.send(player, "'$shipName' is not paid for yet.", PathMessages.Kind.WARN)
                 } else {
-                    Shipwright.build(level, player, plans, yard(villager))
+                    Shipwright.build(level, player, plans, counter.yard())
                 }
             }
             ShipwrightMenu.Action.BOTTLE -> {
@@ -390,7 +486,7 @@ object ShipwrightTalk {
         }
         ledger.setDirty()
 
-        openShelf(level, player, villager)
+        openShelf(level, player, counter)
     }
 
     // region altering the plans
@@ -536,12 +632,12 @@ object ShipwrightTalk {
      * [yardAction] does -- this is the most destructive thing in the menu, and a client that could name any
      * ship in the world could delete any ship in the world.
      */
-    private fun dismantle(level: ServerLevel, player: ServerPlayer, villager: Villager, slug: String) {
+    private fun dismantle(level: ServerLevel, player: ServerPlayer, counter: Counter, slug: String) {
         if (!EurekaConfig.SERVER.shipwrightDismantle) {
             PathMessages.send(player, "This shipwright does not break ships up.", PathMessages.Kind.WARN)
             return
         }
-        val ship = ShipwrightYard.visible(level, yard(villager)).firstOrNull { it.first.slug == slug }?.first
+        val ship = ShipwrightYard.visible(level, counter.yard(), counter.reach()).firstOrNull { it.first.slug == slug }?.first
             ?: run {
                 PathMessages.send(player, "That ship is no longer in the yard.", PathMessages.Kind.WARN)
                 return
@@ -673,7 +769,7 @@ object ShipwrightTalk {
     private fun yardAction(
         level: ServerLevel,
         player: ServerPlayer,
-        villager: Villager,
+        counter: Counter,
         action: ShipwrightMenu.Action,
         slug: String,
         argument: String
@@ -683,10 +779,10 @@ object ShipwrightTalk {
             return
         }
 
-        val bench = yard(villager)
+        val bench = counter.yard()
         // Re-resolved from what the shipwright can see rather than trusting the slug on the wire, so a client
         // cannot ask about a hull on the other side of the world.
-        val ship = ShipwrightYard.visible(level, bench).firstOrNull { it.first.slug == slug }?.first ?: run {
+        val ship = ShipwrightYard.visible(level, bench, counter.reach()).firstOrNull { it.first.slug == slug }?.first ?: run {
             PathMessages.send(player, "That ship is no longer in the yard.", PathMessages.Kind.WARN)
             return
         }
@@ -764,18 +860,6 @@ object ShipwrightTalk {
                 PathMessages.Kind.GOOD
             )
         }
-    }
-
-    /**
-     * Where a ship this shipwright builds is set down.
-     *
-     * The **bench**, not the villager -- a bench sits on a dock with the water in front of it, which is exactly
-     * where a hull wants to go, whereas the villager could be anywhere it happens to have wandered. Falls back
-     * to the villager only if it has somehow lost its workstation.
-     */
-    private fun yard(villager: Villager): BlockPos {
-        val site: GlobalPos? = villager.brain.getMemory(MemoryModuleType.JOB_SITE).orElse(null)
-        return site?.pos() ?: villager.blockPosition()
     }
 
     private fun buyShelfSpace(

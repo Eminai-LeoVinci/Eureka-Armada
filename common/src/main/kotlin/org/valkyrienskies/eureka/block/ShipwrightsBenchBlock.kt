@@ -27,9 +27,11 @@ import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.Shapes
 import net.minecraft.world.phys.shapes.VoxelShape
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties.BENCH_PART
 import org.valkyrienskies.eureka.crew.CrewEggs
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
+import org.valkyrienskies.eureka.shipwright.ShipwrightTalk
 import org.valkyrienskies.mod.common.blockProps
 
 /**
@@ -246,6 +248,31 @@ class ShipwrightsBenchBlock : Block(
         }
         CrewEggs.tell(player as? ServerPlayer, refusal, "shipwright")
         return InteractionResult.SUCCESS
+    }
+
+    /**
+     * An empty hand on the desk opens the shipwright's book at the BENCH -- when the config says the bench
+     * answers (shipwrightBenchAccess). The "deliberately not interactive" note above predates that key and
+     * now describes its OFF setting: with access off this falls through untouched and the desk stays mute.
+     *
+     * The config gate runs before the client-side return on purpose: with access off, neither side claims
+     * the click, so there is no arm swing on a desk that does nothing.
+     */
+    override fun useWithoutItem(
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hitResult: BlockHitResult
+    ): InteractionResult {
+        if (!EurekaConfig.SERVER.shipwrightBenchAccess) {
+            return super.useWithoutItem(state, level, pos, player, hitResult)
+        }
+        if (level.isClientSide) return InteractionResult.SUCCESS
+        val serverLevel = level as? ServerLevel ?: return InteractionResult.PASS
+        val serverPlayer = player as? ServerPlayer ?: return InteractionResult.PASS
+        ShipwrightTalk.openBenchShelf(serverLevel, serverPlayer, anchorOf(pos, state))
+        return InteractionResult.CONSUME
     }
 
     private companion object {

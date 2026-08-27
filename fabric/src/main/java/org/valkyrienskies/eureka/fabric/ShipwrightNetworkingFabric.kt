@@ -18,7 +18,11 @@ import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.npc.villager.Villager
 import net.minecraft.world.item.Item
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaMod
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.BenchPart
+import org.valkyrienskies.eureka.block.ShipwrightsBenchBlock
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu
 import org.valkyrienskies.eureka.shipwright.ShipwrightTalk
 
@@ -94,13 +98,10 @@ object ShipwrightNetworkingFabric {
             val player = context.player()
             val level = player.level() as? ServerLevel ?: return@registerGlobalReceiver
             level.server.execute {
-                // Resolved server-side and re-checked every time: a client asking about a villager it cannot
-                // reach, or one that has since stopped being a shipwright, gets nothing.
-                val villager = level.getEntity(villagerId) as? Villager ?: return@execute
-                if (!ShipwrightTalk.isShipwright(villager)) return@execute
-                if (villager.distanceToSqr(player) > REACH_SQR) return@execute
-
-                ShipwrightTalk.act(level, player, villager, action, shipName, argument, argument2)
+                // Resolved server-side and re-checked every time: a client asking about a counter it cannot
+                // reach -- a distant villager, a broken bench, a session it never opened -- gets nothing.
+                val counter = resolveCounter(level, player, villagerId) ?: return@execute
+                ShipwrightTalk.act(level, player, counter, action, shipName, argument, argument2)
             }
         }
     }
@@ -335,6 +336,44 @@ object ShipwrightNetworkingFabric {
         val out = ByteArray(buf.readableBytes())
         buf.readBytes(out)
         return out
+    }
+
+    /**
+     * The counter this action is aimed at, re-validated server-side, or null to refuse silently.
+     *
+     * A non-negative id is the villager path exactly as it always was. [ShipwrightTalk.BENCH_WIRE_ID] is a
+     * bench session: the id names nothing, so the anchor comes from the server's own session record, and
+     * the block, the config gate and the reach are all re-checked against it -- a forged -1 with no
+     * session, an expired one, or a desk since broken all fall out the same silent way the villager path
+     * refuses.
+     */
+    private fun resolveCounter(
+        level: ServerLevel,
+        player: ServerPlayer,
+        villagerId: Int
+    ): ShipwrightTalk.Counter? {
+        if (villagerId != ShipwrightTalk.BENCH_WIRE_ID) {
+            if (!EurekaConfig.SERVER.shipwrightVillagerAccess) return null
+            val villager = level.getEntity(villagerId) as? Villager ?: return null
+            if (!ShipwrightTalk.isShipwright(villager)) return null
+            if (villager.distanceToSqr(player) > REACH_SQR) return null
+            return ShipwrightTalk.Counter.AtVillager(villager)
+        }
+
+        if (!EurekaConfig.SERVER.shipwrightBenchAccess) return null
+        val anchor = ShipwrightTalk.benchSessionOf(level, player) ?: return null
+        val state = level.getBlockState(anchor)
+        if (state.block !is ShipwrightsBenchBlock) return null
+        if (state.getValue(EurekaProperties.BENCH_PART) != BenchPart.MIDDLE_LOWER) return null
+
+        // A bench aboard an assembled ship holds SHIPYARD coordinates; reach is measured against where the
+        // desk actually stands in the world. The lift lives in common (see benchWorldPosition).
+        val world = ShipwrightTalk.benchWorldPosition(level, anchor)
+        val dx = world.x - player.x
+        val dy = world.y - player.y
+        val dz = world.z - player.z
+        if (dx * dx + dy * dy + dz * dz > REACH_SQR) return null
+        return ShipwrightTalk.Counter.AtBench(anchor)
     }
 
     /** Six blocks, squared. Comfortably past reach, tight enough that it is not a remote control. */
