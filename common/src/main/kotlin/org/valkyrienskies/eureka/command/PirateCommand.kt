@@ -105,7 +105,7 @@ object PirateCommand {
         val now = level.gameTime
         for (gun in ShipGuns.aboard(level, ship)) {
             val label = "(${gun.blockPos.toShortString()})"
-            if (gun.readyAt > now) {
+            if (!gun.readyBy(now)) {
                 ctx.source.sendSuccess({ Component.literal("$label cooling") }, false)
                 continue
             }
