@@ -60,6 +60,7 @@
   "item.vs_eureka.armor_piercing_netherite_cannonball": "Armor-Piercing Netherite Cannonball",
   "item.vs_eureka.cannonball.damage": "Breaks %s-%s blocks",
   "item.vs_eureka.cannonball.charge": "Charge adds up to %s blocks",
+  "item.vs_eureka.cannonball.burst": "Bursts in a %s block sphere",
   "item.vs_eureka.cannonball.incendiary": "Sets fire to %s blocks left standing",
   "item.vs_eureka.cannonball.armor_piercing": "Punches through %s walls, losing a quarter each",
   "item.vs_eureka.blueprint.blank": "Blank",

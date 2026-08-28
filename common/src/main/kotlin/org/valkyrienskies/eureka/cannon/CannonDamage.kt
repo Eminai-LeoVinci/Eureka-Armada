@@ -11,9 +11,16 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.mod.common.getShipManagingPos
 import org.valkyrienskies.mod.compat.voxy.VoxyLodRefresh
+import kotlin.math.floor
 
 /**
  * Taking a measured bite out of whatever the shot hit.
+ *
+ * ## Two shapes, because there are two kinds of round
+ * [punch] is the solid shot: a flood fill from the point of impact, eating its way through whatever it reached.
+ * [burst] is the bursting charge: a sphere centred where the round stopped, everything inside it gone. Both are
+ * handed the same already-rolled block count and differ only in what they spend it on -- a tally of blocks, or
+ * a radius. Which one a round gets is the round's own business; see [org.valkyrienskies.eureka.item.Load.bursts].
  *
  * ## Why not just call an explosion
  * A vanilla explosion decides for itself how much it destroys, from blast resistance and a radius. The whole
@@ -91,6 +98,125 @@ object CannonDamage {
         }
         markLods(level, origin, taken)
         return shown
+    }
+
+    /**
+     * Detonate at [origin]: destroy everything destructible inside a sphere, showing the break effect for at
+     * most [effects] of them, and return how many effects were actually spent.
+     *
+     * ## Why a sphere is a different weapon from a bite
+     * [punch] is a solid shot -- a lump of metal arriving fast, eating its way into whatever it met, walking
+     * through air for free because a round that clips the edge of a deck should still take its full bite out of
+     * the timber beyond. Right for a ball; wrong for a bursting charge, which does not travel anywhere after it
+     * goes off. It detonates where it stopped, and what it destroys is simply what was close enough.
+     *
+     * So this takes the round's rolled count and spends it on a RADIUS rather than on a block tally: everything
+     * inside dies, and nothing outside does, however much of the sphere turns out to be open air. A shell buried
+     * in a hillside eats about its whole count; one that lands on the surface leaves a crater of the same width
+     * with only the ground half taken. That is how creepers and TNT read, and it is what makes a crater a crater.
+     *
+     * ## Why not a flood fill with a radius bolted on
+     * [punch]'s breadth-first walk expands by MANHATTAN distance, so its hole is an octahedron -- visibly pointy
+     * once it is more than a few blocks across -- and its search ceiling truncates part-way through a shell, in
+     * whatever order [Direction.entries] happened to queue. Past a couple of hundred blocks that leftover partial
+     * shell is a lopsided streak rather than a bowl, which is the gash a big charge used to leave. A straight
+     * scan of the enclosing box has neither problem and is cheaper besides: no queue, no visited set.
+     *
+     * ## Shipyard space throughout, exactly as [punch]
+     * [origin] is whatever `BlockHitResult.getBlockPos` handed back, so a hit on a hull is a shipyard position
+     * and every offset from it is a real neighbour on that hull. The sphere is carved in the space the ball
+     * actually struck; it does not reach across into another. A shell that craters the seabed beside a ship
+     * leaves the ship alone, which is the same rule the solid shot has always followed.
+     */
+    fun burst(level: ServerLevel, origin: BlockPos, count: Int, effects: Int = Int.MAX_VALUE): Int {
+        if (count <= 0) return 0
+
+        val radius = blastRadius(count)
+        val reach = radius * radius
+        val span = floor(radius).toInt()
+
+        val taken = ArrayList<BlockPos>()
+        val cursor = BlockPos.MutableBlockPos()
+
+        for (dx in -span..span) {
+            for (dy in -span..span) {
+                for (dz in -span..span) {
+                    if ((dx * dx + dy * dy + dz * dz).toDouble() > reach) continue
+                    cursor.set(origin.x + dx, origin.y + dy, origin.z + dz)
+                    // Never generate ground at the rim of a big blast: a shell landing at the edge of the
+                    // loaded area would otherwise drag new chunks into being just to blow them up.
+                    if (!level.hasChunkAt(cursor)) continue
+
+                    val state = level.getBlockState(cursor)
+                    if (state.isAir) continue
+                    // The same two refusals the solid shot makes, and for the same reasons -- bedrock and its
+                    // kin report a negative hardness, and a pirate's wheel is inviolable while its crew lives.
+                    if (state.getDestroySpeed(level, cursor) < 0) continue
+                    if (PirateHelm.inviolable(state)) continue
+
+                    taken.add(cursor.immutable())
+                }
+            }
+        }
+
+        // Nearest first, so the handful of break effects the round can still afford land in the middle of the
+        // crater where somebody is looking, rather than at whichever corner of the scan box came first.
+        taken.sortBy { it.distSqr(origin) }
+
+        val shown = minOf(taken.size, maxOf(effects, 0))
+        for ((index, pos) in taken.withIndex()) {
+            if (index < shown) level.destroyBlock(pos, false) else remove(level, pos)
+        }
+        markLods(level, origin, taken)
+        return shown
+    }
+
+    /**
+     * How wide a sphere [count] blocks buys.
+     *
+     * An operator-set radius wins outright; otherwise the count is spent on volume. The continuous answer --
+     * `cbrt(3n / 4pi)` -- is only a seed, because block positions are a lattice and a lattice ball's size jumps
+     * in steps: 1, 7, 19, 27, 33, 57, 81, 93, 123. Taken literally the continuous radius rounds those steps
+     * DOWN, and a four-block charge would come out as a radius of 0.98 and destroy exactly one block. So the
+     * seed is stepped outward to the first sphere that actually holds the count, which errs the other way --
+     * a rolled 100 fills a 123-cell ball -- and that is the right way to err: a small charge still has to read
+     * as a burst, and half of any surface hit is air the sphere never gets to collect anyway.
+     *
+     * The ceiling is the only thing that says no. It exists because the carve is a cube's worth of block reads
+     * and writes in a single tick, and it is deliberately set far above anything the damage ladders can reach.
+     */
+    fun blastRadius(count: Int): Double {
+        val cap = EurekaConfig.SERVER.cannonExplosiveMaxBlastRadius.coerceAtLeast(0.0)
+        val fixed = EurekaConfig.SERVER.cannonExplosiveBlastRadius
+        if (fixed > 0.0) return fixed.coerceAtMost(cap)
+        if (count <= 1) return 0.0
+
+        // Snapped down to a step boundary before the walk starts, so every answer is a clean multiple of the
+        // step and rises with the count -- unsnapped, a seed that already satisfied its count was returned
+        // as-is, and a four-block charge could come out WIDER than a five-block one while carving the same
+        // seven cells.
+        var radius = (floor(Math.cbrt(count * 3.0 / (4.0 * Math.PI)) / RADIUS_STEP) * RADIUS_STEP)
+            .coerceAtLeast(RADIUS_STEP)
+        while (radius < cap) {
+            if (cellsWithin(radius) >= count) return radius
+            radius += RADIUS_STEP
+        }
+        return cap
+    }
+
+    /** How many block positions a sphere of [radius] encloses, counted rather than estimated. */
+    private fun cellsWithin(radius: Double): Int {
+        val reach = radius * radius
+        val span = floor(radius).toInt()
+        var cells = 0
+        for (dx in -span..span) {
+            for (dy in -span..span) {
+                for (dz in -span..span) {
+                    if ((dx * dx + dy * dy + dz * dz).toDouble() <= reach) cells++
+                }
+            }
+        }
+        return cells
     }
 
     /**
@@ -181,4 +307,11 @@ object CannonDamage {
      * direction and then punching a hole in whatever unlucky thing it met.
      */
     private const val SEARCH_LIMIT = 512
+
+    /**
+     * How finely [blastRadius] walks outward looking for the first sphere big enough. Small enough that the
+     * chosen sphere is never much bigger than the count asked for; large enough that the walk is a handful of
+     * counts, not hundreds.
+     */
+    private const val RADIUS_STEP = 0.25
 }

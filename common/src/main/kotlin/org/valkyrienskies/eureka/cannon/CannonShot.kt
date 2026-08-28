@@ -425,8 +425,15 @@ class CannonShot(type: EntityType<out CannonShot>, level: Level) : Entity(type, 
             // The hole is always the full size the round rolled; only how loudly it is made is rationed --
             // this impact may show a few break effects, and never more than the round has left. See
             // CannonDamage.punch and [effectBudget].
+            //
+            // A bursting charge spends that same roll on a radius instead of a block tally, so it craters
+            // where it stopped rather than boring on through -- see [Load.bursts] and CannonDamage.burst.
             val allowed = minOf(EFFECTS_PER_IMPACT, effectBudget)
-            effectBudget -= CannonDamage.punch(level, blockHit, bite, allowed)
+            effectBudget -= if (load.bursts) {
+                CannonDamage.burst(level, blockHit, bite, allowed)
+            } else {
+                CannonDamage.punch(level, blockHit, bite, allowed)
+            }
             CannonDamage.kindle(level, blockHit, load.incendiaryBlocks)
         }
 

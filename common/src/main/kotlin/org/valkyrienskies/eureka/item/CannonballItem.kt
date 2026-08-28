@@ -5,6 +5,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.TooltipFlag
+import org.valkyrienskies.eureka.cannon.CannonDamage
 import java.util.function.Consumer
 
 /**
@@ -40,10 +41,23 @@ class CannonballItem(val ball: Cannonball, val charge: CannonCharge, properties:
         )
         when (charge) {
             CannonCharge.PLAIN -> Unit
-            CannonCharge.EXPLOSIVE -> adder.add(
-                Component.translatable("item.vs_eureka.cannonball.charge", load.chargeBonus)
-                    .withStyle(ChatFormatting.DARK_AQUA)
-            )
+            // The charge line is what it adds to the ladder; the burst line is what it does with it. A
+            // bursting round craters as a sphere rather than boring through, and the width of that sphere at
+            // the round's best roll is the thing a gunner is actually choosing between metals for.
+            CannonCharge.EXPLOSIVE -> {
+                adder.add(
+                    Component.translatable("item.vs_eureka.cannonball.charge", load.chargeBonus)
+                        .withStyle(ChatFormatting.DARK_AQUA)
+                )
+                if (load.bursts) {
+                    adder.add(
+                        Component.translatable(
+                            "item.vs_eureka.cannonball.burst",
+                            String.format("%.1f", CannonDamage.blastRadius(load.maxBlocks))
+                        ).withStyle(ChatFormatting.DARK_AQUA)
+                    )
+                }
+            }
             // An incendiary round's damage line is identical to a plain one's, so without this the tooltip
             // would give a player no reason at all to have paid for the blaze powder.
             CannonCharge.INCENDIARY -> adder.add(

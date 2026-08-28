@@ -262,6 +262,20 @@ object ArmadaTuningCommand {
             literal("explosive")
                 .then(intNode("guaranteed", "explosive bonus guaranteed", "blocks", cfg::cannonExplosiveBonusGuaranteed))
                 .then(chancesNode("chances", "explosive bonus chances", "bonus chances", cfg::cannonExplosiveBonusChances))
+                .then(
+                    literal("sphere")
+                        .executes { show(it, "explosive sphere", if (cfg.cannonExplosiveBlastSphere) "on" else "off") }
+                        .then(
+                            literal("on")
+                                .executes { store(it, "explosive sphere", { cfg.cannonExplosiveBlastSphere = true }, "on") }
+                        )
+                        .then(
+                            literal("off")
+                                .executes { store(it, "explosive sphere", { cfg.cannonExplosiveBlastSphere = false }, "off") }
+                        )
+                )
+                .then(doubleNode("radius", "explosive blast radius", "blocks (0 = from the roll)", cfg::cannonExplosiveBlastRadius))
+                .then(doubleNode("max-radius", "explosive max blast radius", "blocks", cfg::cannonExplosiveMaxBlastRadius))
         )
         root.then(
             literal("armor-piercing")
@@ -315,6 +329,11 @@ object ArmadaTuningCommand {
         lines.add(
             "explosive bonus: guaranteed ${cfg.cannonExplosiveBonusGuaranteed}, " +
                 "chances \"${cfg.cannonExplosiveBonusChances}\""
+        )
+        lines.add(
+            "explosive blast: sphere ${if (cfg.cannonExplosiveBlastSphere) "on" else "off"}, " +
+                "radius ${if (cfg.cannonExplosiveBlastRadius > 0.0) "${cfg.cannonExplosiveBlastRadius}" else "from the roll"}, " +
+                "max ${cfg.cannonExplosiveMaxBlastRadius}"
         )
         lines.add("armor-piercing strikes: \"${cfg.cannonArmorPiercingStrikePercents}\"")
         lines.add(
