@@ -76,7 +76,7 @@ object PirateGunnery {
         }
 
         for (gun in ShipGuns.aboard(level, pirate)) {
-            if (gun.readyAt > now) continue
+            if (!gun.readyBy(now)) continue
             val gunner = GunnerMounts.gunnerAt(level, gun.blockPos)
             if (gunner == null || !gunner.isAlive) continue
             val aim = AutoGunnery.aimFor(level, gun, target) ?: fallback

@@ -145,6 +145,32 @@ class CannonBlockEntity(pos: BlockPos, state: BlockState) :
      */
     val loaded: Boolean get() = powderCount >= powderCharge.powder && !shot.isEmpty
 
+    /**
+     * Whether this gun's clock lets her speak at [now] -- which is NOT simply `readyAt <= now`.
+     *
+     * [readyAt] is an absolute game tick, so it only means anything against the clock that wrote it. A
+     * stamp further ahead than one whole reload cannot be this gun being hot; it means the WORLD clock
+     * moved underneath her. A hull spawned from a bottle, a blueprint or a template carries the game time
+     * of the world it was captured in, and a restored backup rolls the clock back the same way -- either
+     * leaves a perfectly loaded gun holding a stamp days in the future.
+     *
+     * [CannonFire] has always taken that view AT THE TRIGGER, so such a gun fires the moment a player
+     * strikes her by hand. Every other reader of the clock used a bare comparison instead, and so quietly
+     * dropped her from the volley she was standing ready for -- a battery full of powder and shot, manned,
+     * and silent. That also explains why hand-firing "fixed" a gun for good: firing rewrote her stamp
+     * against the live clock. One predicate now, so the trigger and everyone deciding what reaches it can
+     * never disagree again.
+     *
+     * [cooldownTicks] is an override rate (fire-at-will's), measured against the LONGEST wait this gun
+     * could honestly have been handed -- testing only one of the two rates breaks in both directions.
+     */
+    fun readyBy(now: Long, cooldownTicks: Long? = null): Boolean {
+        val ceiling = maxOf(powderCharge.reloadTicks, cooldownTicks?.takeIf { it > 0L } ?: 0L)
+        val remaining = readyAt - now
+        return remaining <= 0L || remaining > ceiling
+    }
+
+
     override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu {
         // Stamp the gun's current name just before the menu syncs it; see [gunLabelCode].
         val level = this.level

@@ -80,7 +80,7 @@ object ShipGuns {
 
         val now = level.gameTime
         return guns.sortedWith(
-            compareByDescending<CannonBlockEntity> { it.loaded && it.readyAt <= now }
+            compareByDescending<CannonBlockEntity> { it.loaded && it.readyBy(now) }
                 .thenBy { it.blockPos.x }
                 .thenBy { it.blockPos.z }
                 .thenBy { it.blockPos.y }

@@ -109,7 +109,7 @@ object FireAtWill {
             if (labeled.isEmpty()) ShipGuns.aboard(level, ship) else labeled.map { it.gun }
 
         for (gun in guns) {
-            if (gun.readyAt > now) continue
+            if (!gun.readyBy(now)) continue
             val berth = stations.value[gun.blockPos.asLong()] ?: continue
             val aim = AutoGunnery.aimFor(level, gun, target) ?: fallback
             // A LOCKED berth keeps its own settings, here as everywhere bulk: her crew solve on the
