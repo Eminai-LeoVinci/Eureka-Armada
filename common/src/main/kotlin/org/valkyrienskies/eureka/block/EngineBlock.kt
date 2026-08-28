@@ -11,6 +11,7 @@ import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -51,12 +52,62 @@ class EngineBlock : BaseEntityBlock(
     override fun newBlockEntity(blockPos: BlockPos, state: BlockState): BlockEntity =
         EngineBlockEntity(blockPos, state)
 
+    /**
+     * Fuel in hand stokes the firebox where it stands, mirroring how a cannon takes its round: walking a
+     * shovel of coal up to the engine should not detour through the screen. Anything the furnace registry
+     * refuses falls through untouched, so blocks can still be placed against the engine, and the empty hand
+     * keeps opening the firebox screen below.
+     */
+    // 1.20.1 has no useItemOn/useWithoutItem split -- one use() covers both. The legacy body computes
+    // modern-style results; PASS falls through to the empty-hand half exactly as
+    // PASS_TO_DEFAULT_BLOCK_INTERACTION would on 1.21.1.
     override fun use(
         state: BlockState,
         level: Level,
         pos: BlockPos,
         player: Player,
         hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        val withItem = useItemOnLegacy(player.getItemInHand(hand), state, level, pos, player, hand, hit)
+        if (withItem != InteractionResult.PASS) return withItem
+        return useWithoutItemLegacy(state, level, pos, player, hit)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private fun useItemOnLegacy(
+        stack: ItemStack,
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
+        hand: InteractionHand,
+        hit: BlockHitResult
+    ): InteractionResult {
+        // An empty hand belongs to useWithoutItem -- on 1.21.1 the legacy body returns PASS for it (see the
+        // mapping note above).
+        if (stack.isEmpty) return InteractionResult.PASS
+
+        val engine = level.getBlockEntity(pos) as? EngineBlockEntity ?: return InteractionResult.PASS
+        if (!engine.canPlaceItem(0, stack)) return InteractionResult.PASS
+        if (level.isClientSide) return InteractionResult.SUCCESS
+
+        val loaded = engine.load(stack, !player.abilities.instabuild)
+        if (loaded == 0) {
+            // Full, or a different fuel already in the box. Consumed rather than passed, so the click never
+            // falls through to placing the fuel block against the engine.
+            return InteractionResult.CONSUME
+        }
+
+        level.playSound(null, pos, SoundEvents.GRAVEL_PLACE, SoundSource.BLOCKS, 0.6f, 0.8f)
+        return InteractionResult.CONSUME
+    }
+
+    private fun useWithoutItemLegacy(
+        state: BlockState,
+        level: Level,
+        pos: BlockPos,
+        player: Player,
         blockHitResult: BlockHitResult
     ): InteractionResult {
         if (level.isClientSide) return InteractionResult.SUCCESS
@@ -192,4 +243,6 @@ class EngineBlock : BaseEntityBlock(
 
         super.playerWillDestroy(level, pos, state, player)
     }
+
+    // (1.20.1 blocks have no codec.)
 }
