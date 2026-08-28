@@ -2,6 +2,7 @@
   "replace": false,
   "values": [
     "vs_eureka:floater",
+    "vs_eureka:shipwrights_bench",
     "#vs_eureka:ship_helms",
     "#vs_eureka:balloons"
   ]

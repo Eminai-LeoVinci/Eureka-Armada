@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:coral_blocks",
+    "#minecraft:corals",
+    "#minecraft:coral_plants",
+    "#minecraft:wall_corals"
+  ]
+}

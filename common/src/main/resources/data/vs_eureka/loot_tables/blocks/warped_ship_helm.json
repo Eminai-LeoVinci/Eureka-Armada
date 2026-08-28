@@ -7,7 +7,29 @@
       "entries": [
         {
           "type": "minecraft:item",
-          "name": "vs_eureka:warped_ship_helm"
+          "name": "vs_eureka:warped_ship_helm",
+          "functions": [
+            {
+              "function": "minecraft:copy_name",
+              "source": "block_entity"
+            },
+            {
+              "function": "minecraft:copy_nbt",
+              "source": "block_entity",
+              "ops": [
+                {
+                  "source": "\"vs_eureka:crew_bindings\"",
+                  "target": "\"vs_eureka:crew_bindings\"",
+                  "op": "replace"
+                },
+                {
+                  "source": "\"vs_eureka:remembered_ship\"",
+                  "target": "\"vs_eureka:remembered_ship\"",
+                  "op": "replace"
+                }
+              ]
+            }
+          ]
         }
       ],
       "conditions": [

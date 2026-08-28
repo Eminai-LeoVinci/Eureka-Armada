@@ -1,0 +1,8 @@
+{
+  "_comment": "1.21.1 has no #minecraft:lanterns item tag (it arrives later), so both lanterns are inlined.",
+  "replace": false,
+  "values": [
+    "minecraft:lantern",
+    "minecraft:soul_lantern"
+  ]
+}

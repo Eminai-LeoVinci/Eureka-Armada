@@ -1,0 +1,4 @@
+{
+  "_comment": "1.21.1 has no per-display-context item model select, so the cannon is the composed 3D model in every context, the way the bench already is. The drawn sprite icon (item/cannon texture) is a 1.21.11-only luxury; its .mcmeta animation goes with it.",
+  "parent": "vs_eureka:item/cannon_in_hand"
+}

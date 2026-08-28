@@ -1,0 +1,12 @@
+{
+  "multipart": [
+    { "when": { "part": "rear", "facing": "north" }, "apply": { "model": "vs_eureka:block/cannon_rear_carriage" } },
+    { "when": { "part": "rear", "facing": "east" }, "apply": { "model": "vs_eureka:block/cannon_rear_carriage", "y": 90 } },
+    { "when": { "part": "rear", "facing": "south" }, "apply": { "model": "vs_eureka:block/cannon_rear_carriage", "y": 180 } },
+    { "when": { "part": "rear", "facing": "west" }, "apply": { "model": "vs_eureka:block/cannon_rear_carriage", "y": 270 } },
+    { "when": { "part": "front", "facing": "north" }, "apply": { "model": "vs_eureka:block/cannon_front_carriage" } },
+    { "when": { "part": "front", "facing": "east" }, "apply": { "model": "vs_eureka:block/cannon_front_carriage", "y": 90 } },
+    { "when": { "part": "front", "facing": "south" }, "apply": { "model": "vs_eureka:block/cannon_front_carriage", "y": 180 } },
+    { "when": { "part": "front", "facing": "west" }, "apply": { "model": "vs_eureka:block/cannon_front_carriage", "y": 270 } }
+  ]
+}
