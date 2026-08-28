@@ -6,8 +6,10 @@ import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.inventory.MenuType
+import org.valkyrienskies.eureka.EurekaScreens.CANNON
 import org.valkyrienskies.eureka.EurekaScreens.ENGINE
 import org.valkyrienskies.eureka.EurekaScreens.SHIP_HELM
+import org.valkyrienskies.eureka.gui.cannon.CannonScreen
 import org.valkyrienskies.eureka.gui.engine.EngineScreen
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreen
 import org.valkyrienskies.eureka.registry.RegistrySupplier
@@ -27,6 +29,7 @@ object EurekaClientScreens {
     init {
         SHIP_HELM withScreen ::ShipHelmScreen
         ENGINE withScreen ::EngineScreen
+        CANNON withScreen ::CannonScreen
     }
 
     fun register() {

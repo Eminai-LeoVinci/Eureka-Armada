@@ -10,9 +10,11 @@ import org.valkyrienskies.mod.common.getShipManaging
 import kotlin.math.atan2
 
 /**
- * Small top-center readouts for the ship the player is piloting -- speed / altitude / heading, each toggled
- * independently by the helm menu's display checkboxes ([EurekaConfig.Client]). Client-only; wired to Fabric's
- * HudRenderCallback in EurekaModFabric. Drawn at a reduced scale for small, subtle text.
+ * Small top-center readouts for the ship the player is piloting -- speed, altitude and heading, one HUD
+ * behind one switch ([EurekaConfig.Client.displayHud], the helm menu's HUD checkbox). It used to be four
+ * checkboxes -- a master and one per readout -- which was three more decisions than anyone was making: the
+ * sub-toggles shipped OFF, so a fresh install that ticked "Display HUD" got nothing at all. Client-only;
+ * wired to Fabric's HudRenderCallback in EurekaModFabric. Drawn at a reduced scale for small, subtle text.
  */
 object EurekaSpeedHud {
     private const val COLOR = 0xC8FFFFFF.toInt() // subtle translucent white
@@ -24,31 +26,28 @@ object EurekaSpeedHud {
     private val COMPASS = arrayOf("S", "SW", "W", "NW", "N", "NE", "E", "SE")
 
     fun render(guiGraphics: GuiGraphics) {
-        val cfg = EurekaConfig.CLIENT
-        // displayHud is the master gate; the three are individual readouts under it.
-        if (!cfg.displayHud) return
-        if (!cfg.displaySpeed && !cfg.displayAltitude && !cfg.displayHeading) return
+        if (!EurekaConfig.CLIENT.displayHud) return
         val mc = Minecraft.getInstance()
         // Only while actually piloting a ship (seated on a helm); the seat sits in the ship's shipyard, so
         // getShipManaging() resolves the controlled ship client-side.
         val seat = mc.player?.vehicle as? ShipMountingEntity ?: return
         val ship = seat.getShipManaging() ?: return
 
-        val parts = ArrayList<String>(3)
-        if (cfg.displaySpeed) parts.add(String.format("%.1f", ship.velocity.length()) + "m/s")
-        if (cfg.displayAltitude) parts.add("Y " + String.format("%.0f", ship.transform.positionInWorld.y()))
-        if (cfg.displayHeading) parts.add(heading(ship))
-        if (parts.isEmpty()) return
+        val parts = listOf(
+            String.format("%.1f", ship.velocity.length()) + "m/s",
+            "Y " + String.format("%.0f", ship.transform.positionInWorld.y()),
+            heading(ship)
+        )
 
         // One horizontal line at top-center: "12.3m/s  |  Y 84  |  N 12°".
-        // GuiGraphics.pose() is a 3D PoseStack, so push/scale(s,s,1f) and draw in the scaled space -- divide
-        // the (already GUI-scaled) screen width by SCALE to keep the line top-centered at any GUI scale.
+        // GuiGraphics.pose() is a 2D Matrix3x2fStack in 1.21.11, so drawString coords are in the scaled space
+        // -- divide screen coords by SCALE to keep the line top-centered regardless of GUI scale.
         val line = parts.joinToString(SEPARATOR)
         val font = mc.font
         val pose = guiGraphics.pose()
         pose.pushPose()
         pose.scale(SCALE, SCALE, 1f)
-        val sx = (mc.window.guiScaledWidth / SCALE - font.width(line)) / 2f
+        val sx = (guiGraphics.guiWidth() / SCALE - font.width(line)) / 2f
         val sy = TOP_MARGIN / SCALE
         guiGraphics.drawString(font, line, Math.round(sx), Math.round(sy), COLOR, true)
         pose.popPose()

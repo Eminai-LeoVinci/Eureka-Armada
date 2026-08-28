@@ -1,15 +1,14 @@
 package org.valkyrienskies.eureka
 
-import net.minecraft.Util
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Registry
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.registries.Registries
-import net.minecraft.util.datafix.fixes.References
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.state.BlockState
+import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.eureka.registry.DeferredRegister
@@ -32,6 +31,10 @@ object EurekaBlockEntities {
 
     val ENGINE = EurekaBlocks.ENGINE withBE ::EngineBlockEntity byName "engine"
 
+    // Only the rear half of a cannon ever builds one -- CannonBlock.newBlockEntity returns null for the
+    // front -- but the type still has to name the block, which is the same block for both halves.
+    val CANNON = EurekaBlocks.CANNON withBE ::CannonBlockEntity byName "cannon"
+
     fun register() {
         BLOCKENTITIES.applyAll()
     }
@@ -45,11 +48,10 @@ object EurekaBlockEntities {
     private infix fun <T : BlockEntity> Block.withBE(blockEntity: (BlockPos, BlockState) -> T) = Pair(this, blockEntity)
     private infix fun <T : BlockEntity> Pair<Set<RegistrySupplier<out Block>>, (BlockPos, BlockState) -> T>.byName(name: String): RegistrySupplier<BlockEntityType<T>> =
         BLOCKENTITIES.register(name) {
-            val type = Util.fetchChoiceType(References.BLOCK_ENTITY, name)
-
-            BlockEntityType.Builder.of(
+            BlockEntityType(
                 this.second,
-                *this.first.map { it.get() }.toTypedArray()
-            ).build(type)
+                this.first.map { it.get() }.toSet(),
+                null
+            )
         }
 }

@@ -9,160 +9,187 @@ import net.minecraft.world.level.block.FireBlock
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.material.MapColor
-import org.valkyrienskies.eureka.block.AnchorBlock
-import org.valkyrienskies.eureka.block.BallastBlock
-import org.valkyrienskies.eureka.block.BalloonBlock
-import org.valkyrienskies.eureka.block.EngineBlock
-import org.valkyrienskies.eureka.block.FloaterBlock
-import org.valkyrienskies.eureka.block.ShipHelmBlock
-import org.valkyrienskies.eureka.block.WoodType
+import org.valkyrienskies.eureka.block.*
+import org.valkyrienskies.eureka.item.ShipHelmBlockItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
+import org.valkyrienskies.mod.common.blockProps
 import org.valkyrienskies.mod.common.hooks.VSGameEvents
+import org.valkyrienskies.mod.common.itemProps
 
 @Suppress("unused")
 object EurekaBlocks {
     internal val BLOCKS = DeferredRegister.create(EurekaMod.MOD_ID, Registries.BLOCK)
 
+    /** Blocks whose item holds one per slot. See the note in [registerItems]. */
+    private val UNSTACKABLE = setOf("cannon", "shipwrights_bench")
+
     val ANCHOR = BLOCKS.register("anchor", ::AnchorBlock)
     val ENGINE = BLOCKS.register("engine", ::EngineBlock)
+
+    // Two blocks long, laid rear-to-front like a bed -- see CannonBlock for why two.
+    val CANNON = BLOCKS.register("cannon", ::CannonBlock)
+
+    // Virtual block backing the pitching-barrel overlay model, the cannon's answer to
+    // SHIP_HELM_WHEEL below. Never placed and has no item (skipped in registerItems).
+    val CANNON_BARREL = BLOCKS.register("cannon_barrel") {
+        CannonBarrelBlock(blockProps())
+    }
+
     val FLOATER = BLOCKS.register("floater", ::FloaterBlock)
     val BALLAST = BLOCKS.register("ballast", ::BallastBlock)
+
+    // The shipwright's job site: a desk six blocks in size, laid 3 wide by 1 deep by 2 tall. Its recipe is
+    // config-driven like every other -- see ShipwrightsBenchBlock for why it stopped being unobtainable.
+    val SHIPWRIGHTS_BENCH = BLOCKS.register("shipwrights_bench", ::ShipwrightsBenchBlock)
+
+    // A submarine's interior air. No item and no creative tab entry -- it is placed by the assembler, never by
+    // hand. Properties copy vanilla air exactly so that everything which asks "is this air?" says yes.
+    val SUB_AIR = BLOCKS.register("sub_air") {
+        SubAirBlock(blockProps().replaceable().noCollission().noLootTable().air())
+    }
 
     // region Ship Helms
     val OAK_SHIP_HELM = BLOCKS.register("oak_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.OAK
         )
     }
     val SPRUCE_SHIP_HELM = BLOCKS.register("spruce_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.SPRUCE
         )
     }
     val BIRCH_SHIP_HELM = BLOCKS.register("birch_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.BIRCH
         )
     }
+    // Pale oak exists only on 1.21.11+; no pale-oak helm on this branch.
     val JUNGLE_SHIP_HELM = BLOCKS.register("jungle_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.JUNGLE
         )
     }
     val ACACIA_SHIP_HELM = BLOCKS.register("acacia_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.ACACIA
         )
     }
     val DARK_OAK_SHIP_HELM = BLOCKS.register("dark_oak_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.WOOD).strength(2.5F).sound(SoundType.WOOD).requiresCorrectToolForDrops(),
             WoodType.DARK_OAK
         )
     }
     val CRIMSON_SHIP_HELM = BLOCKS.register("crimson_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.NETHER).strength(2.5F).sound(SoundType.STEM).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.NETHER).strength(2.5F).sound(SoundType.STEM).requiresCorrectToolForDrops(),
             WoodType.CRIMSON
         )
     }
     val WARPED_SHIP_HELM = BLOCKS.register("warped_ship_helm") {
         ShipHelmBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.NETHER).strength(2.5F).sound(SoundType.STEM).requiresCorrectToolForDrops(),
+            blockProps().mapColor(MapColor.NETHER).strength(2.5F).sound(SoundType.STEM).requiresCorrectToolForDrops(),
             WoodType.WARPED
         )
+    }
+
+    // Virtual block backing the spinning steering-wheel overlay model. Never placed and has no
+    // item (skipped in registerItems); it exists only so its blockstate/models get baked.
+    val SHIP_HELM_WHEEL = BLOCKS.register("ship_helm_wheel") {
+        ShipHelmWheelBlock(blockProps())
     }
     // endregion
 
     // region Balloons
     val BALLOON = BLOCKS.register("balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.WOOL).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.WOOL).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val WHITE_BALLOON = BLOCKS.register("white_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.SNOW).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.SNOW).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val LIGHT_GRAY_BALLOON = BLOCKS.register("light_gray_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_LIGHT_GRAY).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_LIGHT_GRAY).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val GRAY_BALLOON = BLOCKS.register("gray_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_GRAY).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_GRAY).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val BLACK_BALLOON = BLOCKS.register("black_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_BLACK).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_BLACK).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val RED_BALLOON = BLOCKS.register("red_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_RED).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_RED).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val ORANGE_BALLOON = BLOCKS.register("orange_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_ORANGE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_ORANGE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val YELLOW_BALLOON = BLOCKS.register("yellow_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_YELLOW).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_YELLOW).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val LIME_BALLOON = BLOCKS.register("lime_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_LIGHT_GREEN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_LIGHT_GREEN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val GREEN_BALLOON = BLOCKS.register("green_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_GREEN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_GREEN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val LIGHT_BLUE_BALLOON = BLOCKS.register("light_blue_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_LIGHT_BLUE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_LIGHT_BLUE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val CYAN_BALLOON = BLOCKS.register("cyan_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_CYAN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_CYAN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val BLUE_BALLOON = BLOCKS.register("blue_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_BLUE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_BLUE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val PURPLE_BALLOON = BLOCKS.register("purple_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_PURPLE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_PURPLE).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val MAGENTA_BALLOON = BLOCKS.register("magenta_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_MAGENTA).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_MAGENTA).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val PINK_BALLOON = BLOCKS.register("pink_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_PINK).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_PINK).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     val BROWN_BALLOON = BLOCKS.register("brown_balloon") {
         BalloonBlock(
-            BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_BROWN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
+            blockProps().mapColor(MapColor.COLOR_BROWN).strength(0.8F).sound(SoundType.WOOL).requiresCorrectToolForDrops()
         )
     }
     // endregion
@@ -214,7 +241,29 @@ object EurekaBlocks {
     // aka all blocks
     fun registerItems(items: DeferredRegister<Item>) {
         BLOCKS.forEach {
-            items.register(it.name) { BlockItem(it.get(), Item.Properties()) }
+            // The wheel and barrel blocks are render-only virtual blocks; they must not have items.
+            if (it.name == "ship_helm_wheel" || it.name == "cannon_barrel") return@forEach
+            // useBlockDescriptionPrefix: 1.21.11 stopped giving BlockItems the block's translation key for
+            // free -- Item.Properties now carries the choice, and it defaults to the item prefix. Every name
+            // in this mod is written as block.vs_eureka.*, so without this every item asks for a key no lang
+            // file defines and renders as the raw id, in hand and in tooltips alike.
+            //
+            // Multi-block structures do not stack: a two-block iron gun and a six-block desk are not a
+            // pocketful of torches, and a chest with five guns in it should read as the arsenal it is.
+            // Existing stacks in old worlds keep their count; they just stop re-merging.
+            //
+            // The properties MUST be built inside the register lambda: itemProps() reads the id of the item
+            // currently being registered, and evaluated out here it has none -- "Item id not set" on launch.
+            items.register(it.name) {
+                val props =
+                    if (it.name in UNSTACKABLE) itemProps().stacksTo(1)
+                    else itemProps()
+                // A wheel in the hand opens its own interface on sneak+right-click -- it is the one block
+                // here that carries a name and a crew binding around with it, and both were unreadable
+                // until it was placed. See ShipHelmBlockItem.
+                val block = it.get()
+                if (block is ShipHelmBlock) ShipHelmBlockItem(block, props) else BlockItem(block, props)
+            }
         }
     }
 }

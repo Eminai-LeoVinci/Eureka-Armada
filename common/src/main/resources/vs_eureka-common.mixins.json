@@ -2,6 +2,10 @@
   "required": true,
   "package": "org.valkyrienskies.eureka.mixin",
   "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "MixinExplosionPirateHelm",
+    "MixinNoSnowOnShips"
+  ],
   "client": [
     "client.PlayerEntityModelMixin"
   ],

@@ -3,10 +3,14 @@ package org.valkyrienskies.eureka
 import net.minecraft.client.renderer.entity.EntityRendererProvider
 import net.minecraft.client.renderer.entity.EntityRenderers
 import net.minecraft.core.registries.Registries
+import net.minecraft.resources.ResourceLocation
+import net.minecraft.resources.ResourceKey
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.MobCategory
 import net.minecraft.world.level.Level
+import org.valkyrienskies.eureka.bottle.ThrownShipBottle
+import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.eureka.registry.RegistrySupplier
 
@@ -27,6 +31,49 @@ object EurekaEntities {
 
     // val SEAT = ::SeatEntity category MobCategory.MISC byName "seat" registerRenderer ::EmptyRenderer
 
+    /**
+     * A Ship Bottle in flight. Built to the eye of ender's numbers on purpose -- same hitbox, same update
+     * interval -- because it is the same gesture and should carry the same weight in the air.
+     *
+     * Tracked further than an eye of ender is (16 chunks against 4): this one is worth watching all the way to
+     * the ship, and the ship it is going for may well be further off than the eye's range.
+     *
+     * The renderer is registered from the Fabric client entrypoint rather than through [registerRenderer], next
+     * to the helm's. Naming a client-only renderer here would drag it into this object's initialiser, which the
+     * dedicated server runs.
+     */
+    val THROWN_BOTTLE: RegistrySupplier<EntityType<ThrownShipBottle>> =
+        (::ThrownShipBottle category MobCategory.MISC)
+            .sized(0.25f, 0.25f)
+            .clientTrackingRange(16)
+            // Every tick, unlike the eye of ender's four. Its path is decided server-side from ship transforms
+            // the client cannot reproduce, so there is nothing to dead-reckon with between updates.
+            .updateInterval(1)
+            // A bottle carrying a ship must survive a throw into lava. Losing a whole vessel to a bad arc is
+            // not a punishment anyone would read as fair.
+            .fireImmune()
+            .byName("thrown_ship_bottle")
+
+    /**
+     * A cannonball in flight.
+     *
+     * Tracked to 64 chunks (1024 blocks) and updated every tick for the same reason the bottle is: its path
+     * is stepped server-side against ship transforms the client cannot reproduce, so there is nothing to
+     * dead-reckon between updates. The tracking range is the hard ceiling on how far away a shot can be
+     * SEEN -- MixinCannonShotTracking unlinks that from the viewer's render distance, so this number is
+     * the whole answer; how far it actually draws inside that is the client's `cannonShotRenderDistance` config, which
+     * is why the ceiling ships with headroom over the default. Few shots exist at once, so the wide range
+     * costs nearly nothing.
+     */
+    val CANNON_SHOT: RegistrySupplier<EntityType<CannonShot>> =
+        (::CannonShot category MobCategory.MISC)
+            .sized(0.3f, 0.3f)
+            .clientTrackingRange(64)
+            .updateInterval(1)
+            // Iron does not mind lava, and neither should a shot that flies over a lake of it.
+            .fireImmune()
+            .byName("cannon_shot")
+
     fun register() {
         ENTITIES.applyAll()
     }
@@ -41,7 +88,9 @@ object EurekaEntities {
         this.apply { ENTITY_RENDERERS += ToRegEntityRenderer(this, factory) }
 
     private infix fun <T : Entity> EntityType.Builder<T>.byName(name: String) =
-        ENTITIES.register(name) { this.build(name) }
+        ENTITIES.register(name) {
+            this.build(name)
+        }
 
     @JvmStatic
     fun registerRenderers() =

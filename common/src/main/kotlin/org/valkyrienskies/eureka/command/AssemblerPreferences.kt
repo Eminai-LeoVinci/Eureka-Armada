@@ -4,8 +4,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Per-player, in-memory toggle store for the Eureka Assembler, set via
- * `/vs eureka-assembler <floater|balloon> <true|false>` and read once, at ship-assembly time, in
+ * Per-player, in-memory toggle store for the Eureka Auto-Shipwright, set via
+ * `/vs auto-shipwright <floater|balloon> <true|false>` and read once, at ship-assembly time, in
  * [org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity.assemble].
  *
  * The toggles are STICKY: they persist for a player until they explicitly turn them off, so a player
@@ -17,19 +17,23 @@ import java.util.concurrent.ConcurrentHashMap
  * re-enables the mode after a relaunch, exactly like a client toggle.
  */
 object AssemblerPreferences {
-    // enabled = the "Eureka Assembler!" section master (helm menu). floater/balloon are the two sub auto-fills.
-    // Assembly applies a sub only when enabled AND that sub is on, so the master can pause both without losing
-    // which subs were picked. The /vs eureka-assembler command auto-sets enabled when it turns a sub on, so
-    // command users (who never see the master) keep working exactly as before.
+    // enabled = the "Eureka Auto-Shipwright" section master (helm menu). floater/balloon are the two sub
+    // auto-fills. Assembly applies a sub only when enabled AND that sub is on, so the master can pause both
+    // without losing which subs were picked. The /vs auto-shipwright command auto-sets enabled when it turns
+    // a sub on, so command users (who never see the master) keep working exactly as before.
     // floaterBonusPercent/balloonBonusPercent are a TRANSIENT extra % (0..MAX_BONUS) the helm-menu textboxes add
     // on top of the auto-calculated floater/balloon counts for the NEXT assembly, then reset to 0 once a ship is
     // built (see clearBonuses) -- a manual nudge for a ship that feels off, per-sub, not sticky like the toggles.
+    // balloonReplaceAll converts every convertible block instead of sizing a target; it is STICKY like the
+    // toggles rather than transient like the bonuses, because "this ship is all lift" is a property of how you
+    // build, not of one assembly. It overrides balloonBonusPercent (there is no target left to add a % to).
     data class Prefs(
         var enabled: Boolean = false,
         var floater: Boolean = false,
         var balloon: Boolean = false,
         var floaterBonusPercent: Int = 0,
-        var balloonBonusPercent: Int = 0
+        var balloonBonusPercent: Int = 0,
+        var balloonReplaceAll: Boolean = false
     )
 
     // Cap on the manual textbox bonus, matching the helm box's 3-digit filter (a sane ceiling so a fat-fingered
@@ -48,6 +52,10 @@ object AssemblerPreferences {
 
     fun setBalloon(id: UUID, value: Boolean) {
         byPlayer.getOrPut(id) { Prefs() }.also { it.balloon = value; if (value) it.enabled = true }
+    }
+
+    fun setBalloonReplaceAll(id: UUID, value: Boolean) {
+        byPlayer.getOrPut(id) { Prefs() }.also { it.balloonReplaceAll = value; if (value) { it.balloon = true; it.enabled = true } }
     }
 
     fun setFloaterBonus(id: UUID, percent: Int) {

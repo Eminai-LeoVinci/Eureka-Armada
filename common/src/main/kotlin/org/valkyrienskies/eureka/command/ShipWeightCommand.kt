@@ -7,29 +7,25 @@ import kotlin.math.max
 import kotlin.math.min
 import net.minecraft.ChatFormatting
 import net.minecraft.commands.CommandSourceStack
+import net.minecraft.commands.Commands.argument
 import net.minecraft.commands.Commands.literal
 import net.minecraft.network.chat.Component
-import net.minecraft.server.level.ServerLevel
-import net.minecraft.world.entity.Entity
-import net.minecraft.world.phys.BlockHitResult
 import org.valkyrienskies.core.api.ships.LoadedServerShip
-import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.ship.EurekaShipControl
-import org.valkyrienskies.mod.common.getShipManagingPos
+import org.valkyrienskies.eureka.util.BuoyancyMath
+import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
 /**
- * "/vs get-ship-weight <floater|balloon>" -- prints the mass of the ship the player is LOOKING AT and
- * how many floaters (to float on water) or balloons (to lift off the ground) that ship needs, next to
- * how many are currently placed on it. Thresholds are computed from the LIVE EurekaConfig values, so
- * packs that rebalance massPerBalloon / floaterBuoyantFactorPerKg get matching numbers.
+ * "/vs get-ship-weight <ship> <floater|balloon>" -- prints the ship's mass and how many floaters
+ * (to float on water) or balloons (to lift off the ground) the ship needs, next to how many are
+ * currently placed on it. Thresholds are computed from the LIVE EurekaConfig values, so packs that
+ * rebalance massPerBalloon / floaterBuoyantFactorPerKg get matching numbers.
  *
- * 1.20.1 port note: the 1.21.1 source selected the ship with a `<ship>` ShipArgument. Eureka-120 is
- * built against OFFICIAL VS2 2.4.10 (the one-jar strategy), whose published API does NOT expose
- * `org.valkyrienskies.mod.common.command.arguments.ShipArgument`, so this resolves the target from a
- * ship-aware raytrace instead (VS2 patches Entity.pick to hit ship blocks) -- the same mechanism VS2's
- * own `/vs set-keep-active` bare form uses. All-literal, so VS2's vs_command_passthrough forwards it
- * from the client cleanly. Lives in Eureka rather than VSCommands because the math reads EurekaConfig.
+ * Registered from the platform initializer onto the server dispatcher; Brigadier merges the "vs"
+ * literal into VS2's existing /vs root, and VS2's vs_command_passthrough mixin forwards this
+ * server-only subcommand from the client. Lives in Eureka rather than VSCommands because the math
+ * reads EurekaConfig.
  *
  * The balloon count is sized for a real ASCEND, not just neutral hover: hovering needs
  * balloons * (massPerBalloon * g * balloonLiftMultiplier) >= mass * g, but climbing needs surplus lift
@@ -47,64 +43,28 @@ import org.valkyrienskies.mod.common.getShipManagingPos
  * Placed counts are read off the EurekaShipControl attachment -- the exact counters the physics
  * consumes -- rather than rescanning blocks. The floater counter is stored as unpowered-equivalent
  * fifteenths (a redstone-powered floater counts for less), so a fractional readout means some
- * floaters are weakened. Mass is `ship.inertiaData.shipMass` on the 1.20.1 vs-core pin.
+ * floaters are weakened.
  */
 object ShipWeightCommand {
 
-    // Added buoyant factor at which a ship stops sinking (factor 2x neutral): Eureka's per-kg
-    // normalization puts this at exactly mass/floaterBuoyantFactorPerKg floaters for every ship.
-    // At this point the ship rides very low -- awash, interior flooding at the waterline.
-    private const val AFLOAT_ADDED_FACTOR = 1.0
-
-    // Added factor for a "high and dry" ride (keel around the waterline, interior dry).
-    // Calibrated in-game on a 556t fishing boat: keel-dry was reached at ~6.3 added factor and the
-    // hull was fully emerged by ~9.0; 7.5 clears keel-dry with headroom. Somewhat shape-dependent
-    // (denser/taller hulls sit deeper) and ride height keeps rising with extra floaters.
-    private const val DRY_ADDED_FACTOR = 7.5
-
-    // Reported needed-counts sit this much above the computed threshold: at the exact tie the ship
-    // is only neutrally buoyant (hovers/sits awash but won't climb), so recommend going one over.
-    // Floater-only now -- the balloon count instead uses assemblerBalloonAscendRate for real climb headroom.
-    private const val SAFETY_MARGIN = 1
-
-    // |EurekaShipControl.GRAVITY| (10.0). Balloons sized for neutral hover (mass/liftPerBalloon) hold the
-    // ship up but won't climb; the usable climb force is the lift SURPLUS over weight. Terminal climb speed
-    // when balloon-limited is balloonForce/mass - g, so the count for a target climb speed V is the hover
-    // count times (1 + V/g). This mirrors EurekaAssembler so the reported "needed" matches what it builds.
-    private const val GRAVITY_MAGNITUDE = 10.0
-
-    // Ship-aware raytrace reach (blocks): far enough to point at a hull from the deck or nearby ground.
-    private const val PICK_REACH = 24.0
+    // The thresholds themselves live in BuoyancyMath, shared with the Auto-Shipwright that does the fitting
+    // and the helm's "now +N%" readout. They used to be duplicated here, which meant a change to one could
+    // leave this command confidently reporting a number the fill would never actually place.
 
     fun register(dispatcher: CommandDispatcher<CommandSourceStack>) {
         dispatcher.register(
             literal("vs").then(
-                literal("get-ship-weight")
-                    .then(literal("floater").executes { getShipWeight(it, floater = true) })
-                    .then(literal("balloon").executes { getShipWeight(it, floater = false) })
+                literal("get-ship-weight").then(
+                    argument("ship", ShipArgument.ships())
+                        .then(literal("floater").executes { getShipWeight(it, floater = true) })
+                        .then(literal("balloon").executes { getShipWeight(it, floater = false) })
+                )
             )
         )
     }
 
-    /** Ship-aware raytrace: VS2 patches [Entity.pick], so this resolves ship blocks even on a moving ship. */
-    private fun lookedAtShip(sourceEntity: Entity?): ServerShip? {
-        if (sourceEntity == null) return null
-        val level = sourceEntity.level() as? ServerLevel ?: return null
-        val rayTrace = sourceEntity.pick(PICK_REACH, 1.0f, false)
-        if (rayTrace is BlockHitResult) {
-            return level.getShipManagingPos(rayTrace.blockPos)
-        }
-        return null
-    }
-
     private fun getShipWeight(ctx: CommandContext<CommandSourceStack>, floater: Boolean): Int {
-        val ship = lookedAtShip(ctx.source.entity)
-        if (ship == null) {
-            ctx.source.sendFailure(
-                Component.literal("No ship found. Look at a block on the ship and try again.")
-            )
-            return 0
-        }
+        val ship = ShipArgument.getShip(ctx, "ship")
         if (ship !is LoadedServerShip) {
             ctx.source.sendFailure(
                 Component.literal("Ship '${ship.slug}' is not loaded -- get closer to it and try again.")
@@ -112,7 +72,7 @@ object ShipWeightCommand {
             return 0
         }
 
-        val mass = ship.inertiaData.shipMass
+        val mass = ship.inertiaData.mass
         val cfg = EurekaConfig.SERVER
         val control = ship.getAttachment(EurekaShipControl::class.java)
         val slug = ship.slug ?: "unnamed ship"
@@ -120,7 +80,7 @@ object ShipWeightCommand {
         val msg = Component.literal("Ship '$slug' weighs ${fmtKg(mass)}").withStyle(ChatFormatting.WHITE)
         if (floater) {
             // Per unpowered floater BLOCK (the attachment counter stores fifteenths of this).
-            val perFloater = min(cfg.floaterBuoyantFactorPerKg / mass, 15.0 * cfg.maxFloaterBuoyantFactor)
+            val perFloater = BuoyancyMath.perFloater(mass)
             if (perFloater <= 0.0) {
                 ctx.source.sendFailure(
                     Component.literal(
@@ -130,8 +90,8 @@ object ShipWeightCommand {
                 )
                 return 0
             }
-            val afloat = ceil(AFLOAT_ADDED_FACTOR / perFloater).toInt() + SAFETY_MARGIN
-            val dry = maxOf(ceil(DRY_ADDED_FACTOR / perFloater).toInt(), afloat)
+            val afloat = BuoyancyMath.afloatFloaters(mass)
+            val dry = maxOf(BuoyancyMath.recommendedFloaters(mass), afloat)
             val units = control?.floaters ?: 0
             val effective = units / 15.0 // placed floaters in unpowered-equivalents
 
@@ -179,7 +139,7 @@ object ShipWeightCommand {
                     .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)
             )
         } else {
-            val liftPerBalloon = cfg.massPerBalloon * cfg.balloonLiftMultiplier // kg of ship per balloon
+            val liftPerBalloon = BuoyancyMath.liftPerBalloon() // kg of ship per balloon
             if (liftPerBalloon <= 0.0) {
                 ctx.source.sendFailure(
                     Component.literal(
@@ -189,10 +149,9 @@ object ShipWeightCommand {
                 )
                 return 0
             }
-            // Match EurekaAssembler: size for a target climb speed, not neutral hover, so this count is what
-            // the assembler would place and "enough" means the ship can actually ascend (not just hover).
-            val ascendFactor = 1.0 + max(0.0, cfg.assemblerBalloonAscendRate) / GRAVITY_MAGNITUDE
-            val needed = ceil(mass * ascendFactor / liftPerBalloon).toInt()
+            // Sized for a target climb speed, not neutral hover, so this count is what the Auto-Shipwright
+            // would fit and "enough" means the ship can actually ascend rather than merely hover.
+            val needed = BuoyancyMath.recommendedBalloons(mass)
             val balloons = control?.balloons ?: 0
 
             msg.append(newline())

@@ -3,5 +3,15 @@ accessible method net/minecraft/world/inventory/MenuType <init> (Lnet/minecraft/
 accessible method net/minecraft/client/gui/screens/MenuScreens register (Lnet/minecraft/world/inventory/MenuType;Lnet/minecraft/client/gui/screens/MenuScreens$ScreenConstructor;)V
 accessible class  net/minecraft/world/entity/EntityType$Builder
 accessible method net/minecraft/client/renderer/entity/EntityRenderers register (Lnet/minecraft/world/entity/EntityType;Lnet/minecraft/client/renderer/entity/EntityRendererProvider;)V
-accessible class  net/minecraft/client/resources/model/ModelBakery$ModelGroupKey
 accessible method net/minecraft/world/level/block/FireBlock setFlammable (Lnet/minecraft/world/level/block/Block;II)V
+accessible method net/minecraft/world/level/block/entity/BlockEntityType <init> (Lnet/minecraft/world/level/block/entity/BlockEntityType$BlockEntitySupplier;Ljava/util/Set;Lcom/mojang/datafixers/types/Type;)V
+accessible field net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate entityInfoList Ljava/util/List;
+accessible field net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate palettes Ljava/util/List;
+accessible field net/minecraft/world/entity/decoration/HangingEntity pos Lnet/minecraft/core/BlockPos;
+accessible method net/minecraft/world/entity/decoration/HangingEntity setDirection (Lnet/minecraft/core/Direction;)V
+accessible field net/minecraft/world/entity/Mob goalSelector Lnet/minecraft/world/entity/ai/goal/GoalSelector;
+accessible field net/minecraft/world/entity/Mob targetSelector Lnet/minecraft/world/entity/ai/goal/GoalSelector;
+accessible field net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal targetType Ljava/lang/Class;
+accessible field net/minecraft/world/CompoundContainer container1 Lnet/minecraft/world/Container;
+accessible field net/minecraft/world/CompoundContainer container2 Lnet/minecraft/world/Container;
+accessible class net/minecraft/server/level/ChunkMap$TrackedEntity
