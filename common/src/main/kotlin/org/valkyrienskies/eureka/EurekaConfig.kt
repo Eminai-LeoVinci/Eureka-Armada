@@ -1574,6 +1574,34 @@ object EurekaConfig {
         var cannonExplosiveBonusChances = "60,30"
 
         @JsonSchema(
+            description = "Explosive rounds: whether the charge craters as a SPHERE at the point of impact " +
+                "instead of eating its way through whatever it reached. On, the rolled block count buys a " +
+                "radius and everything destructible inside it goes -- a shell buried in a hillside spends " +
+                "about its whole count, one that lands on the surface leaves a crater of the same width with " +
+                "only the ground half taken, which is how TNT and creepers read. Off, an explosive round goes " +
+                "back to the solid shot's flood fill, which bores rather than craters. Flip it live with " +
+                "/armada cannonballs explosive sphere. Default true."
+        )
+        var cannonExplosiveBlastSphere = true
+
+        @JsonSchema(
+            description = "Explosive rounds: blast radius in blocks, overriding the roll. Zero lets the " +
+                "rolled block count choose the radius, which is what keeps the damage ladders meaningful; " +
+                "set a number here and every explosive round bursts to exactly that width whatever it rolled " +
+                "and whatever metal carried it. Default 0.0."
+        )
+        var cannonExplosiveBlastRadius = 0.0
+
+        @JsonSchema(
+            description = "Explosive rounds: the largest blast radius allowed, however big the roll or the " +
+                "override. A burst is a cube's worth of block reads and writes inside a single tick, so this " +
+                "is the line past which one shell would stall the server rather than damage it. Set far above " +
+                "anything the shipped ladders can reach -- past about 12 the carve is already a visible hitch. " +
+                "Default 24.0."
+        )
+        var cannonExplosiveMaxBlastRadius = 24.0
+
+        @JsonSchema(
             description = "Armor-piercing rounds: each strike's share of the OPENING hit's roll, in " +
                 "percent, first entry first. How many entries there are is how many times the round " +
                 "strikes before it is spent; every share is of the first roll, never of the last strike, " +

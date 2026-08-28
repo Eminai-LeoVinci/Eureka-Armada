@@ -155,6 +155,17 @@ class Load(val ball: Cannonball, val charge: CannonCharge) {
     val incendiaryBlocks: Int get() = if (charge == CannonCharge.INCENDIARY) ball.incendiary else 0
 
     /**
+     * Whether this round craters as a sphere instead of biting a hole.
+     *
+     * The bursting charge is the one round that does not travel anywhere after it goes off, so it is the one
+     * round whose damage is a radius rather than a tally -- see [org.valkyrienskies.eureka.cannon.CannonDamage].
+     * The ladder above is untouched by this: the count it rolls is the same count either way, and all this
+     * decides is what that count is spent on. Operators who preferred the old bore can turn it off.
+     */
+    val bursts: Boolean
+        get() = charge == CannonCharge.EXPLOSIVE && EurekaConfig.SERVER.cannonExplosiveBlastSphere
+
+    /**
      * How many times this round strikes before it is spent. One, unless it is armor-piercing -- and for an
      * armor-piercing round the count is the config's share list itself: one strike per entry.
      */
