@@ -86,7 +86,7 @@ object CrewDuties {
         }
 
         val now = level.gameTime
-        val ready = manned.filter { it.loaded && it.readyAt <= now }
+        val ready = manned.filter { it.loaded && it.readyBy(now) }
 
         if (ready.isEmpty()) {
             PathMessages.send(

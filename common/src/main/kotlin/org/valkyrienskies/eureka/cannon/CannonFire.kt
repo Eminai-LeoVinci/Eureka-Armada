@@ -149,15 +149,14 @@ object CannonFire {
         // ship will speak. A hand-called shot keeps the gun's own reload, as it always has.
         val cooldown = cooldownTicks?.takeIf { it > 0L } ?: reload
 
-        // Anything beyond a full cooldown means the world clock moved rather than the gun being genuinely
-        // hot -- a restored backup, most likely -- so let it fire instead of locking the gun out for a week.
-        //
-        // Measured against the LONGEST wait this gun could honestly have been handed. Testing only one of
-        // the two rates breaks in both directions: the shorter one releases a gun early the moment the
-        // rates differ, and the longer one would let fire-at-will skip a long manual reload already running.
-        val ceiling = maxOf(reload, cooldown)
+        // Whether the clock lets her speak lives on the gun itself ([CannonBlockEntity.readyBy]) -- both
+        // the "she is simply hot" case and the "her stamp outlived the world that wrote it" one. It lives
+        // there rather than here so that this trigger and every gate deciding what REACHES it -- the
+        // broadside's muster, fire-at-will, the pirates' gunnery -- read one clock. They did not, and a
+        // battery whose stamps came from another world sat out its own broadside while firing perfectly
+        // well by hand.
         val remaining = magazine.readyAt - level.gameTime
-        if (remaining in 1..ceiling) {
+        if (!magazine.readyBy(level.gameTime, cooldown)) {
             return Component.translatable("info.vs_eureka.cannon_cooling", (remaining / 20.0 + 0.5).toInt().coerceAtLeast(1))
         }
 
