@@ -5,47 +5,68 @@ import net.minecraft.client.renderer.MultiBufferSource
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
-import org.joml.AxisAngle4f
 import org.joml.Quaternionf
-import org.joml.Vector3f
+import org.valkyrienskies.eureka.EurekaBlocks
+import org.valkyrienskies.eureka.EurekaProperties
+import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.block.ShipHelmWheelBlock
+import org.valkyrienskies.eureka.block.WoodType
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
 import org.valkyrienskies.mod.common.getShipManagingPos
 
-class ShipHelmBlockEntityRenderer(val ctx: BlockEntityRendererProvider.Context) :
+/**
+ * Draws the helm's wheel as a virtual block, spun with the ship's turn rate like a helmsman holding it.
+ * (1.21.11 splits this into extract + submit over a render state; 1.21.1 block entities render
+ * immediately, so both halves live in [render].)
+ */
+class ShipHelmBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
     BlockEntityRenderer<ShipHelmBlockEntity> {
+
+    // Reused across draws (render thread only): mulPose reads the quaternion without retaining
+    // it, and render runs per helm per frame.
+    private val scratchRotation = Quaternionf()
 
     override fun render(
         blockEntity: ShipHelmBlockEntity,
-        partialTicks: Float,
-        matrixStack: PoseStack,
-        buffer: MultiBufferSource,
-        combinedLight: Int,
-        combinedOverlay: Int
+        partialTick: Float,
+        poseStack: PoseStack,
+        buffers: MultiBufferSource,
+        packedLight: Int,
+        packedOverlay: Int
     ) {
-        matrixStack.pushPose()
-        // Wheel offset of the base
-        matrixStack.translate(0.5, 0.60, 0.5)
-        // Rotate wheel towards the direction its facing
-        matrixStack.mulPose(
-            Quaternionf(
-                AxisAngle4f(
-                    (-blockEntity.blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
-                        .toYRot() * Math.PI / 180.0).toFloat(), 0.0f, 1.0f, 0.0f
-                )
+        val blockState = blockEntity.blockState
+        val helmBlock = blockState.block as? ShipHelmBlock ?: return
+        val woodType = helmBlock.woodType as? WoodType ?: return
+        val wheelState = EurekaBlocks.SHIP_HELM_WHEEL.get().defaultBlockState()
+            .setValue(ShipHelmWheelBlock.WOOD, woodType)
+            // The hub colour follows the helm's mark: blue, pirate black, or conquered white.
+            .setValue(EurekaProperties.MARK, blockState.getValue(EurekaProperties.MARK))
+
+        // The wheel deflects with the ship's current turn rate, like a helmsman holding it.
+        val ship = blockEntity.level?.getShipManagingPos(blockEntity.blockPos)
+        val wheelRotation = if (ship != null) ship.angularVelocity.y().toFloat() else 0f
+
+        poseStack.pushPose()
+        // Wheel pivot above the helm base.
+        poseStack.translate(0.5, 0.60, 0.5)
+        // Rotate the wheel to face the helm's direction.
+        poseStack.mulPose(
+            scratchRotation.setAngleAxis(
+                (-blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
+                    .toYRot() * Math.PI / 180.0).toFloat(),
+                0.0f, 1.0f, 0.0f
             )
         )
-        val ship = (blockEntity.level)?.getShipManagingPos(blockEntity.blockPos)
-        var rot = 0.0
-        if (ship != null) {
-            rot = ship.omega.y()
-        }
-        // Add offset of the base based of rotation
-        matrixStack.translate(0.0, 0.0, 0.19)
-        // Rotate the wheel based of the ship omega
-        matrixStack.mulPose(Quaternionf(AxisAngle4f((rot / 20f * Math.PI.toFloat()).toFloat(), 0.0f, 0.0f, 1.0f)))
-        // Render the wheel
-        WheelModels.render(matrixStack, blockEntity, buffer, combinedLight, combinedOverlay)
-
-        matrixStack.popPose()
+        // Push the wheel out from the base along the facing axis.
+        poseStack.translate(0.0, 0.0, 0.19)
+        // Spin the wheel with the ship's angular velocity.
+        poseStack.mulPose(
+            scratchRotation.setAngleAxis(wheelRotation / 20f * Math.PI.toFloat(), 0.0f, 0.0f, 1.0f)
+        )
+        // The wheel model isn't centred on its own origin.
+        poseStack.translate(-0.5, -0.625, -0.25)
+        // Pre-baked quads, not renderSingleBlock -- see VirtualBlockRenderCache (one entry per wood x mark state).
+        VirtualBlockRenderCache.submit(buffers, poseStack, wheelState, packedLight)
+        poseStack.popPose()
     }
 }
