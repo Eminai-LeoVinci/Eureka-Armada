@@ -168,8 +168,15 @@ object GunStations {
         // Belt and braces for a binding the map lost track of (a reload, a dimension hop): the villager
         // itself knows what it is riding. Never a CONTROLLER seat -- that is the helm's, and no villager
         // legitimately sits one.
-        (CrewMuster.findAnywhere(level.server, villagerId)?.vehicle as? ShipMountingEntity)
-            ?.takeIf { !it.isController }?.kill()
+        val villager = CrewMuster.findAnywhere(level.server, villagerId)
+        (villager?.vehicle as? ShipMountingEntity)?.takeIf { !it.isController }?.kill()
+        // The freeze lives on the VILLAGER, not on the seat. Seating sets isNoAi so a gunner stands still
+        // at his breech, and [wake] can only reach that flag THROUGH a seat that still exists with him
+        // still riding it. So every path that had already lost the seat -- a reload, a dimension hop, a
+        // summon to another hull -- killed the chair and left the man in it switched off: alive, hurtable,
+        // and unable to move again for good. Release and paying off both come through here, which is
+        // exactly why neither of them ever freed anybody. Cleared unconditionally now.
+        if (villager != null && villager.isNoAi) villager.isNoAi = false
     }
 
     private fun reconcile(level: ServerLevel) {
