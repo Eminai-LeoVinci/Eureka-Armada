@@ -51,6 +51,12 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         packedLight: Int,
         packedOverlay: Int
     ) {
+        // The shadow map is the frame's other half, and a barrel drawn into it is a barrel paid for twice.
+        // Bail BEFORE the slew bookkeeping below, not after: that clock is advanced off the wall clock and
+        // wants exactly one visit per frame, so the pass the player actually sees should be the one to
+        // make it. See [IrisShadowPass] for what this costs and what it does not.
+        if (!EurekaConfig.CLIENT.cannonBarrelCastsShadows && IrisShadowPass.active()) return
+
         val blockState = blockEntity.blockState
         if (!blockState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) return
         val facing = blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
