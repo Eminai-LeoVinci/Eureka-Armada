@@ -2358,6 +2358,18 @@ object EurekaConfig {
         )
         var pirateCannonInfiniteAmmo = true
 
+        @JsonSchema(
+            description = "Ticks between one gun speaking and the next when the CAPTAIN calls the volley " +
+                "-- Shift+G on deck, G at the wheel. The first gun answers the instant the order is given " +
+                "and every gun after it waits this long, so 2 is a rolling broadside and 40 is a ship that " +
+                "speaks once every two seconds. Deliberately its own key rather than shared with the Fire " +
+                "at Will stagger below: a captain's own order can stay fast while the standing order is " +
+                "toned down, or the other way about. A fresh order is refused while she is still firing, " +
+                "so this really is her rate of fire under command and not merely a rhythm that can be " +
+                "pressed through. Default 2."
+        )
+        var crewBroadsideStaggerTicks = 2
+
         // region Fire at Will
         // The captain's half of the same machine: a standing order, set from the Operations tab, that has
         // a ship's own villager gun crews lay and fire on the nearest raider without being told each time.
@@ -2392,9 +2404,12 @@ object EurekaConfig {
         var fireAtWillJitterBlocks = 1.0
 
         @JsonSchema(
-            description = "Ticks between one gun of a Fire at Will battery speaking and the next. Each gun " +
-                "still reloads on its own clock, so this paces the thunder rather than the rate of fire. " +
-                "Default 2, the same roll a hand-called broadside has."
+            description = "Ticks between one gun of a Fire at Will battery speaking and the next. Every " +
+                "gun still reloads on its own clock, so this can only ever make a ship slower -- which is " +
+                "exactly what it is for: at 2 it paces the thunder of a full battery, and at 40 it IS the " +
+                "ship's weight of fire, one gun every two seconds however many are manned. Separate from " +
+                "the captain's own volley above, so a standing order can be leashed without slowing the " +
+                "broadside they call by hand. Default 2, the same roll a hand-called broadside has."
         )
         var fireAtWillStaggerTicks = 2
 
