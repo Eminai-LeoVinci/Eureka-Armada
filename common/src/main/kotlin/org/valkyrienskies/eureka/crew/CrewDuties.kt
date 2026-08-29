@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.level.Level
 import org.valkyrienskies.core.api.ships.LoadedServerShip
+import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.cannon.CannonFire
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.cannon.ShipGuns
@@ -59,6 +60,23 @@ object CrewDuties {
             return
         }
 
+        // One volley at a time, per ship. Not a nicety: the stagger below is only a rate of fire if a
+        // second order cannot be pressed straight through it. At the default two ticks a roll is over
+        // before anybody could ask again, but wound out to a couple of seconds a captain could empty a
+        // gun deck in one burst by giving the order six times -- every gun still queued is still loaded
+        // and still ready, so every one of them would answer at once. Refused rather than queued, because
+        // a captain calling it twice means "fire", not "fire again when this one is done".
+        val rolling = volleys.firstOrNull { it.ship == ship.id }
+        if (rolling != null) {
+            val left = rolling.guns.size
+            PathMessages.send(
+                player,
+                "${ShipCrew.name(ship)} is still firing -- $left gun${if (left == 1) "" else "s"} yet to speak.",
+                PathMessages.Kind.WARN
+            )
+            return
+        }
+
         val guns = ShipGuns.aboard(level, ship)
         if (guns.isEmpty()) {
             PathMessages.send(player, "${ShipCrew.name(ship)} carries no guns.", PathMessages.Kind.ERROR)
@@ -100,6 +118,7 @@ object CrewDuties {
         volleys.add(
             Volley(
                 dimension = level.dimension(),
+                ship = ship.id,
                 guns = ArrayDeque(ready.map { it.blockPos }),
                 by = player.uuid,
                 nextAt = now
@@ -124,11 +143,16 @@ object CrewDuties {
      * thing the player built a gun deck to hear. It also spreads six projectile spawns and six sound packets
      * over half a second.
      *
-     * Note this is NOT the per-ship stagger the fire-rate question is about. Each gun still reloads on its own
-     * four-second clock, so ordering two volleys back to back fires the same guns no faster than one would.
+     * It is also the ship's rate of fire under command, which is why it is a config key now and not a constant.
+     * Each gun keeps its own reload underneath, so the stagger can only ever make a ship slower -- but wound
+     * out from two ticks to forty it stops being a flourish and becomes the whole of how fast a crew work: one
+     * gun every two seconds, in label order, however many are manned. Fire at Will has a stagger of its own for
+     * the same reason, so the two can be tuned against each other rather than only together.
      */
     private class Volley(
         val dimension: ResourceKey<Level>,
+        /** Whose guns these are. One volley per hull at a time, whoever gave the order. */
+        val ship: Long,
         val guns: ArrayDeque<BlockPos>,
         /** Resolved to a player at each shot, so a captain who logs out mid-volley leaves the guns firing. */
         val by: UUID,
@@ -157,7 +181,7 @@ object CrewDuties {
             // somebody else between the order and its turn, has nothing useful to say to a captain mid-volley --
             // and the count they were given when they gave the order already told them what to expect.
             CannonFire.fire(level, gun, level.server.playerList.getPlayer(volley.by))
-            volley.nextAt = now + STAGGER_TICKS
+            volley.nextAt = now + staggerTicks()
 
             if (volley.guns.isEmpty()) iterator.remove()
         }
@@ -187,6 +211,11 @@ object CrewDuties {
         return level.shipObjectWorld.loadedShips.getById(id) as? LoadedServerShip
     }
 
-    /** Ticks between one gun speaking and the next. Two is fast enough to read as one broadside, not six shots. */
-    private const val STAGGER_TICKS = 2L
+    /**
+     * Ticks between one gun speaking and the next. Two is fast enough to read as one broadside rather than six
+     * shots; a floor of one, because zero and one are the same tick either way -- this loop fires a single gun
+     * per volley per tick by construction, so "no gap at all" is a promise it could not keep.
+     */
+    private fun staggerTicks(): Long =
+        EurekaConfig.SERVER.crewBroadsideStaggerTicks.toLong().coerceAtLeast(1L)
 }
