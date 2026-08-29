@@ -78,6 +78,25 @@ object MaterialFamilies {
     val NEVER: TagKey<Item> = itemTag("swap/never")
 
     /**
+     * Families that swap only WITHIN themselves, and are exempt from [NEVER] for that reason.
+     *
+     * A helm and a balloon are both denied everywhere else on purpose: a balloon lives in `#minecraft:wool`
+     * (that is what lets shears take one), so the moment it is allowed into an open family a captain can
+     * order white wool where the lift used to be and ground the airship without being told. The deny list
+     * is what stops that, and it must go on stopping it.
+     *
+     * But denying a thing everywhere also denies it to ITSELF, which is why an oak helm could never be
+     * traded for a birch one and a red balloon never for a blue. Those are pure changes of material -- the
+     * same block, the same lift, the same behaviour, a different colour of it -- and they are exactly what
+     * the swap list is for.
+     *
+     * So these two are matched FIRST and answered from their own tag rather than an open one. Membership is
+     * the whole guard: nothing outside `#vs_eureka:balloons` can be offered for a balloon, because the
+     * candidate is tested against that same closed tag.
+     */
+    val CLOSED: List<TagKey<Item>> = listOf(itemTag("ship_helms"), itemTag("balloons"))
+
+    /**
      * The swap families, most specific first. First match wins, so a change of order changes answers --
      * which is why it is here and not in a tag, where JSON gives no ordering guarantee at all.
      *
@@ -115,6 +134,8 @@ object MaterialFamilies {
      */
     fun familyOf(item: Item): TagKey<Item>? {
         val stack = ItemStack(item)
+        // Closed families are asked BEFORE the deny list, because their members are ON it -- see [CLOSED].
+        CLOSED.firstOrNull { stack.`is`(it) }?.let { return it }
         if (stack.`is`(NEVER)) return null
         return FAMILIES.firstOrNull { stack.`is`(it) }
     }
@@ -128,8 +149,11 @@ object MaterialFamilies {
     fun interchangeable(wanted: Item, candidate: Item): Boolean {
         if (wanted == candidate) return true
         val family = familyOf(wanted) ?: return false
-        if (ItemStack(candidate).`is`(NEVER)) return false
-        return ItemStack(candidate).`is`(family)
+        val offered = ItemStack(candidate)
+        // Inside a closed family the deny list is not consulted: every member is on it, and membership of
+        // the closed tag is the guard instead.
+        if (family !in CLOSED && offered.`is`(NEVER)) return false
+        return offered.`is`(family)
     }
 
     /**
@@ -140,8 +164,9 @@ object MaterialFamilies {
      */
     fun replacementsFor(item: Item): List<Item> {
         val family = familyOf(item) ?: return listOf(item)
+        val closed = family in CLOSED
         val peers = BuiltInRegistries.ITEM.filter { other ->
-            other != item && ItemStack(other).`is`(family) && !ItemStack(other).`is`(NEVER)
+            other != item && ItemStack(other).`is`(family) && (closed || !ItemStack(other).`is`(NEVER))
         }.sortedBy { BuiltInRegistries.ITEM.getKey(it).toString() }
         return listOf(item) + peers
     }
