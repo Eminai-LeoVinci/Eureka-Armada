@@ -79,25 +79,17 @@ object ShipStores {
 
         for (id in ArmadaGroup.idsOf(level, ship)) {
             val hull = ships.getById(id) ?: continue
-            val aabb = hull.shipAABB ?: continue
 
-            val minChunkX = aabb.minX() shr 4
-            val maxChunkX = aabb.maxX() shr 4
-            val minChunkZ = aabb.minZ() shr 4
-            val maxChunkZ = aabb.maxZ() shr 4
-
-            for (chunkX in minChunkX..maxChunkX) {
-                for (chunkZ in minChunkZ..maxChunkZ) {
-                    val chunk = level.chunkSource.getChunkNow(chunkX, chunkZ) ?: continue
+            // The ship's own chunk claim, NOT its shipAABB. The aabb is the VOXEL box, and it only grows
+            // when the ship is (re)built from its blocks -- so a barrel set down ON TOP of the deck of a
+            // sailing ship sits one block past maxY and was silently filtered out of her own manifest until
+            // somebody disassembled and reassembled her. The claim is exclusive to this hull, so anything
+            // standing in it is aboard by definition, and it needs no bounds test at all.
+            hull.activeChunksSet.forEach { chunkX, chunkZ ->
+                val chunk = level.chunkSource.getChunkNow(chunkX, chunkZ)
+                if (chunk != null) {
                     for (blockEntity in chunk.blockEntities.values) {
                         if (blockEntity !is ChestBlockEntity && blockEntity !is BarrelBlockEntity) continue
-                        val pos = blockEntity.blockPos
-                        if (pos.x < aabb.minX() || pos.x > aabb.maxX() ||
-                            pos.y < aabb.minY() || pos.y > aabb.maxY() ||
-                            pos.z < aabb.minZ() || pos.z > aabb.maxZ()
-                        ) {
-                            continue
-                        }
                         holds.add(blockEntity as BaseContainerBlockEntity)
                     }
                 }
