@@ -301,7 +301,14 @@ object PathKeybinds {
         //
         // Firing at nothing is harmless: the server refuses unless the player is aboard a ship with guns and
         // gunners, so a stray press ashore costs a line of text at worst.
-        if (broadside.consumeClick() || keyPressed(client, broadside)) {
+        // Both halves are read EVERY tick, never short-circuited: keyPressed is an edge detector that
+        // remembers last tick's key state, so skipping it on the tick consumeClick answers leaves that
+        // memory stale and it reports a second edge on the NEXT tick. That put two broadside orders on
+        // the wire for one press of G -- one tick apart, too fast to be a human double-tap -- and the
+        // duplicate volley then leapfrogged the real one, refusing on every gun it had already fired.
+        val broadsideClicked = broadside.consumeClick()
+        val broadsideEdge = keyPressed(client, broadside)
+        if (broadsideClicked || broadsideEdge) {
             PathNetworkingFabric.sendAction(PathNetworkingFabric.ACTION_BROADSIDE)
         }
 
@@ -346,9 +353,17 @@ object PathKeybinds {
         // A press arriving here rather than through the layer joins the same flags, so both routes are folded
         // in one place below and an action can never be counted twice.
         if (sneaking) {
-            if (follow.consumeClick() || keyPressed(client, follow)) pendingFollow = true
-            if (crew.consumeClick() || keyPressed(client, crew)) claimCrew(client)
-            if (show.consumeClick() || keyPressed(client, show)) pendingShow = true
+            // Read both halves every tick -- see the broadside note above; short-circuiting the edge
+            // detector makes these fire twice for one press, which on a toggle reads as doing nothing.
+            val followClicked = follow.consumeClick()
+            val followEdge = keyPressed(client, follow)
+            if (followClicked || followEdge) pendingFollow = true
+            val crewClicked = crew.consumeClick()
+            val crewEdge = keyPressed(client, crew)
+            if (crewClicked || crewEdge) claimCrew(client)
+            val showClicked = show.consumeClick()
+            val showEdge = keyPressed(client, show)
+            if (showClicked || showEdge) pendingShow = true
         } else if (!pendingFollow && !pendingCrew && !pendingCrewAll && !pendingShow && !pendingBroadside) {
             drainClicks(show, follow, crew)
             return
