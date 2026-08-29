@@ -1,9 +1,11 @@
 package org.valkyrienskies.eureka.pirate
 
 import java.util.UUID
+import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.level.LevelAccessor
 import net.minecraft.world.level.block.state.BlockState
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaProperties
@@ -11,6 +13,7 @@ import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.path.PathMessages
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 
 /**
  * THE one gate on a pirate ship's wheel.
@@ -80,6 +83,29 @@ object PirateHelm {
      */
     fun shipHasPirateWheel(level: ServerLevel, ship: LoadedServerShip): Boolean =
         CrewStations.helmsAboard(level, ship)?.any { gated(it.blockState) } == true
+
+    /**
+     * Whether a block broken at [pos] should hand the breaker anything at all.
+     *
+     * A raider's hull is breakable and always was -- you can chop a hole in her side with an axe and climb
+     * in, which is how a player without a ship of their own boards one. What she is not is a quarry. While
+     * ANY pirate wheel still stands aboard, black hub or white, every block broken on her gives nothing:
+     * not her planking, not her balloons, not her engines, and not her guns. Her chests are untouched by
+     * this, because looting a chest is opening it, not breaking it -- a raid you can carry out and run from
+     * is the point, and it is a different act from dismantling the ship for parts.
+     *
+     * Break the wheel and the rule lifts in the same instant, because the wheel IS the fight. What was a
+     * fortress becomes a prize, and everything in her -- guns included -- can be claimed by hand.
+     *
+     * Deliberately asked of the SHIP rather than of the block: a pirate ship is pirate everywhere, and a
+     * rule that had to be stamped on each block would be a rule with holes in it wherever a raider's
+     * carpenter had put something the stamp did not know about.
+     */
+    fun dropsSuppressedAt(level: LevelAccessor, pos: BlockPos): Boolean {
+        val server = level as? ServerLevel ?: return false
+        val ship = server.getLoadedShipManagingPos(pos) as? LoadedServerShip ?: return false
+        return shipHasPirateWheel(server, ship)
+    }
 
     /** Wall-clock is deliberate here: this paces a HUD message for a human, not game logic. */
     private const val BREAK_DENY_WINDOW_MS = 5_000L
