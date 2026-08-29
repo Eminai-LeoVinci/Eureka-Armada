@@ -85,6 +85,11 @@ object CrewRoll {
     @JvmField
     var clientSummon: (Long, UUID) -> Unit = { _, _ -> }
 
+    /** Client seam: send this wheel's crew back to the articles. */
+    @Volatile
+    @JvmField
+    var clientReturn: (Long, UUID) -> Unit = { _, _ -> }
+
     /**
      * One crew's articles, read-only, for the Crews tab.
      *
@@ -108,6 +113,19 @@ object CrewRoll {
     @Volatile
     @JvmField
     var clientDisband: (Long, UUID) -> Unit = { _, _ -> }
+
+    /**
+     * The dropdown row that means "nobody".
+     *
+     * A zero UUID rather than a null row, because the list is a list of keys and a null key cannot be
+     * picked, only left unpicked -- which is precisely the state that used to be invisible. Making "no crew"
+     * a row a captain can SEE and choose is the point: assembling a hull no longer quietly brings whichever
+     * crew happened to be selected, and there is somewhere to go back to after picking one by accident.
+     *
+     * The wire has always understood it (the select handler maps it to null); it simply had no row.
+     */
+    @JvmField
+    val NO_CREW: UUID = UUID(0L, 0L)
 
     /** Client seam: rename a crew by id, whether or not they are on this ship. */
     @Volatile
