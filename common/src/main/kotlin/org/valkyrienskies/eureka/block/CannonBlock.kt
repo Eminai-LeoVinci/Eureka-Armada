@@ -27,8 +27,6 @@ import net.minecraft.world.level.block.Rotation
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
-import net.minecraft.world.level.storage.loot.LootParams
-import net.minecraft.world.level.storage.loot.parameters.LootContextParams
 import net.minecraft.world.level.block.state.StateDefinition
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.level.material.MapColor
@@ -36,6 +34,7 @@ import net.minecraft.world.level.pathfinder.PathComputationType
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.shapes.CollisionContext
 import net.minecraft.world.phys.shapes.VoxelShape
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.eureka.EurekaProperties.CANNON_PART
@@ -417,36 +416,54 @@ class CannonBlock : BaseEntityBlock(
     }
 
     /**
-     * A pirate's gun gives nothing.
+     * Spill the powder and shot when the gun is broken -- but a raider's magazine pays a fixed price.
      *
-     * Cannons are meant to come from a raider's HOLDS -- the loot tables -- and from nowhere else, which a
-     * conquered prize with sixty guns bolted to her decks would quietly undo: mine the deck, pocket sixty
-     * cannons. So a gun stamped by [CannonBlockEntity.pirate] drops no gun and, in [playerWillDestroy]
-     * below, no magazine either. She still fires, she still repairs, she simply cannot be sold for parts.
+     * An ordinary gun spills what is in her, like any other container. A pirate's does not, and the reason
+     * is that her magazine is not stock: raider gunnery fires from a bottomless one, and a template author
+     * may well have left every breech loaded to the brim. Paying that out would make a captured ship the
+     * cheapest ammunition factory in the game.
      *
-     * The stamp rides the block entity rather than the blockstate so it survives every relocation a hull
-     * goes through -- assembly, bottling, a template save and place -- by the same route the gun's powder
-     * and shot do.
+     * So a taken gun yields a token of what she was firing -- four powder and two shot of her own variant --
+     * whatever her NBT says, whether that is one ball or a full stack. Deliberately NOT configurable: it is
+     * a rule about what a prize is worth, not a difficulty knob.
+     *
+     * While her wheel still stands she gives nothing at all, and the magazine is emptied rather than
+     * dropped, which is also what makes the spill on the gun's OTHER half give nothing -- both halves read
+     * this same container. The GUN itself needs no special case here any more: the whole hull stops dropping
+     * while a pirate wheel is aboard (`MixinBlockPirateDrops`), and once the wheel falls her guns come up as
+     * ordinary cannons, because the pirate stamp lives on the block entity and never on the item.
      */
-    override fun getDrops(state: BlockState, builder: LootParams.Builder): MutableList<ItemStack> {
-        val be = builder.getOptionalParameter(LootContextParams.BLOCK_ENTITY)
-        if ((be as? CannonBlockEntity)?.pirate == true) return mutableListOf()
-        return super.getDrops(state, builder)
-    }
-
-    /** Spill the powder and shot when the gun is broken, like any other container. */
     override fun playerWillDestroy(level: Level, pos: BlockPos, state: BlockState, player: Player) {
         if (!level.isClientSide && state.getValue(CANNON_PART) == CannonPart.REAR) {
             (level.getBlockEntity(pos) as? CannonBlockEntity)?.let { gun ->
-                // A raider's magazine is scenery, not stock: clearing it here is what makes the spill on
-                // the OTHER half give nothing either, since that path reads the same container.
-                if (gun.pirate) gun.clearContent() else Containers.dropContents(level, pos, gun)
+                when {
+                    !gun.pirate -> Containers.dropContents(level, pos, gun)
+                    PirateHelm.dropsSuppressedAt(level, pos) -> gun.clearContent()
+                    else -> {
+                        val shot = gun.shot.copy()
+                        gun.clearContent()
+                        Containers.dropItemStack(
+                            level, pos.x + 0.5, pos.y + 0.5, pos.z + 0.5,
+                            ItemStack(Items.GUNPOWDER, PRIZE_POWDER)
+                        )
+                        if (!shot.isEmpty) {
+                            Containers.dropItemStack(
+                                level, pos.x + 0.5, pos.y + 0.5, pos.z + 0.5,
+                                shot.copyWithCount(PRIZE_SHOT)
+                            )
+                        }
+                    }
+                }
             }
         }
         super.playerWillDestroy(level, pos, state, player)
     }
 
     companion object {
+        /** What a taken raider's gun pays out, whatever her magazine actually holds. Not configurable. */
+        private const val PRIZE_POWDER = 4
+        private const val PRIZE_SHOT = 2
+
 
         // Authored facing NORTH and rotated by DirectionalShape, matching how the blockstate rotates the
         // models. Each is the part's own geometry clamped into its block: the rear carries wheels, carriage
