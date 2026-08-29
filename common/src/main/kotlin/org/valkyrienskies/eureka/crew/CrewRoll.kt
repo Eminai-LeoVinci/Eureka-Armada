@@ -3,7 +3,9 @@ package org.valkyrienskies.eureka.crew
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import org.valkyrienskies.eureka.EurekaConfig
+import org.valkyrienskies.eureka.armada.ArmadaGroup
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.follow.ShipCrew
 import java.util.UUID
 
 /**
@@ -23,6 +25,11 @@ object CrewRoll {
     /**
      * One crew, as a row.
      *
+     * [present] is how many of this crew are actually FOUND standing on this hull right now. It is the
+     * half the Summon button needs: [aboard] is a fact about the ARTICLES, and a binding outlives a
+     * disassembly, a bottling and a relog on purpose, so a wheel goes on naming a crew while every one
+     * of them is missing.
+     *
      * [aboard] is what makes the row mean something beyond a name: it marks the crew this wheel already
      * keeps, which is the one that is free to call. [fare] is what calling this crew would cost right now,
      * carried rather than recomputed so the screen and the server cannot disagree about the price.
@@ -32,6 +39,7 @@ object CrewRoll {
         val name: String,
         val heads: Int,
         val aboard: Boolean,
+        val present: Int,
         val fare: Int
     )
 
@@ -127,14 +135,27 @@ object CrewRoll {
         val bound = ledger.bindingFor(articles, captain.uuid)
         val perHead = if (captain.abilities.instabuild) 0 else EurekaConfig.SERVER.crewPassagePearls
 
+        // Which hulls count as "this ship": the whole welded group, so a crew standing on a child hull
+        // reads as present at the flagship's wheel, exactly as gunnery and the roster already treat it.
+        val here: Set<Long> = (captain.level() as? ServerLevel)
+            ?.let { lvl -> CrewStations.shipOf(lvl, articles)?.let { ArmadaGroup.idsOf(lvl, it) }?.toSet() }
+            ?: emptySet()
+
         val entries = ledger.crewsOf(captain.uuid).map { crew ->
             val heads = crew.berths.size
             val aboard = crew.id == bound
+            // Counted by looking, never inferred from the binding: a berth whose villager cannot be found
+            // at all, or who is found somewhere else, is NOT present.
+            val present = if (here.isEmpty()) 0 else crew.berths.count { berth ->
+                CrewMuster.findAnywhere(server, berth.villager)
+                    ?.let { ShipCrew.standingOn(it) in here } == true
+            }
             Entry(
                 id = crew.id,
                 name = crew.name,
                 heads = heads,
                 aboard = aboard,
+                present = present,
                 fare = if (aboard || perHead <= 0) 0 else heads * perHead
             )
         }
@@ -166,6 +187,8 @@ object CrewRoll {
                 name = crew.name,
                 heads = heads,
                 aboard = false,
+                // No deck to be aboard of, so nobody counts as present either.
+                present = 0,
                 fare = if (perHead <= 0) 0 else heads * perHead
             )
         }

@@ -932,6 +932,7 @@ object PathNetworkingFabric {
             buf.writeUtf(entry.name)
             buf.writeVarInt(entry.heads)
             buf.writeBoolean(entry.aboard)
+            buf.writeVarInt(entry.present)
             buf.writeVarInt(entry.fare)
         }
         ServerPlayNetworking.send(captain, CREW_LIST_RL, wrap(toArray(buf)))
@@ -999,6 +1000,7 @@ object PathNetworkingFabric {
                 name = buf.readUtf(),
                 heads = buf.readVarInt(),
                 aboard = buf.readBoolean(),
+                present = buf.readVarInt(),
                 fare = buf.readVarInt()
             )
         }
