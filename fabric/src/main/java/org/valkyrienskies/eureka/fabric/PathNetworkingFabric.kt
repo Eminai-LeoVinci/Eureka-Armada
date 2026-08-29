@@ -26,7 +26,10 @@ import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
+import net.minecraft.world.inventory.ChestMenu
 import org.valkyrienskies.eureka.crew.CrewRoll
+import org.valkyrienskies.eureka.crew.HoldRetag
+import org.valkyrienskies.eureka.crew.HoldTag
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.crew.HelmNames
@@ -97,6 +100,7 @@ object PathNetworkingFabric {
     private val HELM_ITEM_NAME_RL: Identifier =
         Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "helm_item_name")
     private val HOLD_LABEL_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "hold_label")
+    private val HOLD_TAG_RL: Identifier = Identifier.fromNamespaceAndPath(EurekaMod.MOD_ID, "hold_tag")
 
     private val ACTION_TYPE = CustomPacketPayload.Type<ActionPayload>(ACTION_RL)
     private val ROUTES_TYPE = CustomPacketPayload.Type<RoutesPayload>(ROUTES_RL)
@@ -119,6 +123,7 @@ object PathNetworkingFabric {
     private val HELM_ITEM_NAME_TYPE = CustomPacketPayload.Type<HelmItemNamePayload>(HELM_ITEM_NAME_RL)
     private val SHIP_NAME_TYPE = CustomPacketPayload.Type<ShipNamePayload>(SHIP_NAME_RL)
     private val HOLD_LABEL_TYPE = CustomPacketPayload.Type<HoldLabelPayload>(HOLD_LABEL_RL)
+    private val HOLD_TAG_TYPE = CustomPacketPayload.Type<HoldTagPayload>(HOLD_TAG_RL)
 
     private val ACTION_CODEC: StreamCodec<FriendlyByteBuf, ActionPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ActionPayload::data) { ActionPayload(it) }
@@ -164,6 +169,9 @@ object PathNetworkingFabric {
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmItemNamePayload::data) { HelmItemNamePayload(it) }
     private val HOLD_LABEL_CODEC: StreamCodec<FriendlyByteBuf, HoldLabelPayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HoldLabelPayload::data) { HoldLabelPayload(it) }
+
+    private val HOLD_TAG_CODEC: StreamCodec<FriendlyByteBuf, HoldTagPayload> =
+        StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HoldTagPayload::data) { HoldTagPayload(it) }
     private val HELM_NAME_CODEC: StreamCodec<FriendlyByteBuf, HelmNamePayload> =
         StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, HelmNamePayload::data) { HelmNamePayload(it) }
     private val SHIP_NAME_CODEC: StreamCodec<FriendlyByteBuf, ShipNamePayload> =
@@ -254,6 +262,11 @@ object PathNetworkingFabric {
     /** Server -> client: which numbered box this chest screen is looking at, and what it is for. */
     class HoldLabelPayload(val data: ByteArray) : CustomPacketPayload {
         override fun type() = HOLD_LABEL_TYPE
+    }
+
+    /** Client -> server: the captain ticked one of the hold checkboxes. */
+    class HoldTagPayload(val data: ByteArray) : CustomPacketPayload {
+        override fun type() = HOLD_TAG_TYPE
     }
 
     class HelmNamePayload(val data: ByteArray) : CustomPacketPayload {
@@ -403,6 +416,7 @@ object PathNetworkingFabric {
         PayloadTypeRegistry.playS2C().register(LIVE_TYPE, LIVE_CODEC)
         PayloadTypeRegistry.playS2C().register(MESSAGE_TYPE, MESSAGE_CODEC)
         PayloadTypeRegistry.playS2C().register(HOLD_LABEL_TYPE, HOLD_LABEL_CODEC)
+        PayloadTypeRegistry.playC2S().register(HOLD_TAG_TYPE, HOLD_TAG_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_MARKS_TYPE, CREW_MARKS_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_MANIFEST_TYPE, CREW_MANIFEST_CODEC)
         PayloadTypeRegistry.playS2C().register(CREW_DETAIL_TYPE, CREW_DETAIL_CODEC)
@@ -499,6 +513,27 @@ object PathNetworkingFabric {
 
     /** Server: handle hotkey actions. Registered from the common initializer. */
     fun registerServer() {
+
+        // The captain ticked a hold checkbox. Guarded on the menu the server believes is open rather than on
+        // anything the packet claims: the container id has to match the screen this player actually has up,
+        // which is what stops a hand-made packet from re-tagging a box on the far side of the world.
+        ServerPlayNetworking.registerGlobalReceiver(HOLD_TAG_TYPE) { payload, context ->
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(payload.data))
+            val containerId = buf.readVarInt()
+            val ordinal = buf.readVarInt()
+            val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
+            context.server().execute {
+                val tag = HoldTag.entries.getOrNull(ordinal) ?: return@execute
+                val menu = player.containerMenu
+                if (menu !is ChestMenu || menu.containerId != containerId) return@execute
+                HoldRetag.toggle(menu.container, tag)
+                // Answer with the union the boxes now hold, so the screen shows what was actually stored
+                // rather than what it optimistically drew.
+                HoldLabelSync.sender?.invoke(
+                    player, containerId, "", HoldRetag.maskOf(menu.container)
+                )
+            }
+        }
         ServerPlayNetworking.registerGlobalReceiver(ACTION_TYPE) { payload, context ->
             val action = payload.data.firstOrNull() ?: return@registerGlobalReceiver
             val player = context.player() as? ServerPlayer ?: return@registerGlobalReceiver
@@ -839,6 +874,7 @@ object PathNetworkingFabric {
         CrewRoll.clientAsk = { helm -> sendCrewListAsk(helm) }
         CrewRoll.clientSelect = { helm, crew -> sendCrewSelect(helm, crew) }
         CrewRoll.clientSummon = { helm, crew -> sendCrewSummon(helm, crew) }
+        HoldLabelClient.sender = { containerId, ordinal -> sendHoldTag(containerId, ordinal) }
         CrewRoll.clientRosterAsk = { helm, crew -> sendCrewRosterAsk(helm, crew) }
         CrewRoll.clientDisband = { helm, crew -> sendCrewDisband(helm, crew) }
         CrewRoll.clientRenameCrew = { helm, crew, name -> sendCrewRenameById(helm, crew, name) }
@@ -1034,6 +1070,15 @@ object PathNetworkingFabric {
     /** Client: call [crew] to this ship, paying their passage. */
     @Environment(EnvType.CLIENT)
     fun sendCrewSummon(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_SUMMON) { it.writeUUID(crew) }
+
+    /** Client: tick or untick one hold tag on the open chest screen. */
+    @Environment(EnvType.CLIENT)
+    fun sendHoldTag(containerId: Int, ordinal: Int) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeVarInt(containerId)
+        buf.writeVarInt(ordinal)
+        ClientPlayNetworking.send(HoldTagPayload(toArray(buf)))
+    }
 
     /** Client: ask for one crew's articles. Answered by a [CrewRosterPayload], or by silence. */
     @Environment(EnvType.CLIENT)

@@ -80,14 +80,17 @@ object HoldRetag {
     fun applyOnClose(level: ServerLevel, container: Container, opened: Map<BlockPos, Int>?) {
         if (opened.isNullOrEmpty()) return
         for (hold in holdsOf(container)) {
-            val before = opened[hold.blockPos] ?: continue
-            val now = HoldTags.toMask(categoriesIn(level, hold))
-            val had = HoldTags.toMask(HoldTags.tagsOf(hold))
+            if (!opened.containsKey(hold.blockPos)) continue
 
-            // Keep everything it already had, add whatever is in there now, and drop only those categories
-            // the captain personally took out during this visit.
-            val removed = before and now.inv()
-            HoldTags.setTags(hold, HoldTags.fromMask((had or now) and removed.inv()))
+            // A captain who opens a box and shuts it again has just LOOKED at what is in there, so what is in
+            // there is the answer: the tags become exactly the categories present. Nothing else clears them,
+            // which is the point -- a crew that empties a magazine to feed the guns leaves it tagged as a
+            // magazine, because that is still what the room is for and nobody said otherwise.
+            //
+            // The earlier rule only dropped what the captain personally took out DURING the visit, so a box
+            // the crew had already emptied could never lose its tag by looking at it: it was empty when the
+            // lid came up, so there was nothing to take out, and the stale tag stuck for good.
+            HoldTags.setTags(hold, categoriesIn(level, hold))
         }
     }
 
@@ -106,4 +109,33 @@ object HoldRetag {
             HoldTags.setTags(hold, HoldTags.tagsOf(hold) + found)
         }
     }
+    /**
+     * Turn one tag on or off for the box (or boxes) behind an open screen.
+     *
+     * The captain's answer, and the only thing that moves a tag now. What a box is FOR is a decision, not an
+     * observation: it used to be re-read from the contents every time a screen closed, so emptying a barrel
+     * to load a gun un-marked it as the powder barrel, and a crew restocking it marked it as whatever they
+     * happened to put in. A hold is now marked until somebody says otherwise.
+     *
+     * A double chest is two boxes under one window. The screen shows the UNION of their tags, so a click sets
+     * BOTH to the same answer -- flipping each independently would leave the two halves disagreeing about a
+     * box the player sees as one.
+     */
+    fun toggle(container: Container, tag: HoldTag) {
+        val holds = holdsOf(container)
+        if (holds.isEmpty()) return
+        val on = holds.any { HoldTags.has(it, tag) }
+        for (hold in holds) {
+            val tags = HoldTags.tagsOf(hold)
+            HoldTags.setTags(hold, if (on) tags - tag else tags + tag)
+        }
+    }
+
+    /** The union mask across the box or boxes behind one screen -- what the checkboxes show. */
+    fun maskOf(container: Container): Int {
+        var mask = 0
+        for (hold in holdsOf(container)) mask = mask or HoldTags.toMask(HoldTags.tagsOf(hold))
+        return mask
+    }
+
 }

@@ -73,10 +73,9 @@ public abstract class MixinChestMenuHoldTags implements HoldOpenSnapshot {
         }
     }
 
-    @Inject(method = "removed", at = @At("HEAD"))
-    private void vs_eureka$retagOnClose(final Player player, final CallbackInfo ci) {
-        if (player.level() instanceof final ServerLevel level) {
-            HoldRetag.INSTANCE.applyOnClose(level, this.getContainer(), this.vs_eureka$openTags);
-        }
-    }
+    // Closing a screen used to re-read the contents and rewrite the tags from them. That is gone: what
+    // a hold is FOR is now a decision a captain makes with the checkboxes on the screen, and decisions do
+    // not evaporate because somebody emptied the box. Tipping a barrel of powder into a gun no longer
+    // un-marks it as the powder barrel, and a crew stocking it with whatever came to hand no longer
+    // re-marks it as that. See HoldRetag.toggle for the one path that moves a tag now.
 }

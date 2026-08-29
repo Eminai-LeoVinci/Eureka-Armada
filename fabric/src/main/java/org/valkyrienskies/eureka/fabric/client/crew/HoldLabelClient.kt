@@ -24,10 +24,35 @@ object HoldLabelClient {
     private var tags: Set<HoldTag> = emptySet()
 
     fun accept(containerId: Int, label: String, tagMask: Int) {
-        this.containerId = containerId
-        this.label = label
+        // A blank label means "tags only" -- the answer to a checkbox click, which re-states what the boxes
+        // now hold without re-sending a number that has not changed. Overwriting the number with the blank
+        // would erase it from the screen the instant a captain ticked anything.
+        if (label.isNotEmpty() || this.containerId != containerId) {
+            this.containerId = containerId
+            this.label = label
+        }
         this.tags = HoldTags.fromMask(tagMask)
     }
+
+    /** The tags of [containerId] as a set, empty when the open screen is not a numbered hold. */
+    fun tagSetFor(containerId: Int): Set<HoldTag> =
+        if (this.containerId == containerId) tags else emptySet()
+
+    /**
+     * Tick a box locally and tell the server.
+     *
+     * Drawn optimistically because the round trip is visible on a click otherwise, and the server answers
+     * with the real union a moment later -- which corrects this if the two ever disagree.
+     */
+    fun toggle(containerId: Int, tag: HoldTag) {
+        if (this.containerId != containerId) return
+        tags = if (tag in tags) tags - tag else tags + tag
+        sender(containerId, tag.ordinal)
+    }
+
+    /** Installed by the networking layer; a no-op until then. */
+    @JvmField
+    var sender: (Int, Int) -> Unit = { _, _ -> }
 
     /** The label for [containerId], or null when the open screen is not a numbered hold. */
     fun labelFor(containerId: Int): String? = if (this.containerId == containerId) label else null
