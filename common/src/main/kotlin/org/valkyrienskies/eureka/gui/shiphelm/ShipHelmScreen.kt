@@ -656,11 +656,16 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // wheel still needs it. In the hand there is nothing to assemble and nothing to call the crew to.
         crewList.enabled = !inHand
 
-        // Summon needs a deck to put people on, and something to change. Calling the crew already aboard would
-        // be free and do nothing, so the button says so by going grey rather than by refusing afterwards.
+        // Summon needs a deck to put people on, and somebody to put there. It used to grey out whenever the
+        // picked crew was the one this wheel KEEPS -- but a binding is paperwork, not people: it outlives a
+        // disassembly, a bottling and a relog by design, so a wheel went on refusing to call back the very
+        // crew it had lost. What the button turns on is whether anybody is MISSING, which is a count of who
+        // is actually found standing on the hull (Entry.present) against how many the articles carry.
         val picked = crewList.selected as? UUID
         val aboard = roll?.entries?.firstOrNull { it.aboard }?.id
-        summonButton.active = assembled && picked != null && picked != aboard
+        val pickedEntry = roll?.entries?.firstOrNull { it.id == picked }
+        val anyMissing = pickedEntry != null && pickedEntry.present < pickedEntry.heads
+        summonButton.active = assembled && picked != null && (picked != aboard || anyMissing)
 
         // The section's name tells the truth about what the system is doing. Holding a SPEED is cruise
         // control -- that is the whole of what the words mean. The moment it is also holding a heading or
