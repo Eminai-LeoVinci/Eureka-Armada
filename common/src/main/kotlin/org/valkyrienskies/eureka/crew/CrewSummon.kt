@@ -167,7 +167,16 @@ object CrewSummon {
 
         pay(level, captain, ship, bill)
         station.bindCrew(captain.uuid, crewId)
+        // Seats first: a crew still riding the chairs of the ship they came from cannot be PLACED on this
+        // one -- the seat holds them, wherever muster puts the villager. See GunReberth.unseatAll.
+        GunReberth.unseatAll(level, crewId)
         CrewMuster.muster(level, captain, ship, crewId, berthLimit, stationPos)
+
+        // Gun stations are re-dealt onto THIS hull before GunStations.reconcile ever looks at them. A
+        // summoned gunner still carries the live address of a gun on the ship they came from -- a real gun,
+        // on a hull whose chunks are still loaded -- and reconcile would believe it and seat them back over
+        // there, riding a seat off this ship's quarter. See GunReberth.
+        GunReberth.reberth(level, ship, crewId)
         return null
     }
 
