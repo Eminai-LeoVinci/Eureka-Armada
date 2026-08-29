@@ -786,15 +786,27 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             val direction = pos.sub(positionUntilAligned, Vector3d())
             body.applyForce(direction)
         }
-        if ((aligning) && abs(angleUntilAligned) > ALIGN_THRESHOLD) {
-            if (angleUntilAligned < 0.3 && angleUntilAligned > 0.0) angleUntilAligned = 0.3
-            if (angleUntilAligned > -0.3 && angleUntilAligned < 0.0) angleUntilAligned = -0.3
+        if (aligning) {
+            if (abs(angleUntilAligned) <= ALIGN_THRESHOLD) {
+                // Arrived. Aligning is a MANOEUVRE, not a mode: it was only ever cleared by pressing the
+                // button again or by a disassembly, so a ship that finished her turn stayed in it -- and a
+                // ship in it cannot be driven, because the pilot brake below is lifted while aligning and the
+                // stabiliser holds the heading instead. That is why the wheel felt dead afterwards, and why
+                // taking her apart was the only thing that gave her back.
+                aligning = false
+            } else {
+                // The old code raised any remaining angle under 0.3 radians UP to 0.3, to keep some authority
+                // as the error got small. But "arrived" is 0.01, so everything inside that gap was pushed as
+                // though nearly seventeen degrees were left: she overshot, the sign flipped, the next tick
+                // pushed just as hard the other way, and she hunted left and right for ever without once
+                // landing inside the window that would have ended it. The command now follows the real error,
+                // so it decays as she comes round and she settles instead of ringing.
+                val idealOmega = Vector3d(invRotationAxisAngle.x, invRotationAxisAngle.y, invRotationAxisAngle.z)
+                    .mul(-angleUntilAligned)
+                    .mul(cfg.stabilizationSpeed)
 
-            val idealOmega = Vector3d(invRotationAxisAngle.x, invRotationAxisAngle.y, invRotationAxisAngle.z)
-                .mul(-angleUntilAligned)
-                .mul(cfg.stabilizationSpeed)
-
-            body.applyAngularAcceleration(idealOmega)
+                body.applyAngularAcceleration(idealOmega)
+            }
         }
         // endregion
 
