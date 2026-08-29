@@ -25,7 +25,8 @@
     "client.MixinRaycastUtils",
     "client.MixinCameraSubAir",
     "client.MixinContainerScreenHoldLabel",
-    "client.MixinEntityRendererCrewNameTag"
+    "client.MixinEntityRendererCrewNameTag",
+    "client.MixinMobRendererCrewNameTag"
   ],
   "injectors": {
     "defaultRequire": 1
