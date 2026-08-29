@@ -80,6 +80,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
      */
     private lateinit var crewList: CrewDropdown
     private lateinit var summonButton: ShipHelmIconButton
+    private lateinit var returnButton: ShipHelmIconButton
 
     /** The wheel the roll on screen was drawn up for, so a stale one is not shown against another helm. */
     private var rolledFor: Long? = null
@@ -211,7 +212,21 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             ShipHelmIconButton(x + SUMMON_X, y + SUMMON_Y, SUMMON_W, SUMMON_H, SUMMON_TEXT, font) {
                 val picked = crewList.selected as? UUID
                 val helm = pos
-                if (picked != null && helm != null) CrewRoll.clientSummon(helm.asLong(), picked)
+                if (picked != null && picked != CrewRoll.NO_CREW && helm != null) {
+                    CrewRoll.clientSummon(helm.asLong(), picked)
+                }
+            }
+        )
+
+        // Directly under Summon, because it is the same gesture backwards and belongs to the same crew. The
+        // pair moved up against the book to make room for it -- see RETURN_Y for how little there was.
+        returnButton = addRenderableWidget(
+            ShipHelmIconButton(x + RETURN_X, y + RETURN_Y, RETURN_W, RETURN_H, RETURN_TEXT, font) {
+                val picked = crewList.selected as? UUID
+                val helm = pos
+                if (picked != null && picked != CrewRoll.NO_CREW && helm != null) {
+                    CrewRoll.clientReturn(helm.asLong(), picked)
+                }
             }
         )
 
@@ -537,9 +552,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
                 }
             )
         }
+        // "No crew" leads the list and is what an unpicked wheel falls back to. Defaulting to whoever
+        // was aboard meant Assemble always had somebody selected whether the captain had chosen them or
+        // not, so a hull could be built with a crew nobody meant to risk. Nobody is now a thing you can
+        // pick, and the thing you get by not picking.
+        crewList.rows = listOf(CrewDropdown.Row(CrewRoll.NO_CREW, NO_CREW_TEXT.string, "")) + crewList.rows
         val kept = crewList.selected
-        if (kept == null || roll.entries.none { it.id == kept }) {
-            crewList.selected = roll.entries.firstOrNull { it.aboard }?.id
+        if (kept == null || (kept != CrewRoll.NO_CREW && roll.entries.none { it.id == kept })) {
+            crewList.selected = CrewRoll.NO_CREW
         }
         // The optimistic echo has done its job the moment the server answers. It used to be cleared by
         // comparing against `Ship.slug`, which on the client is frozen at load -- so for a ship renamed this
@@ -665,7 +685,10 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         val aboard = roll?.entries?.firstOrNull { it.aboard }?.id
         val pickedEntry = roll?.entries?.firstOrNull { it.id == picked }
         val anyMissing = pickedEntry != null && pickedEntry.present < pickedEntry.heads
-        summonButton.active = assembled && picked != null && (picked != aboard || anyMissing)
+        val realCrew = picked != null && picked != CrewRoll.NO_CREW
+        summonButton.active = assembled && realCrew && (picked != aboard || anyMissing)
+        // Return only means something for a crew that is actually standing here.
+        returnButton.active = assembled && realCrew && pickedEntry != null && pickedEntry.present > 0
 
         // The section's name tells the truth about what the system is doing. Holding a SPEED is cruise
         // control -- that is the whole of what the words mean. The moment it is also holding a heading or
@@ -1256,7 +1279,15 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private const val SUMMON_W = 58
         private const val SUMMON_X = BOOK_X + (BOOK_W - SUMMON_W) / 2   // 126
         private const val SUMMON_H = 12
-        private const val SUMMON_Y = BOOK_Y + BOOK_H + 12               // 114
+        // Pulled up flush under the book to make room for Return beneath it. The column is boxed in:
+        // the book ends at 108 and DIVIDER2 sits at 138, so the two buttons and their gaps have thirty
+        // pixels to live in and use twenty-eight of them.
+        private const val SUMMON_Y = BOOK_Y + BOOK_H + 2                // 110
+
+        private const val RETURN_W = SUMMON_W
+        private const val RETURN_H = SUMMON_H
+        private const val RETURN_X = SUMMON_X
+        private const val RETURN_Y = SUMMON_Y + SUMMON_H + 2            // 124, foot at 136
 
         // The crew list takes the wide right-hand slot the ship's weight used to hold, because a crew's name
         // is the longest string on this panel -- "Motley Crew Barnacle" needs the room, and a 76px box spent
@@ -1289,6 +1320,8 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         private val ASSEMBLER_REPLACE_ALL_TEXT = Component.translatable("gui.vs_eureka.assembler_replace_all")
         private val SHIP_WEIGHT_TEXT = Component.translatable("gui.vs_eureka.ship_weight")
         private val SUMMON_TEXT = Component.translatable("gui.vs_eureka.crew_summon")
+        private val RETURN_TEXT = Component.translatable("gui.vs_eureka.crew_return")
+        private val NO_CREW_TEXT = Component.translatable("gui.vs_eureka.crew_none")
         private val CREW_LIST_EMPTY_TEXT = Component.translatable("gui.vs_eureka.crew_list_empty")
         private val CREW_LIST_ABOARD_TEXT = Component.translatable("gui.vs_eureka.crew_list_aboard")
         private val PLUS_TEXT = Component.literal("+")
