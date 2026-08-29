@@ -61,7 +61,7 @@ object HoldLabelSync {
         val names = ArrayList<String>(2)
         var tags = 0
         for (hold in holds) {
-            labelled.firstOrNull { it.hold.blockPos == hold.blockPos }?.let { names.add(it.label) }
+            labelled.firstOrNull { it.hold.blockPos == hold.blockPos }?.let { names.add(it.short) }
             tags = tags or HoldTags.toMask(HoldTags.tagsOf(hold))
         }
         if (names.isEmpty()) return

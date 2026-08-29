@@ -21,7 +21,10 @@ import org.valkyrienskies.eureka.crew.CrewDuty
 import org.valkyrienskies.eureka.crew.CrewManifest
 import org.valkyrienskies.eureka.crew.CrewMarkers
 import org.valkyrienskies.eureka.crew.CrewOperations
+import net.minecraft.world.inventory.ChestMenu
 import org.valkyrienskies.eureka.crew.CrewRoll
+import org.valkyrienskies.eureka.crew.HoldRetag
+import org.valkyrienskies.eureka.crew.HoldTag
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.blueprint.Blueprint
 import org.valkyrienskies.eureka.crew.HelmNames
@@ -95,6 +98,7 @@ object PathNetworkingFabric {
     private val HELM_ITEM_NAME_RL: ResourceLocation =
         ResourceLocation(EurekaMod.MOD_ID, "helm_item_name")
     private val HOLD_LABEL_RL: ResourceLocation = ResourceLocation(EurekaMod.MOD_ID, "hold_label")
+    private val HOLD_TAG_RL: ResourceLocation = ResourceLocation(EurekaMod.MOD_ID, "hold_tag")
 
 
 
@@ -329,6 +333,23 @@ object PathNetworkingFabric {
 
     /** Server: handle hotkey actions. Registered from the common initializer. */
     fun registerServer() {
+
+        // The captain ticked a hold checkbox. Guarded on the menu the SERVER believes is open rather than on
+        // anything the packet claims, so a hand-made packet cannot re-tag a box on the far side of the world.
+        ServerPlayNetworking.registerGlobalReceiver(HOLD_TAG_RL) { server, sender, _, rawBuf, _ ->
+            val data = rawBuf.readByteArray()
+            val player = sender as? ServerPlayer ?: return@registerGlobalReceiver
+            val buf = FriendlyByteBuf(Unpooled.wrappedBuffer(data))
+            val containerId = buf.readVarInt()
+            val ordinal = buf.readVarInt()
+            server.execute {
+                val tag = HoldTag.entries.getOrNull(ordinal) ?: return@execute
+                val menu = player.containerMenu
+                if (menu !is ChestMenu || menu.containerId != containerId) return@execute
+                HoldRetag.toggle(menu.container, tag)
+                HoldLabelSync.sender?.invoke(player, containerId, "", HoldRetag.maskOf(menu.container))
+            }
+        }
         ServerPlayNetworking.registerGlobalReceiver(ACTION_RL) { server, sender, _, rawBuf, _ ->
             val data = rawBuf.readByteArray()
             val action = data.firstOrNull() ?: return@registerGlobalReceiver
@@ -685,6 +706,7 @@ object PathNetworkingFabric {
         CrewRoll.clientAsk = { helm -> sendCrewListAsk(helm) }
         CrewRoll.clientSelect = { helm, crew -> sendCrewSelect(helm, crew) }
         CrewRoll.clientSummon = { helm, crew -> sendCrewSummon(helm, crew) }
+        HoldLabelClient.sender = { containerId, ordinal -> sendHoldTag(containerId, ordinal) }
         CrewRoll.clientRosterAsk = { helm, crew -> sendCrewRosterAsk(helm, crew) }
         CrewRoll.clientDisband = { helm, crew -> sendCrewDisband(helm, crew) }
         CrewRoll.clientRenameCrew = { helm, crew, name -> sendCrewRenameById(helm, crew, name) }
@@ -885,6 +907,15 @@ object PathNetworkingFabric {
     /** Client: call [crew] to this ship, paying their passage. */
     @Environment(EnvType.CLIENT)
     fun sendCrewSummon(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_SUMMON) { it.writeUUID(crew) }
+
+    /** Client: tick or untick one hold tag on the open chest screen. */
+    @Environment(EnvType.CLIENT)
+    fun sendHoldTag(containerId: Int, ordinal: Int) {
+        val buf = FriendlyByteBuf(Unpooled.buffer())
+        buf.writeVarInt(containerId)
+        buf.writeVarInt(ordinal)
+        ClientPlayNetworking.send(HOLD_TAG_RL, wrap(toArray(buf)))
+    }
 
     /** Client: ask for one crew's articles. Answered by a [CrewRosterPayload], or by silence. */
     @Environment(EnvType.CLIENT)

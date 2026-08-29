@@ -35,7 +35,16 @@ object HoldLabels {
     class Labeled(
         val hold: BaseContainerBlockEntity,
         val label: String,
-        val deck: Int
+        val deck: Int,
+        /**
+         * The same name with the noun taken off -- "2 - D3" rather than "Chest 2 - D3".
+         *
+         * The chest screen already says CHEST across the top of it, in vanilla's own title, so repeating
+         * the word there cost a third of the row to say nothing. What the screen is missing is which chest,
+         * and that is all this carries. Everywhere else -- restock messages, the operations list -- still
+         * wants the noun, because there is no vanilla title beside it to supply one.
+         */
+        val short: String
     ) {
         val tags: Set<HoldTag> get() = HoldTags.tagsOf(hold)
     }
@@ -64,7 +73,7 @@ object HoldLabels {
         val out = ArrayList<Labeled>(holds.size)
         fun emit(group: List<BaseContainerBlockEntity>, noun: String, deck: Int) {
             val onDeck = group.filter { deckOf.getValue(it.blockPos.y) == deck }.sortedWith(order)
-            for ((index, hold) in onDeck.withIndex()) out.add(Labeled(hold, format(noun, index + 1, deck), deck))
+            for ((index, hold) in onDeck.withIndex()) out.add(Labeled(hold, format(noun, index + 1, deck), deck, formatShort(index + 1, deck)))
         }
         for (deck in 1..deckOf.size) {
             emit(chests, CHEST, deck)
@@ -90,6 +99,9 @@ object HoldLabels {
 
     /** The one place a hold label's shape lives: `Chest 2 - D3` is the second chest, bow-counted, on Deck 3. */
     fun format(noun: String, number: Int, deck: Int): String = "$noun $number - D$deck"
+
+    /** The same shape without the noun, for the one place a vanilla title already says it. */
+    fun formatShort(number: Int, deck: Int): String = "$number - D$deck"
 
     const val CHEST = "Chest"
     const val BARREL = "Barrel"
