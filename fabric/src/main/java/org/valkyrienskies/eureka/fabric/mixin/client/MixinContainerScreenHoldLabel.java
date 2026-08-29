@@ -3,6 +3,7 @@ package org.valkyrienskies.eureka.fabric.mixin.client;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ChestMenu;
@@ -12,6 +13,9 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.valkyrienskies.eureka.crew.HoldTag;
+import org.valkyrienskies.eureka.fabric.client.crew.HoldCheckboxes;
 import org.valkyrienskies.eureka.fabric.client.crew.HoldLabelClient;
 
 /**
@@ -45,6 +49,18 @@ public abstract class MixinContainerScreenHoldLabel {
     protected int imageWidth;
 
     @Shadow
+    protected int leftPos;
+
+    @Shadow
+    protected int topPos;
+
+    @Shadow
+    protected int titleLabelX;
+
+    @Shadow
+    protected int titleLabelY;
+
+    @Shadow
     public abstract AbstractContainerMenu getMenu();
 
     /** Matches vanilla's own title inset, so the two ends of the row line up. */
@@ -53,6 +69,10 @@ public abstract class MixinContainerScreenHoldLabel {
 
     @Unique
     private static final int VS_EUREKA_TITLE_Y = 6;
+
+    /** A space's worth of air between vanilla's title and the number, so the two do not touch. */
+    @Unique
+    private static final int VS_EUREKA_TITLE_GAP = 4;
 
     /**
      * 0xFF..., not a bare 0x404040: {@code GuiGraphics} honours the alpha byte, so a colour written without
@@ -74,11 +94,55 @@ public abstract class MixinContainerScreenHoldLabel {
         }
         // The same Font object the screen itself draws with -- Screen.font IS Minecraft's.
         final Font font = Minecraft.getInstance().font;
-        final String text = label + HoldLabelClient.INSTANCE.tagsFor(menu.containerId);
-        graphics.drawString(
-            font, text,
-            this.imageWidth - VS_EUREKA_RIGHT_MARGIN - font.width(text), VS_EUREKA_TITLE_Y,
-            VS_EUREKA_LABEL_COLOUR, false
+
+        // The number goes straight after vanilla's own title, in vanilla's own font and colour, so the row
+        // reads as one string: "Barrel 2 - D1". It used to be drawn right-aligned with the noun repeated,
+        // which said BARREL twice and spent a third of the row doing it.
+        // getTitle() is a METHOD, so it resolves up the hierarchy where a field shadow would not: `title`
+        // itself is declared on Screen, and shadowing it here is the exact failure this class warns about.
+        final Screen self = (Screen) (Object) this;
+        final int afterTitle = this.titleLabelX + font.width(self.getTitle()) + VS_EUREKA_TITLE_GAP;
+        graphics.drawString(font, label, afterTitle, this.titleLabelY, VS_EUREKA_LABEL_COLOUR, false);
+
+        HoldCheckboxes.render(
+            graphics, font, this.imageWidth, VS_EUREKA_TITLE_Y,
+            HoldLabelClient.INSTANCE.tagSetFor(menu.containerId)
         );
+    }
+
+    /**
+     * A click on one of the three boxes.
+     *
+     * Injected cancellable at HEAD so a tick never also lands on whatever is behind it, and gated on the
+     * same "is this a numbered hold" test the drawing uses -- an ordinary chest on land has no boxes and
+     * therefore nothing here can consume its clicks.
+     *
+     * Mouse coordinates are SCREEN space and the boxes are laid out in PANEL space, so the panel origin is
+     * subtracted before asking. That is the one conversion, and it is why the geometry lives in one place.
+     */
+    @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
+    private void vs_eureka$clickHoldTag(final double mouseX, final double mouseY, final int button,
+        final CallbackInfoReturnable<Boolean> cir) {
+        if (button != 0) {
+            return;
+        }
+        final AbstractContainerMenu menu = this.getMenu();
+        if (!(menu instanceof ChestMenu) || HoldLabelClient.INSTANCE.labelFor(menu.containerId) == null) {
+            return;
+        }
+        final HoldTag tag = HoldCheckboxes.hit(
+            Minecraft.getInstance().font, this.imageWidth, VS_EUREKA_TITLE_Y,
+            mouseX - this.leftPos, mouseY - this.topPos
+        );
+        if (tag == null) {
+            return;
+        }
+        HoldLabelClient.INSTANCE.toggle(menu.containerId, tag);
+        Minecraft.getInstance().getSoundManager().play(
+            net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(
+                net.minecraft.sounds.SoundEvents.UI_BUTTON_CLICK, 1.0F
+            )
+        );
+        cir.setReturnValue(true);
     }
 }
