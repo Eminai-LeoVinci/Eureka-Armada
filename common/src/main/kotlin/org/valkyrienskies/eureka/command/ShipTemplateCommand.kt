@@ -9,6 +9,7 @@ import net.minecraft.commands.Commands.argument
 import net.minecraft.commands.Commands.literal
 import net.minecraft.core.BlockPos
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.MutableComponent
 import net.minecraft.server.permissions.Permissions
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.template.BillOfMaterials
@@ -18,7 +19,7 @@ import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 
 /**
- * "/vs template save|load|list" -- the harness for [ShipTemplate].
+ * "/vs template save|load|list", with a listing per family -- the harness for [ShipTemplate].
  *
  * This exists to answer one question before six features are built on the answer: does a ship survive being
  * serialized to a vanilla `.nbt` and placed back into the world, with its block entities and their contents
@@ -76,7 +77,15 @@ object ShipTemplateCommand {
                             argument("name", StringArgumentType.greedyString()).executes { check(it) }
                         )
                     )
-                    .then(literal("list").executes { list(it) })
+                    // Each family also lists on its own -- "/vs template pirate list". Woven in from the
+                    // table rather than spelled out four times, because the literal is the only thing that
+                    // differs between them.
+                    .apply {
+                        GROUPS.forEach { group ->
+                            then(literal(group.literal).then(literal("list").executes { listOne(it, group) }))
+                        }
+                    }
+                    .then(literal("list").executes { listAll(it) })
             )
         )
     }
@@ -222,20 +231,98 @@ object ShipTemplateCommand {
         return if (deleted) 1 else 0
     }
 
-    private fun list(ctx: CommandContext<CommandSourceStack>): Int {
-        val templates = ShipTemplate.list(ctx.source.level)
-        if (templates.isEmpty()) {
+    /**
+     * The families a template name can belong to, in the order a listing shows them.
+     *
+     * Names are namespaced by whatever minted them: "pirate/large1" is a hull raiders sail, "blueprint/<uuid>"
+     * is a set of plans a shipwright works from, "bottled/<uuid>" is a ship somebody corked. Nothing enforces
+     * that -- it is a convention four call sites happen to share, and this is the only place that reads it
+     * back, so it is written down here and nowhere else needs to know.
+     *
+     * It is written down because of what a world in use looks like. Blueprints and bottles are named after a
+     * UUID, so they arrive as thirty-two characters of hex that nobody will ever type; a few dozen of them in
+     * one flat alphabetical run buries the handful of pirate hulls that are the only names anybody uses by
+     * hand. Sorting cannot help -- "blueprint/" and "bottled/" sort adjacent and both sort above "pirate/".
+     *
+     * A null [prefix] is the catch-all, and comes last for that reason: a name matching none of the others was
+     * typed by a person, which makes it the most interesting group and not the least.
+     */
+    private class Group(
+        val literal: String,
+        val prefix: String?,
+        val heading: String,
+        val colour: ChatFormatting
+    )
+
+    private val GROUPS = listOf(
+        Group("pirate", "pirate/", "Pirate hulls", ChatFormatting.RED),
+        Group("blueprint", "blueprint/", "Blueprints", ChatFormatting.AQUA),
+        Group("bottled", "bottled/", "Bottled ships", ChatFormatting.LIGHT_PURPLE),
+        Group("other", null, "Saved by hand", ChatFormatting.GOLD)
+    )
+
+    /** How many names one family shows in the combined listing before it defers to its own. */
+    private const val GROUPED_ROWS = 8
+
+    /** A ceiling on a single family's listing: one chat component can only grow so far before it is dropped. */
+    private const val CATEGORY_ROWS = 100
+
+    private fun groupOf(path: String): Group =
+        GROUPS.firstOrNull { it.prefix != null && path.startsWith(it.prefix) } ?: GROUPS.last()
+
+    private fun heading(group: Group, count: Int): MutableComponent =
+        Component.literal("${group.heading} ($count)").withStyle(group.colour, ChatFormatting.BOLD)
+
+    private fun row(path: String): Component =
+        Component.literal("\n  $path").withStyle(ChatFormatting.GRAY)
+
+    private fun overflow(hidden: Int, tail: String): Component =
+        Component.literal("\n  ...and $hidden more$tail").withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC)
+
+    /** Everything, each family under its own heading, each family trimmed to a readable few. */
+    private fun listAll(ctx: CommandContext<CommandSourceStack>): Int {
+        val all = ShipTemplate.list(ctx.source.level)
+        if (all.isEmpty()) {
             ctx.source.sendSuccess({
                 Component.literal("No ship templates saved yet.").withStyle(ChatFormatting.GRAY)
             }, false)
             return 0
         }
 
-        val msg = Component.literal("${templates.size} ship template(s):").withStyle(ChatFormatting.WHITE)
-        templates.sortedBy { it.path }.forEach {
-            msg.append(Component.literal("\n  ${it.path}").withStyle(ChatFormatting.AQUA))
+        val families = all.map { it.path }.groupBy { groupOf(it) }
+        val msg = Component.literal("${all.size} ship template(s):").withStyle(ChatFormatting.WHITE)
+        for (group in GROUPS) {
+            val paths = families[group]?.sorted() ?: continue
+            msg.append(Component.literal("\n")).append(heading(group, paths.size))
+            paths.take(GROUPED_ROWS).forEach { msg.append(row(it)) }
+            if (paths.size > GROUPED_ROWS) {
+                msg.append(overflow(paths.size - GROUPED_ROWS, " -- /vs template ${group.literal} list"))
+            }
         }
         ctx.source.sendSuccess({ msg }, false)
-        return templates.size
+        return all.size
+    }
+
+    /** One family, in full -- the listing the combined one hands off to. */
+    private fun listOne(ctx: CommandContext<CommandSourceStack>, group: Group): Int {
+        val paths = ShipTemplate.list(ctx.source.level)
+            .map { it.path }
+            .filter { groupOf(it) === group }
+            .sorted()
+        if (paths.isEmpty()) {
+            ctx.source.sendSuccess({
+                Component.literal("No templates saved under ${group.heading.lowercase()}.")
+                    .withStyle(ChatFormatting.GRAY)
+            }, false)
+            return 0
+        }
+
+        val msg = heading(group, paths.size)
+        paths.take(CATEGORY_ROWS).forEach { msg.append(row(it)) }
+        if (paths.size > CATEGORY_ROWS) {
+            msg.append(overflow(paths.size - CATEGORY_ROWS, ""))
+        }
+        ctx.source.sendSuccess({ msg }, false)
+        return paths.size
     }
 }
