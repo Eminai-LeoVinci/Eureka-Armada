@@ -17,6 +17,7 @@
     "MixinShipBlockCensus",
     "MixinShipFireContainment",
     "MixinVSCoreTeleport",
+    "MixinVillagerCrewDeath",
     "MixinVillagerCrewTenure",
     "MixinYieldJobSite"
   ],
