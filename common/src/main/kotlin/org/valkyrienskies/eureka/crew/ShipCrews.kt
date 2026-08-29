@@ -494,6 +494,55 @@ object ShipCrews {
     }
 
     /**
+     * Send this wheel's crew back to the articles: off the deck, berths and duties and posts intact.
+     *
+     * The opposite number of [summonCrew], and deliberately the same gesture in reverse -- same wheel, same
+     * reach test, same refusals. A captain who can call a crew aboard can send them home again, and until now
+     * could not: the only ways off a deck were to summon a DIFFERENT crew over the top of them, or to take
+     * the ship apart. Neither is a thing you should have to do to clear a deck.
+     *
+     * Everything that makes them findable again is kept -- this is [CrewMuster.standDownShip], the same
+     * machinery a bottling uses, which is what a berth's post and duty exist for. What they lose is the deck.
+     *
+     * `sweepHull = false`: this hull is not going anywhere, and the wider sweep would take a guest crew and
+     * another captain's hands off with the one being sent home.
+     */
+    fun returnCrew(level: ServerLevel, player: ServerPlayer, helm: Long, crewId: UUID) {
+        val wheel = level.getBlockEntity(BlockPos.of(helm)) as? ShipHelmBlockEntity ?: return
+        if (!withinBookReach(level, player, wheel)) return
+        if (PirateHelm.gated(wheel.blockState)) {
+            PirateHelm.deny(player)
+            return
+        }
+        val ship = CrewStations.shipOf(level, wheel)
+        if (ship == null) {
+            PathMessages.send(player, "There is no deck to call them off.", PathMessages.Kind.ERROR)
+            return
+        }
+        val ledger = CrewLedger.get(level.server)
+        val crew = ledger.crew(crewId) ?: return
+        if (crew.captain != player.uuid) {
+            PathMessages.send(player, "${crew.name} answer to another captain.", PathMessages.Kind.ERROR)
+            return
+        }
+        val station = CrewStations.stationOf(level, ship) ?: wheel
+        val posts = CrewMuster.postsOf(level, ship, station.blockPos)
+        val report = CrewMuster.standDownShip(
+            level, ship.id, ship.worldAABB, listOf(crewId), posts, sweepHull = false
+        )
+        if (report.stood == 0) {
+            PathMessages.send(player, "${crew.name} are not on this deck.", PathMessages.Kind.WARN)
+            return
+        }
+        PathMessages.send(
+            player,
+            "${crew.name} are back on the articles -- ${report.stood} off the deck.",
+            PathMessages.Kind.GOOD
+        )
+        CrewRoll.sender(player, CrewRoll.build(player, wheel))
+    }
+
+    /**
      * Send [player] one crew's articles for the Crews tab, whether or not that crew is on this ship.
      *
      * Reach-guarded on the WHEEL the book was opened at, not on the crew: the crew may be anywhere, and the

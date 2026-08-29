@@ -258,6 +258,8 @@
   "gui.vs_eureka.assembler_replace_all": "Replace All",
   "gui.vs_eureka.ship_weight": "Ship's Weight:",
   "gui.vs_eureka.crew_summon": "Summon Crew",
+  "gui.vs_eureka.crew_return": "Return Crew",
+  "gui.vs_eureka.crew_none": "No Crew",
   "gui.vs_eureka.crew_list_empty": "No crew",
   "gui.vs_eureka.crew_list_aboard": "aboard",
   "gui.vs_eureka.display_hud": "HUD",

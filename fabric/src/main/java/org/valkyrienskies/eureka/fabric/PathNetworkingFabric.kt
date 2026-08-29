@@ -793,6 +793,10 @@ object PathNetworkingFabric {
                     val called: UUID = buf.readUUID()
                     ({ level: ServerLevel -> ShipCrews.summonCrew(level, player, helm, called) })
                 }
+                OPS_CREW_RETURN -> {
+                    val sent: UUID = buf.readUUID()
+                    ({ level: ServerLevel -> ShipCrews.returnCrew(level, player, helm, sent) })
+                }
                 OPS_CREW_ROSTER_ASK -> {
                     val asked: UUID = buf.readUUID()
                     ({ level: ServerLevel -> ShipCrews.requestCrewRoster(level, player, helm, asked) })
@@ -874,6 +878,7 @@ object PathNetworkingFabric {
         CrewRoll.clientAsk = { helm -> sendCrewListAsk(helm) }
         CrewRoll.clientSelect = { helm, crew -> sendCrewSelect(helm, crew) }
         CrewRoll.clientSummon = { helm, crew -> sendCrewSummon(helm, crew) }
+        CrewRoll.clientReturn = { helm, crew -> sendCrewReturn(helm, crew) }
         HoldLabelClient.sender = { containerId, ordinal -> sendHoldTag(containerId, ordinal) }
         CrewRoll.clientRosterAsk = { helm, crew -> sendCrewRosterAsk(helm, crew) }
         CrewRoll.clientDisband = { helm, crew -> sendCrewDisband(helm, crew) }
@@ -1035,6 +1040,7 @@ object PathNetworkingFabric {
     private const val OPS_CREW_ROSTER_ASK: Byte = 17
     private const val OPS_CREW_DISBAND: Byte = 18
     private const val OPS_CREW_RENAME: Byte = 19
+    private const val OPS_CREW_RETURN: Byte = 20
 
     /** Upper bound on a fuel item id's wire length; registry ids are far shorter. */
     private const val MAX_ITEM_ID = 256
@@ -1071,6 +1077,10 @@ object PathNetworkingFabric {
     @Environment(EnvType.CLIENT)
     fun sendCrewSummon(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_SUMMON) { it.writeUUID(crew) }
 
+    /** Client: send this wheel's crew back to the articles. */
+    @Environment(EnvType.CLIENT)
+    fun sendCrewReturn(helm: Long, crew: UUID) = sendOps(helm, OPS_CREW_RETURN) { it.writeUUID(crew) }
+
     /** Client: tick or untick one hold tag on the open chest screen. */
     @Environment(EnvType.CLIENT)
     fun sendHoldTag(containerId: Int, ordinal: Int) {
@@ -1102,7 +1112,9 @@ object PathNetworkingFabric {
      * bytes and the reader has one shape to parse. Nothing can ever be filed under it: [UUID.randomUUID]
      * does not produce it, and the ledger only ever stores what it minted.
      */
-    private val NO_CREW: UUID = UUID(0L, 0L)
+    // The sentinel lives on CrewRoll now, so the screen can offer it as a row and the wire keeps meaning
+    // exactly what it always meant.
+    private val NO_CREW: UUID get() = CrewRoll.NO_CREW
 
     /** Server: send [captain] the crews they can call at this wheel. */
     private fun sendCrewList(captain: ServerPlayer, level: ServerLevel, helm: Long) {
