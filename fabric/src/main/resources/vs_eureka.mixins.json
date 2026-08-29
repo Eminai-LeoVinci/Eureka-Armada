@@ -26,7 +26,8 @@
     "client.MixinCameraSubAir",
     "client.MixinCannonShotSectionCull",
     "client.MixinContainerScreenHoldLabel",
-    "client.MixinEntityRendererCrewNameTag"
+    "client.MixinEntityRendererCrewNameTag",
+    "client.MixinMobRendererCrewNameTag"
   ],
   "injectors": {
     "defaultRequire": 1
