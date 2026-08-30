@@ -16,6 +16,7 @@ import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.blockentity.ShipHelmBlockEntity
+import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.follow.FollowGeometry
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.follow.ShipFollows
@@ -944,6 +945,25 @@ object PirateShips {
                 continue
             }
 
+            // She has struck her colours: the wheel a captain broke to end the fight. Checked ABOVE the
+            // guns on purpose -- a surrender that stopped the chase but left the broadside firing would be
+            // the worst of both, and the point of the gesture is that it ends the engagement. The raider
+            // lingers rather than standing down, so she is still here, still awake, and still a threat to
+            // anyone who sails past with a working helm.
+            if (chase.leaderId != null) {
+                val leader = world.loadedShips.getById(chase.leaderId!!) as? LoadedServerShip
+                if (leader != null && !steerable(level, leader)) {
+                    tellNear(
+                        level, leader, "'${ShipCrew.name(pirate)}' breaks off -- your helm is gone.",
+                        PathMessages.Topic.PIRATES_PURSUIT
+                    )
+                    ShipFollows.stopShip(pirate)
+                    chase.leaderId = null
+                    chase.lingerUntil = now + lingerTicks()
+                    continue
+                }
+            }
+
             // The guns, before the follow bookkeeping's several exits: every path below this line is an
             // ACTIVE chase -- pursuing or lingering, assembled, someone in earshot -- and those are
             // exactly the moments she should be shooting.
@@ -1405,7 +1425,26 @@ object PirateShips {
         }
     }
 
+    /**
+     * Whether [ship] is still a vessel worth chasing: something aboard her can steer.
+     *
+     * Breaking your own wheel is how a captain ends a fight they cannot win, and until now nothing
+     * noticed. A hull keeps her id, her name and her assembly when the helm goes -- so a raider went on
+     * hunting a ship that could no longer turn, run, or answer her guns, all the way to the seabed. That
+     * is not a pursuit, it is desecration.
+     *
+     * Unreadable chunks answer TRUE, deliberately. `helmsAboard` returns null when it cannot look, and a
+     * chase that broke off every time the leader's chunks went quiet would break off constantly at range
+     * -- the failure that costs nothing is to keep chasing a ship that turns out to be steerable anyway.
+     */
+    private fun steerable(level: ServerLevel, ship: LoadedServerShip): Boolean =
+        CrewStations.helmsAboard(level, ship)?.isNotEmpty() ?: true
+
     private fun bind(level: ServerLevel, pirate: LoadedServerShip, target: LoadedServerShip, chase: PirateChase) {
+        // Never open a pursuit on a hull that has already struck. The same question the chase asks each
+        // tick, asked once at the door, so a surrendered ship sitting in a zone is not picked up again the
+        // instant she is put down.
+        if (!steerable(level, target)) return
         when (val refusal = ShipFollows.bind(level, pirate, target, ownerId = null)) {
             null -> {
                 chase.leaderId = target.id
