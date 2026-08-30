@@ -8,7 +8,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.ProblemReporter
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.ai.attributes.Attributes
-import net.minecraft.world.entity.raid.Raider
+import net.minecraft.world.entity.Mob
 import net.minecraft.world.level.ClipContext
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
@@ -58,18 +58,21 @@ object PirateMuster {
     }
 
     /** Haul a crew hand back to a seat by the wheel -- the tether's answer to combat pathing. */
-    fun reseat(level: ServerLevel, raider: Raider, centre: Vector3d, seat: Int) {
+    fun reseat(level: ServerLevel, raider: Mob, centre: Vector3d, seat: Int) {
         val at = seatFor(level, centre, seat)
         raider.teleportTo(at.x, at.y, at.z)
         raider.deltaMovement = Vec3.ZERO
         raider.fallDistance = 0.0f
     }
 
-    private fun restore(level: ServerLevel, tag: CompoundTag, at: Vec3): Raider? = try {
+    private fun restore(level: ServerLevel, tag: CompoundTag, at: Vec3): Mob? = try {
         val id = tag.getStringOpt("id").orElse("")
         val type = EntityType.byString(id).orElse(null)
         val entity = type?.create(level)
-        val raider = entity as? Raider
+        // Any mob the articles admit -- see PirateCrewTypes. A snapshot naming something ineligible is
+        // dropped rather than seated: a hull authored before the rule narrowed should lose that hand, not
+        // arrive with a cow at the wheel.
+        val raider = entity?.takeIf { PirateCrewTypes.eligible(it) } as? Mob
         if (raider == null) {
             entity?.discard()
             null
