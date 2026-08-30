@@ -34,9 +34,6 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
      */
     fun viewsHelm(helm: ShipHelmBlockEntity): Boolean = blockEntity === helm
 
-    // TODO this isn't synced...
-    val aligning = blockEntity?.aligning ?: false
-
     // Server->client sync of the ship's keep-active flag so the "Keep Active?" checkbox shows the real state.
     // On the server get() reads the live ship setting; on the client (blockEntity == null) it returns the
     // value pushed by set() via the vanilla data-slot sync. broadcastChanges() (per-tick) keeps it current.
@@ -86,6 +83,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
     private var syncedHelmPos2 = 0
     private var syncedHelmPos3 = 0
     private var syncedInHand = false // opened on a wheel in the hand: no ship, no position, no controls
+    private var syncedAligning = false // is the ship snapping to the grid right now (the "Aligning" label)
 
     /** "2/8" for the header, or null when this wheel is not on a ship and so is not one of anything. */
     val helmNumber: String?
@@ -338,7 +336,20 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
             override fun get(): Int = if (blockEntity == null) 1 else 0
             override fun set(value: Int) { syncedInHand = value == 1 }
         })
+        // Whether the ship is snapping herself to the grid right now. The screen draws an "Aligning" label
+        // off this, and it never once appeared: it used to be read straight off the block entity into a
+        // `val` at construction time, and on the client the block entity is always null -- so the label was
+        // reading a constant false, decided before the menu had even opened. Every other server-side fact
+        // on this screen already travelled as a data slot; this one had simply never been added.
+        addDataSlot(object : DataSlot() {
+            override fun get(): Int = if (blockEntity?.aligning == true) 1 else 0
+            override fun set(value: Int) { syncedAligning = value == 1 }
+        })
     }
+
+    /** Server-authoritative, synced above: the ship is snapping to the grid, and the label should show. */
+    val aligning: Boolean get() = blockEntity?.aligning ?: syncedAligning
+
     val keepActive: Boolean get() = blockEntity?.keepActive ?: syncedKeepActive
     // Server-authoritative, synced above: is this helm's ship assembled (the client's blockEntity is null).
     val assembled: Boolean get() = blockEntity?.assembled ?: syncedAssembled
