@@ -90,6 +90,31 @@ object ShipTemplateCommand {
         )
     }
 
+    /**
+     * The refusal a name with no folder earns, or null if it declares one.
+     *
+     * A template name is a PATH -- "pirate/sloop" -- and the folder is not decoration. It is what the
+     * listing groups by, and for a pirate hull it is the difference between a file worldgen can find and
+     * one sitting loose in the structures directory where nothing is looking. A bare name is accepted
+     * happily by the filesystem and by every command here, and is then quietly in the wrong place: a
+     * mistake with no symptom until much later, when the ships do not generate and the reason is a missing
+     * seven characters typed an hour ago.
+     *
+     * Refused rather than defaulted, even though `/vs pirate capture` could obviously assume `pirate/`.
+     * The folder says what the thing IS, and guessing it on somebody's behalf is how a blueprint ends up
+     * in the pirate pool.
+     *
+     * Lives here because this is where the families are already written down ([GROUPS]) -- one file knows
+     * the convention, and the two commands that mint names both ask it rather than keeping their own copy.
+     */
+    fun folderRefusal(name: String): Component? {
+        if (name.contains('/')) return null
+        val folders = GROUPS.mapNotNull { it.prefix }.joinToString(", ") { it.trimEnd('/') }
+        return Component.literal(
+            "'$name' has no folder. Templates live in one -- $folders -- so say which: e.g. pirate/$name."
+        ).withStyle(ChatFormatting.RED)
+    }
+
     private fun save(ctx: CommandContext<CommandSourceStack>): Int {
         val ship = ShipArgument.getShip(ctx, "ship")
         if (ship !is LoadedServerShip) {
@@ -99,6 +124,7 @@ object ShipTemplateCommand {
             return 0
         }
         val name = StringArgumentType.getString(ctx, "name")
+        folderRefusal(name)?.let { ctx.source.sendFailure(it); return 0 }
 
         return when (val outcome = ShipTemplate.capture(ctx.source.level, ship, name)) {
             is ShipTemplate.Failed -> {
