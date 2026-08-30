@@ -205,6 +205,16 @@ object EurekaConfig {
         var cannonBarrelCullBehindCamera = true
 
         @JsonSchema(
+            description = "Draw cannon barrels into the shader SHADOW MAP as well as the visible view. " +
+                "Shaders render the world twice, and a barrel is a block entity, so every gun costs twice " +
+                "over -- on a sixty-gun ship that second pass was about a fifth of the whole frame, which " +
+                "is what made shaders plus a full crew halve the frame rate. Off, a gun still casts the " +
+                "shadow of its carriage (ordinary block geometry); it just stops casting a separate one " +
+                "for the muzzle. Costs nothing and does nothing without a shader pack."
+        )
+        var cannonBarrelCastsShadows = false
+
+        @JsonSchema(
             description = "Show every saved ship path in this dimension as a glowing line. Toggled in-game " +
                 "with SHIFT+H; a route being recorded or flown is always drawn regardless of this."
         )

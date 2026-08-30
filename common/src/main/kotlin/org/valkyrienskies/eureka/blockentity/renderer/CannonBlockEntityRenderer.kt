@@ -141,6 +141,14 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
     ) {
         if (!state.blockState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) return
         if (state.behindCamera) return
+        // Iris draws the world twice and a barrel is a block entity, so every gun is tessellated
+        // once for the camera and once for the sun. Asked HERE and not in extract, which is the whole
+        // point: extract runs once a frame, before either pass, so it cannot tell them apart -- submit is
+        // called per pass and can. The behind-camera cull above cannot help with this one either, since a
+        // gun behind the player is still squarely in front of the shadow map. Measured on 1.20.1 at 12.4%
+        // of the render thread under BLS, on top of the 12.7% the main pass costs.
+        // See [IrisShadowPass] for what this gives up, which is only the muzzle.
+        if (!EurekaConfig.CLIENT.cannonBarrelCastsShadows && IrisShadowPass.active()) return
         val facing = state.blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
         val barrelState = EurekaBlocks.CANNON_BARREL.get().defaultBlockState()
 
