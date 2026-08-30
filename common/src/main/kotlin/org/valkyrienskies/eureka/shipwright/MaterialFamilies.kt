@@ -102,11 +102,18 @@ object MaterialFamilies {
      *
      * `full_blocks` is last on purpose: a stone slab is a slab before it is anything else, and that
      * ordering is the whole of the rule that a slab may never become a plank.
+     *
+     * Terracotta is deliberately NOT a family of its own, though it was one. Seventeen colours of plain
+     * full cube is exactly what `full_blocks` is for, and giving it a family of its own only narrowed it
+     * to swapping with itself -- a captain could not face a stone hull in terracotta, which is the
+     * commonest thing anybody wants it for. Vanilla's `#minecraft:terracotta` leaves GLAZED terracotta
+     * out, and so do we, for the same reason a slab is not a plank: it is directional and patterned, so
+     * standing it in for stone would place a facing nobody chose.
      */
     val FAMILIES: List<TagKey<Item>> = listOf(
         "beds", "doors", "trapdoors", "signs", "banners", "candles", "lanterns",
         "shulker_boxes", "buttons", "pressure_plates", "fence_gates", "fences",
-        "walls", "stairs", "slabs", "carpets", "leaves", "anvils", "terracotta",
+        "walls", "stairs", "slabs", "carpets", "leaves", "anvils",
         "planks", "logs", "wool", "full_blocks"
     ).map { itemTag("swap/$it") }
 
