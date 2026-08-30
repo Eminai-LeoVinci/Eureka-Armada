@@ -101,6 +101,12 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         val blockState = blockEntity.blockState
         if (!blockState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) return
         if (behindTheCamera(blockEntity)) return
+        // Iris draws the world twice and a barrel is a block entity, so every gun is tessellated
+        // once for the camera and once for the sun. The behind-camera cull above cannot touch the second
+        // pass -- a gun behind the player is still in front of the shadow map. Measured at 12.4% of the
+        // render thread on a 120-gun ship under BLS, on top of the 12.7% the main pass costs.
+        // See [IrisShadowPass] for what this gives up, which is only the muzzle.
+        if (!EurekaConfig.CLIENT.cannonBarrelCastsShadows && IrisShadowPass.active()) return
         val facing = blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
         val barrelState = EurekaBlocks.CANNON_BARREL.get().defaultBlockState()
 
