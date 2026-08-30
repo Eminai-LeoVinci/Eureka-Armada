@@ -61,6 +61,21 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
     var fuel: ItemStack = ItemStack.EMPTY
     private var lastFuelValue = 1600; // coal: 1600
 
+    /**
+     * A raider's engine, not a shipwright's: this one came aboard with a pirate hull.
+     *
+     * The exact twin of [org.valkyrienskies.eureka.blockentity.CannonBlockEntity.pirate], stamped by the
+     * same sweep at the same moment, and it buys the same two things. Her engines never run dry while her
+     * wheel stands, because a raider who runs out of coal mid-chase is not a raider, she is scenery. And
+     * her bunkers are not a coal mine: a template author fills every engine to the brim so the hull will
+     * sail forever, and paying that out on a break would make one conquered sloop worth more coal than the
+     * fight that took her.
+     *
+     * Never cleared, exactly as the guns are not. A prize sailed away by her new captain burns real fuel
+     * she has to find -- what she can never do is be broken up for the fuel already in her.
+     */
+    var pirate: Boolean = false
+
     override fun createMenu(containerId: Int, inventory: Inventory): AbstractContainerMenu {
         // Stamp this engine's number just before the menu syncs it; see [fittingNumber].
         val level = this.level
@@ -150,6 +165,13 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
             return
         }
 
+        // A raider's bunkers are bottomless, the way her magazines are: she still has to be STOCKED --
+        // an engine with an empty slot burns down and stops like any other, and an author who left one
+        // empty gets a hull that limps -- but nothing is deducted, so a chase that runs long never ends
+        // because the pillagers ran out of coal. The heat still climbs on the same curve, so she makes
+        // her power exactly as an honest engine does.
+        val bottomless = pirate && EurekaConfig.SERVER.pirateEngineInfiniteFuel && !fuel.isEmpty
+
         // Disable engine feeding when they are receiving a redstone signal
         if (!isPowered) {
             if (fuelLeft > 0) {
@@ -157,10 +179,10 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
                 if (EurekaConfig.SERVER.engineFuelSaving) {
                     if (heat <= maxEffectiveFuel) {
                         heat += scaleEngineHeating(engineCfg.engineHeatGain)
-                        fuelLeft--
+                        if (!bottomless) fuelLeft--
                     }
                 } else {
-                    fuelLeft--
+                    if (!bottomless) fuelLeft--
 
                     if (heat <= maxEffectiveFuel) {
                         heat += scaleEngineHeating(engineCfg.engineHeatGain)
@@ -301,6 +323,7 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
         output.putInt("FuelLeft", fuelLeft)
         output.putInt("PrevFuelTotal", fuelTotal)
         output.putFloat("Heat", heat)
+        if (pirate) output.putBoolean("Pirate", true)
     }
 
     override fun loadAdditional(input: CompoundTag, provider: HolderLookup.Provider) {
@@ -309,6 +332,7 @@ class EngineBlockEntity(pos: BlockPos, state: BlockState) :
         fuelLeft = input.getIntOr("FuelLeft", 0)
         fuelTotal = input.getIntOr("PrevFuelTotal", 0)
         heat = input.getFloatOr("Heat", 0f)
+        pirate = input.getBooleanOr("Pirate", false)
     }
 
     // region Container Stuff

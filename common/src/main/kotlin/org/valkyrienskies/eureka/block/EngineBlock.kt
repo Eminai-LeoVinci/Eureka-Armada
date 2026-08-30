@@ -14,6 +14,7 @@ import net.minecraft.world.ItemInteractionResult
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.Level
@@ -33,6 +34,8 @@ import net.minecraft.world.phys.BlockHitResult
 import org.valkyrienskies.core.api.attachment.getAttachment
 import org.valkyrienskies.eureka.EurekaProperties.HEAT
 import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
+import org.valkyrienskies.eureka.pirate.PirateFittings
+import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 
@@ -116,6 +119,15 @@ class EngineBlock : BaseEntityBlock(
         blockHitResult: BlockHitResult
     ): InteractionResult {
         if (level.isClientSide) return InteractionResult.SUCCESS
+
+        // Her bunkers are behind the same fight her magazines are. An engine screen on a raider still
+        // shooting at you is a chest of coal blocks with the lid off, and a generated hull carries five of
+        // them stocked to sail forever. Lifts the instant the wheel goes, like every other rule aboard.
+        if (PirateHelm.aboardPirateShip(level, pos)) {
+            PirateHelm.denyEngines(player)
+            return InteractionResult.CONSUME
+        }
+
         val blockEntity = level.getBlockEntity(pos) as EngineBlockEntity
 
         player.openMenu(blockEntity)
@@ -236,13 +248,34 @@ class EngineBlock : BaseEntityBlock(
         }
     }
 
+    /**
+     * Spill the bunker when the engine is broken -- but a raider's pays a fixed price.
+     *
+     * The exact shape of the cannon's magazine rule, for the same reason. An ordinary engine gives back
+     * whatever is in her, like any other container. A pirate's cannot: a hull is authored with her engines
+     * filled so she will sail forever, and paying a full stack of coal blocks out of each of five would
+     * make one conquered sloop worth more fuel than any player would ever mine.
+     *
+     * So a taken engine yields a token -- two coal, whatever her slot says. While her wheel still stands
+     * she gives nothing at all, and the bunker is emptied rather than dropped, which is what keeps the
+     * whole-hull drop rule from having a hole in it here.
+     */
     override fun playerWillDestroy(level: Level, pos: BlockPos, state: BlockState, player: Player): BlockState? {
         if (!level.isClientSide) {
             val blockEntity = level.getBlockEntity(pos) as EngineBlockEntity
 
-            // Drop inventory
-            if (!blockEntity.fuel.isEmpty) {
-                level.addFreshEntity(ItemEntity(level, pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble(), blockEntity.fuel))
+            fun spill(stack: ItemStack) {
+                if (stack.isEmpty) return
+                level.addFreshEntity(ItemEntity(level, pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble(), stack))
+            }
+
+            when {
+                !blockEntity.pirate -> spill(blockEntity.fuel)
+                PirateHelm.dropsSuppressedAt(level, pos) -> blockEntity.fuel = ItemStack.EMPTY
+                else -> {
+                    blockEntity.fuel = ItemStack.EMPTY
+                    spill(ItemStack(Items.COAL, PirateFittings.PRIZE_COAL))
+                }
             }
         }
 

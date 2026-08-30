@@ -37,6 +37,9 @@ object PirateHelm {
     /** The guns' own refusal. Worded for the gun rather than the wheel, because that is what was clicked. */
     const val GUNS_MESSAGE = "These guns answer to the pirate helm. Destroy it to claim them!"
 
+    /** And the engines'. Same rule, same wheel, different fitting under the crosshair. */
+    const val ENGINES_MESSAGE = "This engine answers to the pirate helm. Destroy it to claim her!"
+
     /** The break refusal, counting the defenders. -1 = a wheel with no crew records (a test helm). */
     fun defended(remaining: Int): String = when {
         remaining < 0 -> "The crew defends the helm -- defeat the pillagers to conquer the vessel!"
@@ -67,6 +70,12 @@ object PirateHelm {
     fun denyGuns(player: Player?) {
         val server = player as? ServerPlayer ?: return
         PathMessages.send(server, GUNS_MESSAGE, PathMessages.Kind.ERROR)
+    }
+
+    /** The same refusal, spoken by an engine. */
+    fun denyEngines(player: Player?) {
+        val server = player as? ServerPlayer ?: return
+        PathMessages.send(server, ENGINES_MESSAGE, PathMessages.Kind.ERROR)
     }
 
     /**
