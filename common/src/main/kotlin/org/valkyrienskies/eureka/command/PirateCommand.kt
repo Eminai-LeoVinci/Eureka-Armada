@@ -264,6 +264,11 @@ object PirateCommand {
             return 0
         }
         val name = StringArgumentType.getString(ctx, "name").trim()
+        // A hull captured as "large1" instead of "pirate/large1" lands loose in the structures directory,
+        // where the worldgen pool is not looking and the pirate listing will not show it. The command
+        // succeeds, the file exists, and nothing generates -- so it is caught here, at the only moment
+        // anybody is in a position to notice.
+        ShipTemplateCommand.folderRefusal(name)?.let { ctx.source.sendFailure(it); return 0 }
         val level = ctx.source.level
 
         val helms = CrewStations.helmsAboard(level, ship) ?: run {
