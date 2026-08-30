@@ -192,11 +192,14 @@ object GunnerMounts {
             }
             val ship = level.getLoadedShipManagingPos(post.gunPos) ?: continue
             val world = ship.shipToWorld.transformPosition(Vector3d(post.stand))
+            // The facing is re-derived every tick alongside the position, and for the same reason: both are
+            // shipyard facts that only mean something once the hull's current transform is applied to them.
+            val yaw = worldYawOf(ship, post)
             // snapTo, not teleportTo: this is the same per-tick re-placement VS2's seat performs, and it
             // must not be read as a teleport by anything watching (no dismount, no fall reset, no event).
-            mob.moveTo(world.x, world.y, world.z, post.yaw, 0.0f)
-            mob.yHeadRot = post.yaw
-            mob.yBodyRot = post.yaw
+            mob.moveTo(world.x, world.y, world.z, yaw, 0.0f)
+            mob.yHeadRot = yaw
+            mob.yBodyRot = yaw
             mob.deltaMovement = net.minecraft.world.phys.Vec3.ZERO
             mob.fallDistance = 0.0f
         }
@@ -318,9 +321,35 @@ object GunnerMounts {
         posts[mob.uuid] = post
         val ship = level.getLoadedShipManagingPos(gunPos)
         val world = ship?.shipToWorld?.transformPosition(Vector3d(post.stand)) ?: post.stand
-        mob.moveTo(world.x, world.y, world.z, post.yaw, 0.0f)
-        mob.yHeadRot = post.yaw
-        mob.yBodyRot = post.yaw
+        // Off a ship the shipyard IS the world, so the post's own yaw is already the right one.
+        val yaw = if (ship != null) worldYawOf(ship, post) else post.yaw
+        mob.moveTo(world.x, world.y, world.z, yaw, 0.0f)
+        mob.yHeadRot = yaw
+        mob.yBodyRot = yaw
+    }
+
+    /**
+     * [post]'s shipyard-space facing, as a WORLD yaw on the hull it belongs to.
+     *
+     * The post's yaw is the gun's blockstate facing, which lives in the shipyard like everything else about
+     * a ship's blocks. It was being written straight onto the mob as a world yaw -- so a gunner's POSITION
+     * followed the hull (that goes through `shipToWorld`) while their FACING did not. On a ship holding a
+     * heading nobody could tell; put the wheel over and the whole gun deck slowly rotates in place, every
+     * crewman turning away from his own breech as the hull comes round under him. Circle such a ship and
+     * they appear to spin, which is exactly what it looks like because it is exactly what was happening.
+     *
+     * Derived by transforming TWO points and subtracting them rather than by rotating a direction vector --
+     * [org.valkyrienskies.eureka.cannon.CannonFire] takes the muzzle line the same way, and for the same
+     * reason: the ship's rotation AND its scale are then handled by the one transform that placed the post,
+     * with no second code path to get subtly out of step with it.
+     */
+    private fun worldYawOf(ship: LoadedServerShip, post: Post): Float {
+        val rad = Math.toRadians(post.yaw.toDouble())
+        // Minecraft's yaw convention: 0 looks along +Z, and +90 swings to -X.
+        val ahead = Vector3d(post.stand).add(-kotlin.math.sin(rad), 0.0, kotlin.math.cos(rad))
+        val here = ship.shipToWorld.transformPosition(Vector3d(post.stand))
+        val there = ship.shipToWorld.transformPosition(ahead)
+        return Math.toDegrees(kotlin.math.atan2(-(there.x - here.x), there.z - here.z)).toFloat()
     }
 
     /** The post behind [gunPos]'s breech, in shipyard space, or null when nobody could stand there. */
