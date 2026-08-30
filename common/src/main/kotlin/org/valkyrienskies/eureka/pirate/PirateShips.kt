@@ -4,7 +4,7 @@ import net.minecraft.core.BlockPos
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.ai.attributes.Attributes
-import net.minecraft.world.entity.raid.Raider
+import net.minecraft.world.entity.Mob
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.levelgen.Heightmap
 import net.minecraft.world.phys.AABB
@@ -214,7 +214,7 @@ object PirateShips {
             pos.x - half, pos.y - 4.0, pos.z - half,
             pos.x + half, pos.y + (size?.y ?: 16) + 4.0, pos.z + half
         )
-        val crew = level.getEntitiesOfClass(Raider::class.java, box) { it.isAlive }
+        val crew = level.getEntitiesOfClass(Mob::class.java, box) { it.isAlive && PirateCrewTypes.eligible(it) }
         for (raider in crew) {
             raider.setPersistenceRequired()
             raider.setHomeTo(pos, (half + 4.0).toInt())
@@ -1245,7 +1245,7 @@ object PirateShips {
             val ship = level.getLoadedShipManagingPos(report.helmPos)
             val boarders = if (ship != null) ShipCrew.aboard(level, ship) else emptyList()
             for (id in helm.pirateCrewUuids) {
-                val raider = level.getEntity(id) as? Raider ?: continue
+                val raider = level.getEntity(id) as? Mob ?: continue
                 if (!raider.isAlive) continue
                 val dx = raider.x - centre.x
                 val dy = raider.y - centre.y
@@ -1396,7 +1396,7 @@ object PirateShips {
         if (helm.pirateCrewUuids.isEmpty()) return -1
         val centre = helmWorldCentre(level, helm.blockPos)
         return helm.pirateCrewUuids.count { id ->
-            val raider = level.getEntity(id) as? Raider ?: return@count false
+            val raider = level.getEntity(id) as? Mob ?: return@count false
             if (!raider.isAlive) return@count false
             val dx = raider.x - centre.x
             val dy = raider.y - centre.y

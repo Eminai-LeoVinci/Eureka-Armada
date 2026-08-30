@@ -12,7 +12,7 @@ import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.server.permissions.Permissions
 import net.minecraft.util.ProblemReporter
-import net.minecraft.world.entity.raid.Raider
+import net.minecraft.world.entity.Mob
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.storage.TagValueOutput
 import net.minecraft.world.phys.AABB
@@ -28,6 +28,7 @@ import org.valkyrienskies.eureka.cannon.ShipGuns
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.pirate.PirateGunnery
+import org.valkyrienskies.eureka.pirate.PirateCrewTypes
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.eureka.pirate.PirateTestHull
 import org.valkyrienskies.eureka.template.ShipTemplate
@@ -292,10 +293,10 @@ object PirateCommand {
             hull.minX() - DECK_MARGIN, hull.minY() - DECK_MARGIN, hull.minZ() - DECK_MARGIN,
             hull.maxX() + DECK_MARGIN, hull.maxY() + DECK_MARGIN, hull.maxZ() + DECK_MARGIN
         )
-        val raiders = level.getEntitiesOfClass(Raider::class.java, box) { it.isAlive }
+        val raiders = level.getEntitiesOfClass(Mob::class.java, box) { it.isAlive && PirateCrewTypes.eligible(it) }
         if (raiders.isEmpty()) {
             ctx.source.sendFailure(
-                Component.literal("No pillagers aboard -- stand the crew on the deck before capturing.")
+                Component.literal("No crew aboard -- stand her complement on the deck before capturing.")
             )
             return 0
         }
@@ -344,7 +345,7 @@ object PirateCommand {
      * left exactly as they stood. Stale position and UUID stay in the snapshot; every restore path assigns
      * both fresh.
      */
-    private fun snapshot(raider: Raider): CompoundTag? = try {
+    private fun snapshot(raider: Mob): CompoundTag? = try {
         val output = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, raider.registryAccess())
         if (!raider.save(output)) null else output.buildResult().also {
             it.putBoolean("PersistenceRequired", true)
