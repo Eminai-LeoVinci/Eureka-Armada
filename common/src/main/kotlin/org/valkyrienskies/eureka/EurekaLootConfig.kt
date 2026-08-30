@@ -79,9 +79,13 @@ object EurekaLootConfig {
 
         @JsonSchema(
             description = "Where a SPECIAL blueprint roll draws its ship from -- template names under " +
-                "data/vs_eureka/structure/, weighted like pirateHulls (name*weight, bare name = 1)."
+                "data/vs_eureka/structure/, weighted like pirateHulls (name*weight, bare name = 1). " +
+                "EMPTY by default, which is not an oversight: a special blueprint hands the finder a " +
+                "civilianized copy of a real hull, so shipping one means shipping the hull it names, and " +
+                "a pool naming a template that is not there rolls nothing at all. The roll degrades to " +
+                "blank pages rather than being voided, so an empty pool costs a finder paper, not a prize."
         )
-        var blueprintTemplatePool: List<String> = listOf("pirate/large1")
+        var blueprintTemplatePool: List<String> = emptyList()
 
         @JsonSchema(
             description = "The display name a special pre-drafted blueprint carries, so the find reads " +
