@@ -1,6 +1,7 @@
 package org.valkyrienskies.eureka.blockentity.renderer
 
 import com.mojang.blaze3d.vertex.PoseStack
+import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.SubmitNodeCollector
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider
@@ -10,10 +11,13 @@ import net.minecraft.client.renderer.state.CameraRenderState
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.phys.Vec3
 import org.joml.Quaternionf
+import org.joml.Vector3d
+import org.valkyrienskies.core.api.ships.ClientShip
 import org.valkyrienskies.eureka.EurekaBlocks
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.EurekaProperties
 import org.valkyrienskies.eureka.blockentity.CannonBlockEntity
+import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import kotlin.math.max
 import kotlin.math.min
 
@@ -39,6 +43,10 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
     class CannonRenderState : BlockEntityRenderState() {
         @JvmField
         var barrelPitch: Float = 0f
+
+        /** Set in extract when the gun is behind the viewer; submit then emits nothing. */
+        @JvmField
+        var behindCamera: Boolean = false
     }
 
     override fun createRenderState(): CannonRenderState = CannonRenderState()
@@ -50,6 +58,47 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
 
     // Reused across submits (render thread only), same idiom as the helm's wheel.
     private val scratchRotation = Quaternionf()
+    private val scratchPos = Vector3d()
+
+    /**
+     * Whether this gun is far enough behind the viewer that drawing it cannot possibly matter.
+     *
+     * [shouldRenderOffScreen] above buys the barrel correctness at a real price: a global block entity is
+     * exempt from SECTION culling entirely, so every gun on every loaded hull is re-tessellated every
+     * frame whichever way the camera happens to be pointing. A profile of a 120-gun ship put this
+     * renderer at 18.8 percent of a fully saturated render thread with shaders off -- the largest single
+     * cost in the frame, and most of it guns behind the player's head.
+     *
+     * A HALF-SPACE test rather than a cone, which is what makes it safe to do at all: anything behind the
+     * plane through the camera cannot appear on screen at any field of view, so there is no angle to tune
+     * and nothing to pop at the edge of vision as the ship swings. [CULL_MARGIN] then holds the plane a
+     * few blocks back, which covers the barrel's own length and the fact that the position tested is the
+     * breech rather than the muzzle.
+     *
+     * Asked in EXTRACT rather than in submit, where this branch belongs on this version: extract is handed
+     * the camera position outright, and a gun ruled out here costs nothing further down the pipeline.
+     *
+     * Ship guns live in the shipyard, so the render transform is applied first -- the same conversion
+     * VS2's own block entity distance check performs. Off a ship the two spaces are one.
+     */
+    private fun behindTheCamera(blockEntity: CannonBlockEntity, cameraPos: Vec3): Boolean {
+        if (!EurekaConfig.CLIENT.cannonBarrelCullBehindCamera) return false
+        val level = blockEntity.level ?: return false
+        val camera = Minecraft.getInstance().gameRenderer.mainCamera
+        if (!camera.isInitialized) return false
+
+        val pos = blockEntity.blockPos
+        scratchPos.set(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+        (level.getLoadedShipManagingPos(pos) as? ClientShip)
+            ?.renderTransform?.shipToWorld?.transformPosition(scratchPos)
+
+        // forwardVector() on this branch; the backports spell the same thing getLookVector().
+        val look = camera.forwardVector()
+        val ahead = (scratchPos.x - cameraPos.x) * look.x() +
+            (scratchPos.y - cameraPos.y) * look.y() +
+            (scratchPos.z - cameraPos.z) * look.z()
+        return ahead < -CULL_MARGIN
+    }
 
     override fun extractRenderState(
         blockEntity: CannonBlockEntity,
@@ -81,6 +130,7 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         blockEntity.barrelPitchShown = shown
         blockEntity.barrelPitchNanos = now
         state.barrelPitch = shown
+        state.behindCamera = behindTheCamera(blockEntity, cameraPos)
     }
 
     override fun submit(
@@ -90,6 +140,7 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         cameraState: CameraRenderState
     ) {
         if (!state.blockState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) return
+        if (state.behindCamera) return
         val facing = state.blockState.getValue(BlockStateProperties.HORIZONTAL_FACING)
         val barrelState = EurekaBlocks.CANNON_BARREL.get().defaultBlockState()
 
@@ -121,4 +172,14 @@ class CannonBlockEntityRenderer(ctx: BlockEntityRendererProvider.Context) :
         poseStack.popPose()
     }
 
+
+    private companion object {
+        /**
+         * How far behind the camera plane a gun must sit before it is dropped, in blocks.
+         *
+         * Covers the barrel reaching past the breech this position was taken from, plus a little slack,
+         * so a gun whose muzzle is still just in shot is never the one that vanishes.
+         */
+        const val CULL_MARGIN = 6.0
+    }
 }
