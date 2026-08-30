@@ -3,6 +3,9 @@ package org.valkyrienskies.eureka.follow
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.level.levelgen.Heightmap
+import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import java.util.UUID
 import kotlin.math.abs
@@ -157,6 +160,7 @@ class ShipFollower(
      * itself following this ship -- the caller owns the followers map, so it answers that question.
      */
     fun tick(
+        level: ServerLevel,
         ship: LoadedServerShip,
         control: EurekaShipControl,
         leader: LoadedServerShip,
@@ -329,7 +333,35 @@ class ShipFollower(
         // latches its depth only while the commanded vertical is zero, so a permanently jittering near-zero
         // command would knock it out of hold every tick and the ship would slowly sink. The orbit holds the
         // same height the station would -- the leader's level, keel-matched.
-        val climbError = (leaderFrame.centre.y + keelLift) - centre.y
+        // A follower will wet its keel to keep station, but it will not go under.
+        //
+        // The station's height is the leader's, keel-matched, which is right up until the leader is sinking
+        // -- and then "match her keel" reads as "follow her to the seabed". A pirate would ride a
+        // foundering prize all the way down, still circling, still firing, both hulls under water.
+        //
+        // The line is drawn at the follower's own hull rather than at the leader's behaviour, which is what
+        // keeps a sinking ship a legitimate target instead of a way to shake a pursuit: a leader may swamp
+        // herself to the gunwales and still be chased and shot at, which is exactly the desperate escape
+        // that ought to be available to her. What she cannot do is take the pursuer down with her.
+        //
+        // [MAX_KEEL_SUBMERSION] blocks of keel may go under. Below that the descent command is dropped --
+        // not reversed, and nothing else is touched: the ship is not shoved back up, it simply stops being
+        // driven down, and buoyancy does the rest at its own pace. Climbing is never clamped, so a follower
+        // still rises with a leader that rises.
+        //
+        // The surface is sampled under the hull rather than assumed to be at sea level, so the same rule
+        // covers a lake on a mountain and a flooded quarry. Gated on keelInWater, which is a real block
+        // sample at the keel -- VS2's own liquidOverlap measures against the dimension's flat sea-level
+        // plane and reads zero for every body of water that is not at it.
+        var climbError = (leaderFrame.centre.y + keelLift) - centre.y
+        if (climbError < 0.0 && control.keelInWater && control.activeProfile != ControlProfile.SUBMARINE) {
+            val surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING, centre.x.toInt(), centre.z.toInt()).toDouble()
+            // Centre height at which the keel sits exactly MAX_KEEL_SUBMERSION under the surface. Measured
+            // about world UP so a heeled hull is judged on how it is actually lying, the same way
+            // FollowGeometry sizes everything else.
+            val floor = surface - MAX_KEEL_SUBMERSION + FollowGeometry.halfHeightOf(ship)
+            if (centre.y <= floor) climbError = 0.0
+        }
         val verticalMps = if (abs(climbError) < cfg.followVerticalDeadband) 0.0
         else cfg.followVerticalGain * climbError
         // endregion
@@ -383,6 +415,9 @@ class ShipFollower(
         const val LEAD_FRACTION = 0.3
 
         /** Angular clamps on the orbit's aim lead, radians: enough to steer by, never near the far side. */
+        /** How many blocks of keel a follower may put under water to hold station. See the climb clamp. */
+        const val MAX_KEEL_SUBMERSION = 1.5
+
         const val MIN_LEAD_RAD = 0.2
         const val MAX_LEAD_RAD = 0.8
     }
