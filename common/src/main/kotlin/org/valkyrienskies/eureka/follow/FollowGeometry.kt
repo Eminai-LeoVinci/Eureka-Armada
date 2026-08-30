@@ -225,6 +225,14 @@ object FollowGeometry {
      * hull as it is actually lying -- a ship heeled over is wider under its centre than one sitting level, and
      * this follows it rather than reading a number off the un-rotated box.
      */
+    /**
+     * Half the hull's height about world UP: how far the keel sits below its own centre, as it is lying.
+     *
+     * Named because two callers want it for different reasons -- [keelLiftFor] to bring two keels level,
+     * and the follower's descent guard to work out where this hull's bottom is relative to the water.
+     */
+    fun halfHeightOf(ship: LoadedServerShip): Double = halfExtentAlong(ship, UP)
+
     fun keelLiftFor(leader: LoadedServerShip, follower: LoadedServerShip): Double =
         halfExtentAlong(follower, UP) - halfExtentAlong(leader, UP)
 

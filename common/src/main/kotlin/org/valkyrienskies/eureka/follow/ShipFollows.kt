@@ -120,7 +120,7 @@ object ShipFollows {
         // hysteresis run on orbital geometry would churn the slot for nothing.
         if (!follower.circling) updateSide(level, ship, leader, follower, frame)
 
-        if (!follower.tick(ship, control, leader, frame, mutual)) {
+        if (!follower.tick(level, ship, control, leader, frame, mutual)) {
             breakOff(level, ship, follower, "Pursuit ended -- the ship lost its course.")
             return
         }
