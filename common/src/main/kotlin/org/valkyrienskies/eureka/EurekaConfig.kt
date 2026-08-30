@@ -193,6 +193,18 @@ object EurekaConfig {
         var cannonBarrelSlewDegreesPerSecond = 35.0
 
         @JsonSchema(
+            description = "Skip drawing a cannon barrel that is behind you. The barrel is a virtual block " +
+                "drawn per gun per frame, and the renderer opts out of chunk-section culling so that a " +
+                "long gun is never chopped in half at a section edge -- which also means every gun on " +
+                "every loaded ship is drawn whichever way you are facing. On a 120-gun ship that was the " +
+                "single largest cost in the frame. The test is a plane through the camera, not a cone, so " +
+                "nothing that could appear on screen at any field of view is ever dropped and there is " +
+                "no popping at the edge of vision. Off restores the old draw-everything behaviour. " +
+                "Default true."
+        )
+        var cannonBarrelCullBehindCamera = true
+
+        @JsonSchema(
             description = "Draw cannon barrels into the shader SHADOW MAP as well as the visible view. " +
                 "Shaders render the world twice, and a barrel is a block entity, so every gun costs twice " +
                 "over -- on a sixty-gun ship that second pass was about a fifth of the whole frame, which " +
