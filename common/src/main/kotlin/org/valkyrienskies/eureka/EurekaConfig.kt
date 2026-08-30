@@ -67,11 +67,13 @@ object EurekaConfig {
     fun boatDefaults(s: ShipHandling) {
         s.maxSpeedFromEngines = 50.0
         s.maxReverseSpeedFromEngines = 50.0
-        s.turnSpeed = 0.5
-        s.turnAcceleration = 8.0
+        s.turnSpeed = 1.0
+        s.turnAcceleration = 7.0
         s.waterThrustAssist = 8.0
         s.enableWaterAltitudeHold = true
         s.doFluidDrag = false
+        s.enginePowerLinear = 120000f
+        s.turnAccelDelay = 1.2
     }
 
     // Airships take BOAT HANDLING as their base and then a short list of flight deltas, below. Those deltas
@@ -121,8 +123,8 @@ object EurekaConfig {
         // and the throttle therefore maps onto speed nearly linearly. Pushed higher, the atan saturates and a
         // few percent of throttle commands nearly full speed -- which is what makes a launch violent and a
         // coast long, because the commanded speed hangs at the top while the throttle bleeds off.
-        s.maxSpeedFromEngines = 40.0
-        s.maxReverseSpeedFromEngines = 12.0
+        s.maxSpeedFromEngines = 50.0
+        s.maxReverseSpeedFromEngines = 50.0
         // Doubles the stiffness of the velocity controller (acceleration is speedMassScale * velocity error),
         // which firms up stopping far more than it costs on the launch, since a launch is throttle-limited.
         // enginePowerLinear above is scaled to match -- speedMassScale divides engine power as well.
@@ -135,7 +137,7 @@ object EurekaConfig {
         // that decides whether a sustained hold reaches that ceiling; at 10 it got there in about two seconds,
         // which reads as a ship on a swivel.
         s.turnSpeed = 2.0
-        s.turnAcceleration = 6.0
+        s.turnAcceleration = 4.0
         // Throttle ramp. linearMassScaling is what dominates on a heavy hull -- at 2e-4 a 1.5M kg ship draws
         // 300 against linearBaseMass's 70 -- so halving it, not raising the base, is what lets an airship
         // spool up better than a boat of the same mass.
@@ -143,6 +145,10 @@ object EurekaConfig {
         s.linearBaseMass = 70.0
         // A stronger brake for a hull nobody is steering.
         s.linearStabilizeMaxAntiVelocity = 8.0
+        // Restored to the pre-category value: boatDefaults above now sets these for a
+        // boat, and this category is built on top of it, so leaving them inherited would
+        // hand a boat's tuning to a hull that is not one.
+        s.turnAccelDelay = 0.6
     }
 
     // PLACEHOLDER. Submarine handling is not implemented -- ControlProfile.SUBMARINE is never selected, so
@@ -151,14 +157,19 @@ object EurekaConfig {
     @JvmStatic
     fun submarineDefaults(s: ShipHandling) {
         boatDefaults(s)
-        s.maxSpeedFromEngines = 40.0
-        s.maxReverseSpeedFromEngines = 24.0
+        s.maxSpeedFromEngines = 50.0
+        s.maxReverseSpeedFromEngines = 50.0
         s.turnSpeed = 0.4
         s.turnAcceleration = 6.0
         s.baseImpulseElevationRate = 3.0
         s.baseImpulseDescendRate = 6.0
         s.elevationSnappiness = 1.5
         s.doFluidDrag = true
+        // Restored to the pre-category value: boatDefaults above now sets these for a
+        // boat, and this category is built on top of it, so leaving them inherited would
+        // hand a boat's tuning to a hull that is not one.
+        s.enginePowerLinear = 100000f
+        s.turnAccelDelay = 0.6
     }
 
     class Client {
@@ -169,9 +180,9 @@ object EurekaConfig {
             description = "How far away a cannonball in flight stays visible, in blocks. Vanilla culled a " +
                 "shot-sized entity at about 77 blocks, which made long shots vanish mid-arc. Visibility " +
                 "no longer bends to render distance; the server stops tracking shots past 1024 blocks, " +
-                "so values beyond that show nothing further. Default 512."
+                "so values beyond that show nothing further. Default 1024."
         )
-        var cannonShotRenderDistance = 512
+        var cannonShotRenderDistance = 1024
 
         @JsonSchema(
             description = "How fast a cannon's barrel visibly swings to a new elevation order, in degrees " +
@@ -1332,9 +1343,9 @@ object EurekaConfig {
                 "so the leader's longest reach must clear) plus the FOLLOWER's half-beam (it flies " +
                 "tangentially, presenting its side), plus this. May be NEGATIVE to pull an orbit tight -- " +
                 "it is floored so ships can never circle through each other. Ignores followGapMax, which " +
-                "governs the alongside station rather than the orbit. Default -6.0."
+                "governs the alongside station rather than the orbit. Default 0.0."
         )
-        var followCircleGap = -6.0
+        var followCircleGap = 0.0
 
         @JsonSchema(
             description = "Ship following: the widest a circle may get, in blocks ACROSS (0 = no cap). This " +
@@ -1487,9 +1498,9 @@ object EurekaConfig {
             description = "Seconds a cannonball may fly before it is spent and vanishes. The ceiling on " +
                 "range for slow, low-gravity lobs: raise it and a shot can cross an ocean; the gunnery AI " +
                 "still plans at most ten seconds ahead as a CPU guard, so crews simply will not USE arcs " +
-                "longer than that -- hand-laid guns will. Default 10.0."
+                "longer than that -- hand-laid guns will. Default 24.0."
         )
-        var cannonShotMaxFlightSeconds = 10.0
+        var cannonShotMaxFlightSeconds = 24.0
 
         @JsonSchema(
             description = "Whether a flying cannonball keeps the chunks along its path loaded and " +
@@ -1567,15 +1578,15 @@ object EurekaConfig {
         @JsonSchema(description = "Netherite ball: extra-block chances, in percent. Default \"80,70,60,40,20,10\" (range 6-12, average 8.8).")
         var cannonballNetheriteExtraChances = "80,70,60,40,20,10"
 
-        @JsonSchema(description = "Netherite incendiary round: surviving blocks set alight. Default 6.")
-        var cannonballNetheriteIncendiary = 6
+        @JsonSchema(description = "Netherite incendiary round: surviving blocks set alight. Default 9.")
+        var cannonballNetheriteIncendiary = 9
 
         @JsonSchema(
             description = "Explosive rounds: blocks added to every metal's guaranteed floor. The charge is " +
                 "the same gunpowder whatever ball carries it, so the bonus is identical across metals. " +
-                "Default 2."
+                "Default 3."
         )
-        var cannonExplosiveBonusGuaranteed = 2
+        var cannonExplosiveBonusGuaranteed = 3
 
         @JsonSchema(
             description = "Explosive rounds: extra-block chances added as their own short ladder, in " +
@@ -1988,10 +1999,11 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Pirate-ship integrity at which the speed loss reaches its full " +
-                "pirateDamageSpeedLossMaxPercent. Default 60, the freefall line: she is at her slowest " +
-                "right up to the moment she stops answering at all."
+                "pirateDamageSpeedLossMaxPercent. Default 65, a few points above the freefall line: she " +
+                "is already at her slowest for the last of her integrity, and still steering, before she " +
+                "stops answering at all."
         )
-        var pirateDamageSpeedLossFull = 60
+        var pirateDamageSpeedLossFull = 65
 
         @JsonSchema(
             description = "The most speed a damaged pirate ship can lose, as a percent of her top speed. " +
@@ -2000,15 +2012,15 @@ object EurekaConfig {
         var pirateDamageSpeedLossMaxPercent = 50
 
         @JsonSchema(
-            description = "Pirate-ship integrity at which she starts to settle. Default 95."
+            description = "Pirate-ship integrity at which she starts to settle. Default 75."
         )
-        var pirateDamageSinkStart = 95
+        var pirateDamageSinkStart = 75
 
         @JsonSchema(
             description = "Pirate-ship integrity at which the settle rate reaches its full " +
-                "pirateDamageSinkMaxMetersPerSecond. Default 60."
+                "pirateDamageSinkMaxMetersPerSecond. Default 65."
         )
-        var pirateDamageSinkFull = 60
+        var pirateDamageSinkFull = 65
 
         @JsonSchema(
             description = "The fastest a damaged pirate ship settles, in m/s. Default 2.5."
@@ -2017,10 +2029,10 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Below this integrity a pirate ship goes ungoverned and ragdolls -- which is what " +
-                "conquering one by gunfire means. Default 65: a player's ship must be shot to 45 before " +
-                "she is anyone's, a raider only to 65, so a prize can be taken before she is scrap."
+                "conquering one by gunfire means. Default 60: a player's ship must be shot to 45 before " +
+                "she is anyone's, a raider only to 60, so a prize can be taken before she is scrap."
         )
-        var pirateDamageFreefallBelow = 65
+        var pirateDamageFreefallBelow = 60
 
         @JsonSchema(
             description = "Below this integrity a pirate ship's wheel BREAKS ITSELF, which is the same " +
@@ -2050,16 +2062,16 @@ object EurekaConfig {
         @JsonSchema(
             description = "How long that grace lasts, in seconds. 0 means INDEFINITE: the ship never " +
                 "founders and never breaks up, floating derelict until a helm returns. (Pirate conquests " +
-                "use their own window, pirateConquestFreezeMinutes.) Default 60.0."
+                "use their own window, pirateConquestFreezeMinutes.) Default 15.0."
         )
-        var helmlessGraceSeconds = 60.0
+        var helmlessGraceSeconds = 15.0
 
         @JsonSchema(
             description = "How long a helm-less hull touching water takes to lose ALL its buoyancy, in " +
                 "seconds. Floaters, balloons and honest wood buy nothing here -- without a wheel the sea " +
-                "always wins, only this slowly. Default 20.0."
+                "always wins, only this slowly. Default 10.0."
         )
-        var helmlessBuoyancyLossSeconds = 20.0
+        var helmlessBuoyancyLossSeconds = 10.0
 
         @JsonSchema(
             description = "How long a helm-less hull must rest -- on the seabed, on the ground an airship " +
@@ -2177,9 +2189,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "How far outside a wreck, in blocks, still counts as being aboard her for the " +
                 "purpose of holding off the break-up. Generous because a sunken wreck is looted by SWIMMING " +
-                "through it, and a swimmer never registers as standing on a deck. Default 8.0."
+                "through it, and a swimmer never registers as standing on a deck. Default 5.0."
         )
-        var wreckPlayerInfluenceMargin = 8.0
+        var wreckPlayerInfluenceMargin = 5.0
 
         @JsonSchema(
             description = "Whether a pirate's wheel is proof against her own damage while any of her crew " +
@@ -2216,15 +2228,15 @@ object EurekaConfig {
         @JsonSchema(
             description = "Pirate proximity sphere: radius = the hull's horizontal half-diagonal times this. " +
                 "Bigger ships see further, exactly as the follow reach does. A ship counts as inside the " +
-                "moment any part of its hull crosses the line, not just its centre. Default 4.0."
+                "moment any part of its hull crosses the line, not just its centre. Default 3.0."
         )
-        var pirateZoneScale = 4.0
+        var pirateZoneScale = 3.0
 
         @JsonSchema(
             description = "Pirate proximity sphere: the radius never shrinks below this many blocks, however " +
-                "small the hull. Default 40.0."
+                "small the hull. Default 64.0."
         )
-        var pirateZoneMinRadius = 40.0
+        var pirateZoneMinRadius = 64.0
 
         // REMOVED: pirateZoneClampToSimulationDistance.
         //
@@ -2254,9 +2266,9 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "Global cooldown between any two pirate wake-ups, in seconds, so a fleet of " +
-                "dormant ships cannot all assemble in the same breath. Default 60.0."
+                "dormant ships cannot all assemble in the same breath. Default 15.0."
         )
-        var pirateAssemblyCooldownSeconds = 60.0
+        var pirateAssemblyCooldownSeconds = 15.0
 
         @JsonSchema(
             description = "How long a pirate whose pursuit broke stays assembled, in minutes, waiting for " +
@@ -2269,23 +2281,23 @@ object EurekaConfig {
         @JsonSchema(
             description = "An assembled pirate ship with no player within this many blocks disassembles " +
                 "itself IMMEDIATELY, linger or no linger -- an assembled ship is live physics, and physics " +
-                "for an audience of nobody is pure cost. Default 320.0."
+                "for an audience of nobody is pure cost. Default 400.0."
         )
-        var pirateStandDownRange = 320.0
+        var pirateStandDownRange = 400.0
 
         @JsonSchema(
             description = "How long after a pirate crew's last member falls before a fresh complement " +
                 "respawns on the deck, in minutes -- while the wheel still stands. Killing the crew turns " +
-                "the wheel white and breakable; this is the window to break it. Default 2.0."
+                "the wheel white and breakable; this is the window to break it. Default 5.0."
         )
-        var pirateRespawnMinutes = 2.0
+        var pirateRespawnMinutes = 5.0
 
         @JsonSchema(
             description = "How long a conquered pirate ship hangs FROZEN in place after its wheel breaks, " +
                 "in minutes. Placing any helm aboard inside this window claims the vessel, guns and all; " +
-                "letting it close cuts her loose to founder, settle on the seabed, and break up. Default 1.0."
+                "letting it close cuts her loose to founder, settle on the seabed, and break up. Default 0.25."
         )
-        var pirateConquestFreezeMinutes = 1.0
+        var pirateConquestFreezeMinutes = 0.25
 
         @JsonSchema(
             description = "How long a conquered site waits before regenerating a fresh pirate ship, in " +
@@ -2297,9 +2309,9 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "A site will not regenerate while a player is within this many blocks of it -- " +
-                "no ship materialising on somebody's head. Default 48.0."
+                "no ship materialising on somebody's head. Default 16.0."
         )
-        var pirateRegenPlayerClearRadius = 48.0
+        var pirateRegenPlayerClearRadius = 16.0
 
         @JsonSchema(
             description = "The hulls a regenerating site draws from -- template names under " +
@@ -2320,9 +2332,9 @@ object EurekaConfig {
         @JsonSchema(
             description = "Ticks between one pirate gun speaking and the next -- the rolling-broadside " +
                 "rhythm, same feel as a crew volley's stagger. Also the AI's whole rate limit: one gun " +
-                "per this many ticks, per ship. Default 2."
+                "per this many ticks, per ship. Default 10."
         )
-        var pirateCannonStaggerTicks = 2
+        var pirateCannonStaggerTicks = 10
 
         @JsonSchema(
             description = "How long a pirate gun takes to reload while her crew are firing at will, in " +
@@ -2430,9 +2442,9 @@ object EurekaConfig {
                 "exactly what it is for: at 2 it paces the thunder of a full battery, and at 40 it IS the " +
                 "ship's weight of fire, one gun every two seconds however many are manned. Separate from " +
                 "the captain's own volley above, so a standing order can be leashed without slowing the " +
-                "broadside they call by hand. Default 2, the same roll a hand-called broadside has."
+                "broadside they call by hand. Default 10, the same roll a hand-called broadside has."
         )
-        var fireAtWillStaggerTicks = 2
+        var fireAtWillStaggerTicks = 10
 
         @JsonSchema(
             description = "How long a gun takes to reload while Fire at Will is up, in seconds -- REPLACING " +
