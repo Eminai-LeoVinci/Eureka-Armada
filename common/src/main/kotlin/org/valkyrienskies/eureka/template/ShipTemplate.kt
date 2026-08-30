@@ -17,7 +17,6 @@ import net.minecraft.world.entity.decoration.ArmorStand
 import net.minecraft.world.entity.decoration.HangingEntity
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
-import net.minecraft.world.entity.raid.Raider
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.EntityBlock
 import net.minecraft.world.level.block.state.BlockState
@@ -35,6 +34,7 @@ import org.valkyrienskies.eureka.block.ShipHelmBlock
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.eureka.crew.GunnerMounts
+import org.valkyrienskies.eureka.pirate.PirateCrewTypes
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
 import org.valkyrienskies.mod.compat.voxy.VoxyLodRefresh
@@ -311,10 +311,10 @@ object ShipTemplate {
                 // would silently drop every gunner from the design it exists to crew.
                 (!it.isPassenger || (admitRaiders && GunnerMounts.isGunner(it))) &&
                 // Living things are cargo, not ship -- except furniture (armour stands) and, for pirate-hull
-                // authoring only, the raider crew that IS the design plus any egg-mounted gun crew (which
+                // authoring only, the crew that IS the design plus any egg-mounted gun crew (which
                 // may be ANY mob -- undead hulls are the plan). See the capture() doc on admitRaiders.
                 (it !is LivingEntity || it is ArmorStand ||
-                    (admitRaiders && (it is Raider || GunnerMounts.isGunner(it)))) &&
+                    (admitRaiders && (PirateCrewTypes.eligible(it) || GunnerMounts.isGunner(it)))) &&
                 // Loose items and orbs are not part of a ship, and capturing them is how a bottle turns into
                 // a duplicator. A dropped stack is written into the template as an entity, laid back out on
                 // release, and -- because it is on the deck of the ship that just came out -- captured again
@@ -392,7 +392,7 @@ object ShipTemplate {
                 continue // one bad fixture must not cost us the whole ship
             }
 
-            if (admitRaiders && (entity is Raider || GunnerMounts.isGunner(entity))) {
+            if (admitRaiders && (PirateCrewTypes.eligible(entity) || GunnerMounts.isGunner(entity))) {
                 // A crew member generated an ocean from anywhere must still be aboard when someone finally
                 // sails near, so no despawning; and no patrolling, because patrol AI is a marching order to
                 // the nearest village and the deck is where these two belong. Done on the TAG rather than the

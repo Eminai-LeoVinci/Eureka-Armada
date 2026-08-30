@@ -6,7 +6,7 @@ import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.EntityType
 import net.minecraft.world.entity.EquipmentSlot
-import net.minecraft.world.entity.raid.Raider
+import net.minecraft.world.entity.Mob
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
 import net.minecraft.world.level.block.Block
@@ -162,7 +162,7 @@ object PirateTestHull {
      * capture would silently produce a template with a smaller complement than the one that was authored.
      */
     private fun pillager(level: ServerLevel, pos: BlockPos): Boolean {
-        val raider = EntityType.PILLAGER.create(level) as? Raider ?: return false
+        val raider = EntityType.PILLAGER.create(level) as? Mob ?: return false
         raider.setPos(pos.x + 0.5, pos.y.toDouble(), pos.z + 0.5)
         raider.setItemSlot(EquipmentSlot.MAINHAND, ItemStack(Items.CROSSBOW))
         raider.setPersistenceRequired()
