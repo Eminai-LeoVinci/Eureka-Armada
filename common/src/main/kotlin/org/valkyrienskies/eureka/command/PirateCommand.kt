@@ -29,6 +29,7 @@ import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.pirate.PirateGunnery
 import org.valkyrienskies.eureka.pirate.PirateShips
+import org.valkyrienskies.eureka.pirate.PirateTestHull
 import org.valkyrienskies.eureka.template.ShipTemplate
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 import org.valkyrienskies.mod.common.shipObjectWorld
@@ -42,7 +43,9 @@ import org.valkyrienskies.mod.common.shipObjectWorld
  * and `capture` is the authoring pen every shipped pirate hull is written with.
  *
  * `set-mark` is also the testing vehicle for the whole gate: mark any placed helm PIRATE and every one of
- * the fourteen doors can be walked in game without a single generated ship existing yet.
+ * the fourteen doors can be walked in game without a single generated ship existing yet. What it is NOT is
+ * a way to make a working raider: a hand-marked wheel has no papers, so `adopt` refuses it on sight and no
+ * berth, zone, chase or proximity ring ever comes of it. That road starts at `test-hull` and `capture`.
  */
 object PirateCommand {
 
@@ -69,6 +72,7 @@ object PirateCommand {
                             )
                         )
                     )
+                    .then(literal("test-hull").executes { testHull(it) })
                     .then(literal("list").executes { list(it) })
                     .then(literal("prune").executes { prune(it) })
                     .then(literal("arm").executes { arm(it) })
@@ -212,6 +216,32 @@ object PirateCommand {
             ctx.source.sendFailure(Component.literal("Regeneration refused: $refusal."))
             0
         }
+    }
+
+    /**
+     * "/vs pirate test-hull" -- DEV ONLY: lay the reference sloop down in front of the caller.
+     *
+     * The other half of [capture]. A structure template cannot cross versions (the reason is written out in
+     * [PirateTestHull]), so every version has to author its own, and this is the ship to author it from --
+     * the same hull every time, on every game, so that a difference in pirate behaviour between two of them
+     * is a difference in the code and not in what somebody happened to build that afternoon.
+     */
+    private fun testHull(ctx: CommandContext<CommandSourceStack>): Int {
+        val player = ctx.source.playerOrException
+        val built = PirateTestHull.build(ctx.source.level, player)
+        ctx.source.sendSuccess({
+            Component.literal(
+                "Test sloop laid down -- ${built.blocks} blocks, ${built.crew} crew, " +
+                    "${PirateTestHull.BEAM}x${PirateTestHull.HEIGHT}x${PirateTestHull.LENGTH}, " +
+                    "bow at ${built.origin.toShortString()} running ${built.forward.name.lowercase()}."
+            ).withStyle(ChatFormatting.GREEN)
+        }, true)
+        ctx.source.sendSuccess({
+            Component.literal(
+                "Assemble her at the wheel, then: /vs pirate capture <ship> pirate/sloop"
+            ).withStyle(ChatFormatting.GRAY)
+        }, false)
+        return built.blocks
     }
 
     /**
