@@ -249,11 +249,12 @@ object PirateShips {
             )
         )
 
-        // Every gun aboard becomes a raider's gun: bottomless while her crew serve her, and worth nothing to
-        // a salvager ever after. Stamped at the same hook the holds are rolled at, and for the same reason --
+        // Every gun and engine aboard becomes a raider's own: bottomless while her crew serve her, and
+        // worth a token to a salvager ever after. Stamped at the same hook the holds are rolled at, and
+        // for the same reason --
         // jigsaw worldgen runs no code and regeneration places without jigsaw, but every new hull's wheel
         // adopts on its first loaded tick. Idempotent, the stamp being a boolean.
-        val guns = PirateGuns.stampAll(
+        PirateFittings.stampAll(
             level,
             AABB(
                 pos.x - reach, pos.y - rise, pos.z - reach,

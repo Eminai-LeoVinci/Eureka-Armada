@@ -2359,6 +2359,17 @@ object EurekaConfig {
         var pirateCannonInfiniteAmmo = true
 
         @JsonSchema(
+            description = "Pirate engines stop consuming fuel. The bunkers must still be STOCKED -- an " +
+                "engine with an empty slot burns down and goes cold like any other, so an authored hull " +
+                "still decides which engines run -- but nothing is deducted, and the heat climbs on the " +
+                "same curve, so she makes exactly the power an honest engine would. Default TRUE, and for " +
+                "the same reason her magazines are bottomless: a raider who runs out of coal halfway " +
+                "through a chase is not a raider, she is scenery. Her bunkers give nothing when broken " +
+                "while her wheel stands, and two coal per engine once it falls."
+        )
+        var pirateEngineInfiniteFuel = true
+
+        @JsonSchema(
             description = "Ticks between one gun speaking and the next when the CAPTAIN calls the volley " +
                 "-- Shift+G on deck, G at the wheel. The first gun answers the instant the order is given " +
                 "and every gun after it waits this long, so 2 is a rolling broadside and 40 is a ship that " +
