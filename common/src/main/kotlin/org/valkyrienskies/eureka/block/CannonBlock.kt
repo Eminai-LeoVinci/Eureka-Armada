@@ -370,6 +370,20 @@ class CannonBlock : BaseEntityBlock(
     ): InteractionResult {
         if (level.isClientSide) return InteractionResult.SUCCESS
 
+        // A raider's guns are hers until her wheel goes. Without this the magazine is an open chest with
+        // powder and shot in it: walk aboard, right-click down the battery, and a hull meant to cost a
+        // fight hands over her whole locker for nothing -- while her gunners are still firing it. It is
+        // the same rule already on her planking, asked at the same SHIP level, and it lifts in the same
+        // instant: a conquered gun opens normally and everything in it is the prize it was meant to be.
+        //
+        // Both empty-hand gestures rather than only the screen. They are one right-click on one block, and
+        // the crouch half cranks the barrel -- a player who cannot open an enemy's magazines but can lay
+        // every one of her guns at the sky has taken the ship without breaking anything.
+        if (PirateHelm.aboardPirateShip(level, pos)) {
+            PirateHelm.denyGuns(player)
+            return InteractionResult.CONSUME
+        }
+
         val facing = state.getValue(HORIZONTAL_FACING)
         val rear = pos.relative(facing.opposite, state.getValue(CANNON_PART).ordinal)
 

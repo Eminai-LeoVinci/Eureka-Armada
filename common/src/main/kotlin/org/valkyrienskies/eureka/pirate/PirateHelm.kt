@@ -34,6 +34,9 @@ object PirateHelm {
 
     const val MESSAGE = "This is a pirate ship, you cannot access the Helm. Destroy it to conquer the vessel!"
 
+    /** The guns' own refusal. Worded for the gun rather than the wheel, because that is what was clicked. */
+    const val GUNS_MESSAGE = "These guns answer to the pirate helm. Destroy it to claim them!"
+
     /** The break refusal, counting the defenders. -1 = a wheel with no crew records (a test helm). */
     fun defended(remaining: Int): String = when {
         remaining < 0 -> "The crew defends the helm -- defeat the pillagers to conquer the vessel!"
@@ -58,6 +61,12 @@ object PirateHelm {
     fun deny(player: Player?) {
         val server = player as? ServerPlayer ?: return
         PathMessages.send(server, MESSAGE, PathMessages.Kind.ERROR)
+    }
+
+    /** The same refusal, spoken by a gun. */
+    fun denyGuns(player: Player?) {
+        val server = player as? ServerPlayer ?: return
+        PathMessages.send(server, GUNS_MESSAGE, PathMessages.Kind.ERROR)
     }
 
     /**
@@ -101,7 +110,21 @@ object PirateHelm {
      * rule that had to be stamped on each block would be a rule with holes in it wherever a raider's
      * carpenter had put something the stamp did not know about.
      */
-    fun dropsSuppressedAt(level: LevelAccessor, pos: BlockPos): Boolean {
+    fun dropsSuppressedAt(level: LevelAccessor, pos: BlockPos): Boolean = aboardPirateShip(level, pos)
+
+    /**
+     * Whether whatever stands at [pos] is aboard a hull that still answers to a pirate wheel.
+     *
+     * The ship-level question every block-level rule is built on, named for the question rather than for
+     * the first thing that asked it. [dropsSuppressedAt] is this asked about BREAKING; a cannon's magazine
+     * asks it about OPENING. Both want the same answer for the same reason -- she is a fortress until her
+     * wheel goes -- and both lift in the same instant, which is what makes conquest the one door.
+     *
+     * Her chests remain the deliberate exception, and the exception is what defines the rule: looting a
+     * chest is a raid you carry out and run from, where emptying her magazines is dismantling her arsenal
+     * without ever having fought for it.
+     */
+    fun aboardPirateShip(level: LevelAccessor, pos: BlockPos): Boolean {
         val server = level as? ServerLevel ?: return false
         val ship = server.getLoadedShipManagingPos(pos) as? LoadedServerShip ?: return false
         return shipHasPirateWheel(server, ship)
