@@ -2223,10 +2223,12 @@ object EurekaConfig {
 
         // region Pirate ships
         //
-        // Generated pillager ships: proximity zones, the 20-second warning, wake-up and pursuit. Structure
-        // RARITY is deliberately NOT here -- spacing and separation live in the datapack
-        // (data/vs_eureka/worldgen/structure_set/pirate_ships.json), because vanilla reads placement from
-        // static data before any config exists. Note that turning pirateShipsEnabled off stops the manager
+        // Generated pillager ships: how often they are placed, which hulls they draw from, proximity
+        // zones, the 20-second warning, wake-up and pursuit. RARITY and the hull MIX are vanilla worldgen
+        // data, so the JSON under data/vs_eureka/worldgen carries the shipped defaults and PirateWorldgen
+        // writes these over the loaded registries as the server starts, before any chunk is generated --
+        // a change therefore takes effect next launch, and only on ground generated after it. Note that
+        // turning pirateShipsEnabled off stops the manager
         // (no zones, no wake-ups) but does not un-gate already-placed pirate helms: the black wheel is a
         // blockstate fact. /vs pirate set-mark reclaims one by hand if it comes to that.
 
@@ -2236,6 +2238,22 @@ object EurekaConfig {
                 "worldgen data, not code); with this off they simply never wake. Default true."
         )
         var pirateShipsEnabled = true
+
+        @JsonSchema(
+            description = "How rare generated pirate ships are: the side, in CHUNKS, of the grid cell each " +
+                "one is placed in. Bigger is rarer. For scale, vanilla spaces a village at 34 and a " +
+                "woodland mansion at 80. Takes effect on the next launch, and only in chunks generated " +
+                "after it -- ground that already exists keeps the ships it was born with. Default 30."
+        )
+        var pirateShipSpacing = 30
+
+        @JsonSchema(
+            description = "The minimum gap, in CHUNKS, between two generated pirate ships -- how far into " +
+                "its own cell a hull may be nudged. Must be less than pirateShipSpacing and is clamped " +
+                "below it if it is not, because vanilla divides by the difference. The closer the two " +
+                "numbers, the more evenly spread and less clustered the ships. Default 10."
+        )
+        var pirateShipSeparation = 10
 
         @JsonSchema(
             description = "Pirate proximity sphere: radius = the hull's horizontal half-diagonal times this. " +
@@ -2327,12 +2345,17 @@ object EurekaConfig {
 
         @JsonSchema(
             description = "The hulls a regenerating site draws from -- template names under " +
-                "data/vs_eureka/structure/, WEIGHTED: 'pirate/sloop*3' draws three times as often as " +
+                "data/vs_eureka/structures/, WEIGHTED: 'pirate/sloop*3' draws three times as often as " +
                 "'pirate/brig', and a bare name is weight 1. Keep names AND weights in step with the " +
                 "worldgen template_pool JSON (data/vs_eureka/worldgen/template_pool/pirate/ships.json), " +
-                "which vanilla reads separately for first generation. Default [pirate/large1]."
+                "which vanilla reads separately for first generation. Default " +
+                "[pirate/pilpirsmall1*60, pirate/pilpirmedium1*35, pirate/pilpirlarge1*10]."
         )
-        var pirateHulls: List<String> = listOf("pirate/large1")
+        var pirateHulls: List<String> = listOf(
+            "pirate/pilpirsmall1*60",
+            "pirate/pilpirmedium1*35",
+            "pirate/pilpirlarge1*10"
+        )
 
         @JsonSchema(
             description = "Pirate ships fight back: guns with living mounted gunners solve real arcs and " +

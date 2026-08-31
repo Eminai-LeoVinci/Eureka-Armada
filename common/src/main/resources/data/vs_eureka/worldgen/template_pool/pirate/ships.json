@@ -4,11 +4,29 @@
     {
       "element": {
         "element_type": "minecraft:single_pool_element",
-        "location": "vs_eureka:pirate/large1",
+        "location": "vs_eureka:pirate/pilpirsmall1",
         "processors": "minecraft:empty",
         "projection": "rigid"
       },
-      "weight": 1
+      "weight": 60
+    },
+    {
+      "element": {
+        "element_type": "minecraft:single_pool_element",
+        "location": "vs_eureka:pirate/pilpirmedium1",
+        "processors": "minecraft:empty",
+        "projection": "rigid"
+      },
+      "weight": 35
+    },
+    {
+      "element": {
+        "element_type": "minecraft:single_pool_element",
+        "location": "vs_eureka:pirate/pilpirlarge1",
+        "processors": "minecraft:empty",
+        "projection": "rigid"
+      },
+      "weight": 10
     }
   ]
 }

@@ -174,6 +174,11 @@ public class EurekaModFabric implements ModInitializer {
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
+        // Pirate rarity and the hull mix are worldgen DATA, which a config cannot normally reach. This
+        // writes the configured values over the loaded registries while the registries exist and no level
+        // does, which is the one moment both are true. See PirateWorldgen.
+        ServerLifecycleEvents.SERVER_STARTING.register(PirateWorldgen.INSTANCE::apply);
+
         // Ship paths are held in singletons, which in single player outlive the world -- quitting to the title
         // screen stops the server but leaves them standing. Dropping them here is what makes logging back in look
         // like a fresh load, which is the whole basis of the saved-binding resume. See ShipPaths.reset.
