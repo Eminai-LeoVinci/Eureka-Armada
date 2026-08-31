@@ -41,8 +41,6 @@ object ArmadaCommand {
                     )
                 )
                 .then(literal("list").executes { list(it) })
-                // TEMPORARY -- submarine feasibility experiment, remove with ArmadaSubExperiment.
-                .then(literal("sealed").executes { sealed(it) })
                 // Fills/clears a ship's enclosed air with sub air by hand. Stands in for the helm's
                 // "mark as sub" checkbox until that lands, so the mechanism can be tested on its own.
                 .then(
@@ -54,11 +52,6 @@ object ArmadaCommand {
                             .then(literal("enclosed").executes { subAir(it, SubAir.FillMode.ENCLOSED) })
                             .then(literal("all").executes { subAir(it, SubAir.FillMode.ALL) })
                             .then(literal("clear").executes { subAir(it, null) })
-                    )
-                )
-                .then(
-                    literal("debug").then(
-                        argument("ship", ShipArgument.ships()).executes { debug(it) }
                     )
                 )
         )
@@ -145,98 +138,6 @@ object ArmadaCommand {
             Component.literal("$verb ${result.changed} sub air blocks in ${name(shipAny)}$how.")
                 .withStyle(if (mode == null) ChatFormatting.YELLOW else ChatFormatting.GREEN)
         }, true)
-        return 1
-    }
-
-    /**
-     * TEMPORARY -- reports what VS2's sealed-area machinery believes at the caller's position, so the
-     * submarine experiment can tell "the feature is off" apart from "the feature is on and disagrees with
-     * me". Remove with [ArmadaSubExperiment].
-     */
-    private fun sealed(ctx: CommandContext<CommandSourceStack>): Int {
-        val src = ctx.source
-        val player = src.player
-        if (player == null) {
-            src.sendFailure(Component.literal("Run this as a player -- it reports on where you're standing."))
-            return 0
-        }
-        src.sendSuccess({ ArmadaSubExperiment.report(src.level, player) }, false)
-        return 1
-    }
-
-    /**
-     * Dumps the live dynamics of a bound ship so we can SEE whether the weld is holding and how the two
-     * ships are moving, instead of inferring it from feel. For a child it reports the weld DRIFT (how far
-     * the child's live pose in the parent frame has slipped from where it was welded) plus both ships'
-     * speeds and spin rates and the gap between their centres.
-     */
-    private fun debug(ctx: CommandContext<CommandSourceStack>): Int {
-        val src = ctx.source
-        val shipAny: Ship = ShipArgument.getShip(ctx, "ship")
-        if (shipAny !is LoadedServerShip) {
-            src.sendFailure(Component.literal("That ship must be loaded."))
-            return 0
-        }
-        val ship = shipAny
-        val armada = ArmadaShipControl.get(ship)
-        if (armada == null || (!armada.isChild && armada.childShipIds.isEmpty())) {
-            src.sendFailure(Component.literal("${name(ship)} isn't part of an armada."))
-            return 0
-        }
-
-        val msg = Component.literal("Armada debug: ${name(ship)}").withStyle(ChatFormatting.AQUA)
-        fun line(s: String, color: ChatFormatting = ChatFormatting.GRAY) =
-            msg.append(Component.literal("\n  $s").withStyle(color))
-
-        line("speed ${fmt(ship.velocity.length())} m/s, spin ${fmt(ship.angularVelocity.length())} rad/s")
-
-        val parentId = armada.parentShipId
-        if (parentId != null) {
-            line("role: CHILD of $parentId (welded)")
-            val parent = src.level.shipObjectWorld.loadedShips.getById(parentId)
-            if (parent == null) {
-                line("parent not loaded -- can't measure drift", ChatFormatting.RED)
-            } else {
-                // Live child pose expressed in the parent's model frame.
-                val livePos = parent.transform.worldToShip.transformPosition(
-                    Vector3d(ship.transform.positionInWorld), Vector3d()
-                )
-                val liveRot = Quaterniond(parent.transform.shipToWorldRotation).invert()
-                    .mul(ship.transform.shipToWorldRotation)
-
-                val posDrift = armada.intendedPosInParent?.distance(livePos) ?: Double.NaN
-                val rotDriftDeg = armada.intendedRotInParent?.let {
-                    Math.toDegrees(Quaterniond(it).invert().mul(liveRot).angle())
-                } ?: Double.NaN
-                val comGap = Vector3d(parent.transform.positionInWorld)
-                    .distance(Vector3d(ship.transform.positionInWorld))
-
-                line(
-                    "weld drift: ${fmt(posDrift)} blocks, ${fmt(rotDriftDeg)}deg",
-                    if (posDrift > 1.0 || rotDriftDeg > 5.0) ChatFormatting.RED else ChatFormatting.GREEN
-                )
-                line("centre gap ${fmt(comGap)} blocks; parent speed ${fmt(parent.velocity.length())} m/s")
-            }
-            val weldState = when {
-                armada.weldJointIds.isNotEmpty() -> "welded (${armada.weldJointIds.size} joints)"
-                armada.weldPending -> "weld pending"
-                else -> "NOT WELDED"
-            }
-            line("weld: $weldState", if (armada.weldJointIds.isNotEmpty()) ChatFormatting.GREEN else ChatFormatting.RED)
-        } else {
-            line("role: PARENT of ${armada.childShipIds}")
-            // Each child is welded to us by a rigid joint and collides with the world itself; the engine resolves
-            // the whole armada's terrain contacts. Report how many of those welds are actually live.
-            val welded = armada.childShipIds.count { id ->
-                src.level.shipObjectWorld.loadedShips.getById(id)
-                    ?.let { ArmadaShipControl.get(it)?.weldJointIds?.isNotEmpty() } == true
-            }
-            line(
-                "welds: $welded/${armada.childShipIds.size} children joined (engine-resolved collision)",
-                if (welded == armada.childShipIds.size) ChatFormatting.GREEN else ChatFormatting.YELLOW
-            )
-        }
-        src.sendSuccess({ msg }, false)
         return 1
     }
 

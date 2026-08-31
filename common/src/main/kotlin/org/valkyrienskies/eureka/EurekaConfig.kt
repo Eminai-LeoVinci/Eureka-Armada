@@ -827,9 +827,6 @@ object EurekaConfig {
         )
         var terrainPocketMaxBlocks = 4096
 
-        @JsonSchema(description = "Dev: action-bar a message each time a per-set cruise HOLD-cancel fires (Horizontal/Vertical/Turn). Read globally off EurekaConfig.SERVER; toggle in-game with /vs cruise-cancel-debug <bool>.")
-        var debugCruiseCancel = false
-
         // region Eureka Auto-Shipwright
         // The Eureka Auto-Shipwright (enabled per-player from the helm menu, or with
         // /vs auto-shipwright <floater|balloon|balloon-replace-all> <true|false>) fits out

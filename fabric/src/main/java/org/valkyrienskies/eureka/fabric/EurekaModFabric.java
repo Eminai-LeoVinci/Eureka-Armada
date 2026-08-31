@@ -44,12 +44,9 @@ import org.valkyrienskies.eureka.crew.GunnerMounts;
 import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
-import org.valkyrienskies.eureka.fabric.client.CannonRangeRenderer;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
-import org.valkyrienskies.eureka.fabric.client.PirateZoneRenderer;
-import org.valkyrienskies.eureka.fabric.client.WreckBoxRenderer;
 import org.valkyrienskies.eureka.follow.ShipFollows;
 import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
@@ -62,7 +59,6 @@ import org.valkyrienskies.eureka.pirate.PirateGunnery;
 import org.valkyrienskies.eureka.pirate.PirateShips;
 import org.valkyrienskies.eureka.ship.ShipFoundering;
 import org.valkyrienskies.eureka.ship.ShipWreck;
-import org.valkyrienskies.eureka.command.MaterialCommand;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
@@ -103,8 +99,6 @@ public class EurekaModFabric implements ModInitializer {
             // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
             // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
             ShipTemplateCommand.INSTANCE.register(dispatcher);
-            // DEV ONLY: the shipwright material classifier bench -- strip with the ROADMAP 6c sweep.
-            MaterialCommand.INSTANCE.register(dispatcher);
             // "/vs pirate set-mark ..." -- DEV ONLY, remove before release. The pirate machinery's harness.
             PirateCommand.INSTANCE.register(dispatcher);
             // "/armada bind|unbind|list" -- its own root literal, not under /vs.
@@ -167,10 +161,6 @@ public class EurekaModFabric implements ModInitializer {
             // Helm-less ships foundering -- every ship's, not just the pirates': the water probes physTick
             // cannot make, the settle watch, and the seabed/ground breakup.
             ShipFoundering.INSTANCE.tick(level);
-            // The wreck-box overlay's snapshot. Every tick rather than ShipFoundering's one-in-twenty,
-            // because the whole point of the overlay is watching the moment the box goes live. Costs one
-            // boolean read while "/vs wreck-box" is off, which is always, outside a debugging session.
-            ShipWreck.INSTANCE.publish(level);
             PathNetworkingFabric.INSTANCE.broadcast(level);
         });
 
@@ -237,13 +227,6 @@ public class EurekaModFabric implements ModInitializer {
             PathNetworkingFabric.INSTANCE.registerClient();
             PathKeybinds.INSTANCE.register();
             PathRenderer.INSTANCE.register();
-            // Pirate proximity zones as wireframe spheres, off until "/vs pirate-zones true". DEV ONLY.
-            PirateZoneRenderer.INSTANCE.register();
-            // The cannon engage-range wireframe, its sibling in every respect.
-            CannonRangeRenderer.INSTANCE.register();
-            // The wreck collision box: green while it is only a plan, red once it IS the ship's collision.
-            // Off until "/vs wreck-box true". DEV ONLY.
-            WreckBoxRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
 
             // The Shipwright's Bench is built into the CUTOUT layer, not SOLID. Its model carries the
@@ -338,17 +321,6 @@ public class EurekaModFabric implements ModInitializer {
             ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
                 dispatcher.register(
                     ClientCommandManager.literal("vs")
-                        .then(ClientCommandManager.literal("cruise-cancel-debug")
-                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
-                                .executes(ctx -> {
-                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
-                                    EurekaConfig.SERVER.setDebugCruiseCancel(enabled);
-                                    EurekaConfigLoader.save();
-                                    ctx.getSource().sendFeedback(
-                                        Component.literal("Eureka cruise-cancel debug " + (enabled ? "enabled" : "disabled"))
-                                    );
-                                    return 1;
-                                })))
                         // "/vs cannonball-render-distance [blocks]": how far this CLIENT draws cannonballs.
                         // Genuinely client-local (a draw cull, not a server value), so unlike the toggles
                         // around it this one also works on a dedicated server. The server entity tracking
@@ -370,43 +342,7 @@ public class EurekaModFabric implements ModInitializer {
                                             + " blocks (server tracking caps visibility at 1024)"));
                                     return 1;
                                 })))
-                        // "/vs pirate-zones <bool>": draw the pirate proximity spheres. The flag lives on the
-                        // COMMON PirateShips object so the integrated-server tick publishes snapshots the render
-                        // thread can read. Single-player only, like every toggle above. DEV ONLY, strip-listed.
-                        .then(ClientCommandManager.literal("pirate-zones")
-                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
-                                .executes(ctx -> {
-                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
-                                    PirateShips.setPublishZones(enabled);
-                                    ctx.getSource().sendFeedback(
-                                        Component.literal("Pirate zones " + (enabled ? "shown" : "hidden")));
-                                    return 1;
-                                })))
-                        // "/vs wreck-box <bool>": draw the box that measures how deep a hull buries herself
-                        // when she comes apart. GREEN on a sound ship, RED once she is a wreck. Same
-                        // single-player static-flag shape as pirate-zones. DEV ONLY, strip-listed.
-                        .then(ClientCommandManager.literal("wreck-box")
-                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
-                                .executes(ctx -> {
-                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
-                                    ShipWreck.INSTANCE.setPublishBoxes(enabled);
-                                    ctx.getSource().sendFeedback(Component.literal(enabled
-                                        ? "Wreck boxes shown -- green: sound hull, red: a wreck, and the depth she will bury to"
-                                        : "Wreck boxes hidden"));
-                                    return 1;
-                                })))
-                        // "/vs cannon-range <bool>": draw every chasing pirate's engage-range sphere, plus one
-                        // around whatever armed ship the player stands on -- the gunnery bench's picture.
-                        // Same shape as pirate-zones in every respect. DEV ONLY, strip-listed.
-                        .then(ClientCommandManager.literal("cannon-range")
-                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
-                                .executes(ctx -> {
-                                    boolean enabled = BoolArgumentType.getBool(ctx, "enabled");
-                                    PirateGunnery.setPublishRanges(enabled);
-                                    ctx.getSource().sendFeedback(
-                                        Component.literal("Cannon ranges " + (enabled ? "shown" : "hidden")));
-                                    return 1;
-                                })))));
+));
 
             Registry.register(
                 BuiltInRegistries.CREATIVE_MODE_TAB,

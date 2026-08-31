@@ -1064,13 +1064,6 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
                     canceledSets.add("Turn Disabled")
                 }
             }
-            // Dev lever: action-bar the set(s) just HOLD-canceled (fading overlay, like showCruiseStatus). Before
-            // the auto-off line below so it always shows the specific set even when this was the last active set.
-            if (EurekaConfig.SERVER.debugCruiseCancel && canceledSets.isNotEmpty()) {
-                seatedPlayer?.displayClientMessage(
-                    Component.literal("Cruise Control: " + canceledSets.joinToString(" | ")), true
-                )
-            }
             // (Removed) auto-off when every set is canceled: cruise now persists idle until an explicit off.
         }
 

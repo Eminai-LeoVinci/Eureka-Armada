@@ -6,29 +6,40 @@
 <a href="https://discord.gg/dWwM8G3"><img src="https://img.shields.io/badge/Discord-white?style=for-the-badge&logo=discord" alt="Discord"></a>
 </p>
 
-> ⚠️ **Unofficial port — not affiliated with or endorsed by the Valkyrien Skies team.** A community **Fabric** port of Eureka to newer Minecraft versions. It may be less polished than official Eureka — use at your own risk, no official support. The badges above link to the **official** works; please support the team there.
+> ⚠️ **Unofficial — not affiliated with or endorsed by the Valkyrien Skies team.** A community **Fabric** mod built on Eureka, the ship-building add-on for Valkyrien Skies. It may be less polished than official Eureka — use at your own risk, no official support. The badges above link to the **official** works; please support the team there.
 
-Eureka is a simple add-on for Valkyrien Skies that fits the vanilla aesthetic and is easy and fun to use.
+# Eureka Armada
 
-Build and design your own ship out of ordinary (or modded!) Minecraft blocks, place a Ship Helm, shift + right-click, assemble, and watch your creation suddenly infuse with physics. No longer are your Minecraft builds bound to remain forever static, sitting in the same place for all eternity.
+Build a ship out of ordinary Minecraft blocks, place a Ship Helm, and assemble it — your build becomes a real vessel you can sail, fly, or dive.
+
+**Armada is that, plus a crew, a gundeck, and an enemy.** Sign villagers on as hands and they'll run your guns and fight your fires while you steer. Arm the ship with cannons and five kinds of shot. Then meet the pillager ships that generate out in the ocean, wake up when you get close, and fire back.
 
 ![Eureka blocks](https://static.wikitide.net/valkyrienskieswiki/8/80/Eureka_blocks.jpg)
 
-## About this port
-
-This is a **Fabric-only** port of Eureka to **Minecraft 1.20.1, 1.21.1, and 1.21.11** — the ship-building layer for the matching Valkyrien Skies 2 port. It carries the full Eureka toolkit and adds a redesigned helm menu and the new **Eureka Assembler** on top.
-
 ## Highlights
 
-- **The Eureka Assembler** — auto-fills a ship with exactly the floaters or balloons it needs as you assemble; fully customizable, with manual +% padding and a live ship-weight readout.
-- **Redesigned helm** — per-ship Advanced / Vanilla controls, a full cruise overhaul, Water Lock altitude-hold, an on-screen Speed / Altitude / Heading HUD, and in-helm ship renaming.
-- **Cosmetics** — a Heart-of-the-Sea-blue helm wheel, and a Pale Oak helm on 1.21.11.
+- **Crews** — villagers sign on as gunners, firefighters and hands. They keep their names, trades and posts through assembly, bottling and reassembly. A tabbed Operations book at the wheel gives orders to the whole ship at once: man a battery, restock a deck, set every gun's angle, lay in fuel.
+- **Cannons** — two-block guns that elevate in 5° steps, take 1x/2x/3x powder charges, and fire on a real ballistic arc. Five metals of shot in round, explosive, incendiary and armor-piercing. Order a broadside with one key.
+- **Pirate ships** — pillager vessels generate in the ocean, lie dormant until you're close, then give chase and fight. Kill the crew, break the wheel, and the ship is yours. Damaged hulls settle, sink and can be salvaged.
+- **The Shipwright** — draft any ship to a Blueprint, file it at a Shipwright's Bench, and rebuild it anywhere in the world for the cost of its materials. Swap the materials before you build, repair a damaged hull back to plan, or dismantle a ship and claim it back piece by piece.
+- **Bottled Ships** — mark a ship, throw a bottle, and carry her in your inventory with her cargo, coal and crew still aboard.
+- **Armadas** — weld ships into one vessel that moves and turns together, or have them station themselves on a leader and keep formation. Fly a route once and any ship can fly it back.
+- **Ship categories** — a hull handles as a **Boat**, an **Airship** or a **Submarine**, decided by what it's built from rather than by a setting. Each has its own fully editable handling.
+- **The Auto-Shipwright** — fits a ship with exactly the floaters or balloons she needs as you assemble, with manual +% padding and live weight and fit readouts.
 
-See the [**Releases**](https://github.com/Eminai-LeoVinci/Eureka-Ships/releases) page for the complete feature list.
+Everything is tunable from `config/vs_eureka_armada.json`, and the gunnery can be retuned live from chat with `/armada cannons` and `/armada cannonballs`.
+
+*MC 1.20.1 · 1.21.1 · 1.21.11 — Fabric only.*
+
+See the [**Releases**](https://github.com/Eminai-LeoVinci/Eureka-Armada/releases) page for the complete feature list.
+
+> [!NOTE]
+> Armada replaces Eureka! Ships! — don't run both. They share a mod id.
 
 ## Dependencies
+
 > [!NOTE]
-> Eureka comes with an integrated dependency downloader that does the hard work for you — just download the Eureka JAR and launch the game.
+> Armada comes with an integrated dependency downloader that does the hard work for you — just download the JAR and launch the game.
 
 - [Valkyrien Skies 2 — matching port build](https://github.com/Eminai-LeoVinci/VS2)  *(on 1.20.1, the official VS2 release also works)*
 - [Architectury API](https://www.curseforge.com/minecraft/mc-mods/architectury-api)
@@ -38,4 +49,4 @@ See the [**Releases**](https://github.com/Eminai-LeoVinci/Eureka-Ships/releases)
 
 ## Credits & License
 
-Eureka and Valkyrien Skies are created and maintained by the **Valkyrien Skies team**. This unofficial Fabric port is maintained by **Eminai-LeoVinci** and is not affiliated with or endorsed by the VS team. Released under the **GNU GPL v3**, retaining the original project's attributions.
+Eureka and Valkyrien Skies are created and maintained by the **Valkyrien Skies team**. This unofficial Fabric work is maintained by **Eminai-LeoVinci** and is not affiliated with or endorsed by the VS team. Released under the **GNU GPL v3**, retaining the original project's attributions. See [NOTICE](NOTICE) for full attribution.
