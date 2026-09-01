@@ -28,6 +28,7 @@ import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.LiquidBlock
 import net.minecraft.world.level.block.HorizontalDirectionalBlock
 import net.minecraft.world.level.block.StairBlock
 import net.minecraft.world.level.block.SnowLayerBlock
@@ -1222,7 +1223,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         var blockCount = 0 // total non-air assembled blocks (block entities like chests count too)
 
         // What assembles: everything a player could have placed. Air never; the config blockBlacklist and
-        // the assemble_blacklist tag never (fluids, portals, world-guard blocks); and terrain-type blocks
+        // the assemble_blacklist tag never (portals, world-guard blocks); fluids never, so the sea is
+            // left where it is; and terrain-type blocks
         // (the assemble_terrain tag) exactly when the patch they belong to is small enough to be a build
         // rather than the landscape -- see TerrainPocketClassifier for how that inference works and where
         // it can be wrong. Verdicts are cached in the classifier for the duration of this one assembly.
@@ -1261,7 +1263,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             knownBlocks
         } else {
             // What assembles: everything a player could have placed. Air never; the config blockBlacklist and
-            // the assemble_blacklist tag never (fluids, portals, world-guard blocks); and terrain-type blocks
+            // the assemble_blacklist tag never (portals, world-guard blocks); fluids never, so the sea is
+            // left where it is; and terrain-type blocks
             // (the assemble_terrain tag) exactly when the patch they belong to is small enough to be a build
             // rather than the landscape -- see TerrainPocketClassifier for how that inference works and where
             // it can be wrong. Verdicts are cached in the classifier for the duration of this one assembly.
@@ -1277,6 +1280,17 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             ) { pos, it ->
                 val allowed = when {
                     it.isAir -> false
+                    // The sea is not part of the ship. A hull with its keel in the water is touching an
+                    // ocean, and water is a block like any other to a flood fill -- so without this the walk
+                    // leaves the hull through the waterline and keeps going, and every source block it
+                    // reaches is both CARRIED into the shipyard and DELETED from the world on the way out.
+                    // On a big enough body of water that is also how an assembly fails for being too large,
+                    // having swallowed the sea rather than anybody's build.
+                    //
+                    // Only standalone fluid blocks are refused here. A waterlogged fence or stair is a real
+                    // ship block and still comes aboard; it simply arrives dry, which is
+                    // StructureTemplateMixin.vs$dry's job rather than this one.
+                    it.block is LiquidBlock -> false
                     EurekaConfig.SERVER.blockBlacklist.contains(BuiltInRegistries.BLOCK.getKey(it.block).toString()) -> false
                     it.`is`(ASSEMBLE_BLACKLIST) -> false
                     it.`is`(ASSEMBLE_TERRAIN) -> terrain.isBoundedPocket(pos)
