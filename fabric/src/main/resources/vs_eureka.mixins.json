@@ -16,6 +16,8 @@
     "MixinPoiCompetitorScan",
     "MixinRandomSpreadAccess",
     "MixinSinglePoolElementAccess",
+    "MixinStructureSetAccess",
+    "MixinStructurePlacementAccess",
     "MixinTemplatePoolAccess",
     "MixinShipBlockCensus",
     "MixinShipFireContainment",

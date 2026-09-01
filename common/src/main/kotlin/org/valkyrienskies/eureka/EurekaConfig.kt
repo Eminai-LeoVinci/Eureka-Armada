@@ -2230,9 +2230,11 @@ object EurekaConfig {
         // blockstate fact. /vs pirate set-mark reclaims one by hand if it comes to that.
 
         @JsonSchema(
-            description = "Master switch for the pirate-ship machinery: berth adoption, proximity zones, " +
-                "wake-up and pursuit. Generated hulls still appear in new chunks either way (that is " +
-                "worldgen data, not code); with this off they simply never wake. Default true."
+            description = "Master switch for pirate ships: whether they GENERATE at all, and the machinery " +
+                "behind them -- berth adoption, proximity zones, wake-up and pursuit. Off, no new pirate " +
+                "ship is placed in any ground generated from then on, her pillagers included. Ships in " +
+                "chunks that ALREADY exist are already written into the save and stay where they are -- " +
+                "break the wheel or delete them. Takes effect on the next launch. Default true."
         )
         var pirateShipsEnabled = true
 

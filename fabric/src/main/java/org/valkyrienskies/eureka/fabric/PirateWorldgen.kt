@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.fabric.mixin.MixinRandomSpreadAccess
 import org.valkyrienskies.eureka.fabric.mixin.MixinSinglePoolElementAccess
+import org.valkyrienskies.eureka.fabric.mixin.MixinStructurePlacementAccess
+import org.valkyrienskies.eureka.fabric.mixin.MixinStructureSetAccess
 import org.valkyrienskies.eureka.fabric.mixin.MixinTemplatePoolAccess
 import org.valkyrienskies.eureka.util.WeightedNames
 
@@ -47,26 +49,69 @@ object PirateWorldgen {
 
     fun apply(server: MinecraftServer) {
         try {
-            applyRarity(server)
-            applyHullMix(server)
+            val enabled = EurekaConfig.SERVER.pirateShipsEnabled
+            applyPlacement(server, enabled)
+            if (enabled) applyHullMix(server)
         } catch (e: Throwable) {
             LOGGER.error("Could not apply pirate worldgen config; the datapack values stand.", e)
         }
     }
 
     /**
-     * How far apart raiders are placed: the random-spread grid the structure set draws on.
+     * Whether raiders generate at all, and how far apart they sit when they do.
+     *
+     * The OFF switch is the reason this reads the enable flag rather than only the rarity numbers.
+     * pirateShipsEnabled used to stop the runtime machinery alone -- adoption, zones, wake-up, pursuit --
+     * and left the hulls themselves generating, because placement is datapack data and no code of ours runs
+     * when one is placed. A server owner who turned pirates off still got pillager ships in every ocean,
+     * their pillagers included, and had no way to stop them short of writing a datapack.
+     *
+     * Emptying the structure SET is what closes it, and the choice is load-bearing rather than incidental.
+     * Zeroing the placement's frequency also stops generation and was tried first, but it leaves the
+     * structure attached to a placement -- so "/locate structure vs_eureka:pirate_ship" still finds one to
+     * search and then misses every candidate instead of hitting the first, pinning the server thread hard
+     * enough to need killing. Empty the set and findNearestMapStructure has no placement to work from at
+     * all, so locate answers instantly from its own first line. See MixinStructureSetAccess.
+     *
+     * Turning it back on simply means not emptying it: the registries are rebuilt from the datapack every
+     * world load, so nothing is baked into the save either way. What the switch cannot do is remove ships
+     * from ground that has ALREADY generated -- those chunks are written, and it only governs new ones.
      *
      * Separation is clamped BELOW spacing rather than merely validated, because vanilla divides by the
      * difference -- getPotentialStructureChunk calls nextInt(spacing - separation), which throws on a
      * non-positive bound. A config typo there would crash chunk generation, so it is corrected here.
      */
-    private fun applyRarity(server: MinecraftServer) {
+    private fun applyPlacement(server: MinecraftServer, enabled: Boolean) {
         val set = lookup(server, Registries.STRUCTURE_SET, STRUCTURE_SET) ?: run {
-            LOGGER.warn("Structure set {} is missing; pirate rarity config ignored.", STRUCTURE_SET)
+            LOGGER.warn("Structure set {} is missing; pirate worldgen config ignored.", STRUCTURE_SET)
             return
         }
         val placement = set.placement()
+
+        if (!enabled) {
+            // Detach the structure from its placement. Order matters only in that this is the one that also
+            // fixes /locate; the frequency below is belt and braces for a set we somehow failed to empty.
+            (set as MixinStructureSetAccess).vs_eureka_setStructures(emptyList<Any>())
+            (placement as MixinStructurePlacementAccess).vs_eureka_setFrequency(0.0f)
+
+            // Read it back rather than trusting the write. A silent failure here is not a quiet no-op --
+            // it is the server-pinning /locate described in MixinStructureSetAccess -- so it must be
+            // loud enough to act on.
+            if (set.structures().isNotEmpty()) {
+                LOGGER.error(
+                    "Could not switch pirate worldgen off: {} still carries {} structure(s). " +
+                        "Pirate ships will keep generating, and /locate for them may hang the server.",
+                    STRUCTURE_SET, set.structures().size
+                )
+                return
+            }
+            LOGGER.info(
+                "pirateShipsEnabled is off: no new pirate ships will generate. " +
+                    "Ships in already-generated chunks stay where they are."
+            )
+            return
+        }
+
         if (placement !is RandomSpreadStructurePlacement) {
             LOGGER.warn("Structure set {} is not random-spread; pirate rarity config ignored.", STRUCTURE_SET)
             return
