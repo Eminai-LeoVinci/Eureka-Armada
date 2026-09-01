@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "vs_eureka",
   "version": "${version}",
-  "name": "VS Eureka Mod",
-  "description": "Basically Archimedes Ships, but with VS2 as the backend! — Unofficial Fabric port",
+  "name": "Eureka Armada",
+  "description": "Eureka with a crew, a gundeck and pirates \u2014 an unofficial Fabric mod built on Valkyrien Skies 2.",
   "authors": [
     "ewoudje",
     "Tri0de",
