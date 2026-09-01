@@ -1,0 +1,33 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:flowers",
+    "#minecraft:saplings",
+    { "id": "minecraft:grass", "required": false },
+    { "id": "minecraft:short_grass", "required": false },
+    "minecraft:tall_grass",
+    "minecraft:fern",
+    "minecraft:large_fern",
+    "minecraft:dead_bush",
+    "minecraft:vine",
+    "minecraft:lily_pad",
+    "minecraft:sugar_cane",
+    { "id": "minecraft:glow_lichen", "required": false },
+    { "id": "minecraft:hanging_roots", "required": false },
+    { "id": "minecraft:moss_carpet", "required": false },
+    { "id": "minecraft:pale_moss_carpet", "required": false },
+    { "id": "minecraft:bamboo", "required": false },
+    { "id": "minecraft:bamboo_sapling", "required": false },
+    { "id": "minecraft:cave_vines", "required": false },
+    { "id": "minecraft:cave_vines_plant", "required": false },
+    { "id": "minecraft:twisting_vines", "required": false },
+    { "id": "minecraft:twisting_vines_plant", "required": false },
+    { "id": "minecraft:weeping_vines", "required": false },
+    { "id": "minecraft:weeping_vines_plant", "required": false },
+    "minecraft:kelp",
+    "minecraft:kelp_plant",
+    "minecraft:seagrass",
+    "minecraft:tall_seagrass",
+    "minecraft:sea_pickle"
+  ]
+}
