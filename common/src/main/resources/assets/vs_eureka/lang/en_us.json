@@ -1,5 +1,5 @@
 {
-  "itemGroup.vs_eureka.eureka_tab": "VS Eureka",
+  "itemGroup.vs_eureka.eureka_tab": "Eureka",
   "itemGroup.vs_eureka.maxShipBlocks": "Ship is too big! Max size is %s blocks (changeable in the config)",
   "block.vs_eureka.oak_ship_helm": "Oak Ship Helm",
   "block.vs_eureka.spruce_ship_helm": "Spruce Ship Helm",
@@ -272,11 +272,11 @@
   "info.vs_eureka.too_big": "Ship is too big! Max size is %s blocks (changeable in the config)",
   "info.vs_eureka.sneak_to_open_helm": "Sneak to open the ship helm!",
   "key.categories.vs_eureka.paths": "Eureka Ship Paths",
-  "key.vs_eureka.path_record": "Record route — hold to discard (hold Sneak)",
-  "key.vs_eureka.path_play": "Fly route — +Ctrl replays it exactly, hold to release (hold Sneak)",
-  "key.vs_eureka.path_show": "Show saved routes (hold Sneak)",
-  "key.vs_eureka.path_follow": "Follow the ship you're looking at (hold Sneak)",
-  "key.vs_eureka.path_crew": "Sign on the villager you're looking at, open a wheel's crew manifest, or name this ship's crew — +Ctrl signs on everyone the ship is carrying (hold Sneak)",
-  "key.vs_eureka.path_broadside": "Fire! — every manned gun aboard (no Sneak: works at the wheel)",
-  "key.vs_eureka.path_replay": "Modifier — hold with Fly route to replay a recording exactly, or with Crew to sign on everyone aboard (a Ctrl for controllers)"
+  "key.vs_eureka.path_record": "Record a route. Hold to discard. (Sneak)",
+  "key.vs_eureka.path_play": "Fly the recorded route. Hold to release. (Sneak)",
+  "key.vs_eureka.path_show": "Show saved routes. (Sneak)",
+  "key.vs_eureka.path_follow": "Follow the ship you're looking at. (Sneak)",
+  "key.vs_eureka.path_crew": "Sign on crew, or open the crew manifest. (Sneak)",
+  "key.vs_eureka.path_broadside": "Fire every manned gun aboard. Works at the wheel.",
+  "key.vs_eureka.path_replay": "Modifier: exact route replay, or sign on all crew."
 }

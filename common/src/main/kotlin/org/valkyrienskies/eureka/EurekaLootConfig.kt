@@ -70,12 +70,20 @@ object EurekaLootConfig {
         )
 
         @JsonSchema(
-            description = "The crewman's balloon trade lottery, moved here from the main config: the " +
-                "relative chance of the plain balloon, each natural colour, each common dye, and each " +
-                "rare dye. At 100/12/5/1 plain comes up about half the time and pink about one time in " +
-                "two hundred."
+            description = "What a Crewman sells and buys, keyed by level 1-5 (Novice, Apprentice, " +
+                "Journeyman, Expert, Master). Each level is a WEIGHTED pool: two offers are drawn from it " +
+                "per level, so a heavier entry appears more often and a lighter one is the trader you were " +
+                "lucky to find. Add any item you like -- an entry naming an unknown item is skipped, not a " +
+                "crash -- and DELETE an entry to remove that trade outright, balloons included. An empty " +
+                "level simply has no Eureka offers."
         )
-        var balloonTrade: BalloonTrade = BalloonTrade()
+        var crewmanTrades: LinkedHashMap<String, MutableList<TradeEntry>> = linkedMapOf(
+            "1" to noviceTrades(),
+            "2" to apprenticeTrades(),
+            "3" to journeymanTrades(),
+            "4" to expertTrades(),
+            "5" to masterTrades()
+        )
 
         @JsonSchema(
             description = "Where a SPECIAL blueprint roll draws its ship from -- template names under " +
@@ -184,11 +192,47 @@ object EurekaLootConfig {
         }
     }
 
-    class BalloonTrade {
-        var plain = 100
-        var natural = 12
-        var dyed = 5
-        var rare = 3
+    /**
+     * One offer a Crewman might carry, written the same way a loot entry is: name it, weigh it, and delete
+     * it when you do not want it.
+     *
+     * The old table was five hardcoded lists and a pair of booleans, which meant the only question a server
+     * owner could answer was "balloons: yes or no". Weights make rarity expressible -- an engine at 4 and a
+     * ballast at 30 is a trader who usually has ballast -- and deletion makes removal total, so taking
+     * balloons out is removing the entry rather than finding the switch that hides it.
+     *
+     * Only the fields an entry uses are written back to the file, so a plain sale is three keys.
+     */
+    @JsonInclude(JsonInclude.Include.NON_DEFAULT)
+    class TradeEntry() {
+        constructor(build: TradeEntry.() -> Unit) : this() { build() }
+
+        @JsonSchema(
+            description = "sell (emeralds in, item out) | buy (item in, emeralds out) | balloon (emeralds " +
+                "in, one balloon out, of a colour picked at random)."
+        )
+        var type: String = "sell"
+
+        @JsonSchema(description = "The item id. What you receive for a sell, what you hand over for a buy.")
+        var item: String = ""
+
+        @JsonSchema(description = "How many of that item the offer is for.")
+        var count: Int = 1
+
+        @JsonSchema(description = "The emerald side of the offer.")
+        var emeralds: Int = 1
+
+        @JsonSchema(
+            description = "This entry's share of its level's pool. Two offers are drawn per level, so a " +
+                "weight of 30 against a 4 shows up roughly seven times as often. Absent = 10."
+        )
+        var weight: Double = DEFAULT_WEIGHT
+
+        @JsonSchema(description = "Trades before the crewman needs to restock.")
+        var maxUses: Int = 12
+
+        @JsonSchema(description = "Trading experience the crewman earns from one use.")
+        var xp: Int = 5
     }
 
     // region default tables
@@ -201,6 +245,66 @@ object EurekaLootConfig {
         countMin = min
         countMax = max
     }
+
+    private fun trade(build: TradeEntry.() -> Unit) = TradeEntry(build)
+
+    private fun sell(
+        id: String, emeralds: Int, count: Int = 1,
+        weight: Double = DEFAULT_WEIGHT, maxUses: Int = 12, xp: Int = 5
+    ) = trade {
+        type = "sell"; item = id; this.emeralds = emeralds; this.count = count
+        this.weight = weight; this.maxUses = maxUses; this.xp = xp
+    }
+
+    private fun buy(
+        id: String, count: Int, emeralds: Int = 1,
+        weight: Double = DEFAULT_WEIGHT, maxUses: Int = 16, xp: Int = 5
+    ) = trade {
+        type = "buy"; item = id; this.count = count; this.emeralds = emeralds
+        this.weight = weight; this.maxUses = maxUses; this.xp = xp
+    }
+
+    private fun balloon(
+        emeralds: Int, weight: Double = DEFAULT_WEIGHT, maxUses: Int = 8, xp: Int = 5
+    ) = trade {
+        type = "balloon"; this.emeralds = emeralds
+        this.weight = weight; this.maxUses = maxUses; this.xp = xp
+    }
+
+    // The five levels a Crewman climbs. These are the trades the mod shipped with, now written as data:
+    // the buys are what lets a fresh crewman be levelled at all, and the sells get steadily better as he
+    // earns his rank. The Heart of the Sea is Expert and Master only on purpose -- it is the currency
+    // berths are bought with, and going from four crew to a full sixty-four costs sixty of them.
+    private fun noviceTrades(): MutableList<TradeEntry> = mutableListOf(
+        buy("minecraft:kelp", count = 32, weight = 20.0, xp = 2),
+        buy("minecraft:string", count = 20, weight = 20.0, xp = 2),
+        sell("vs_eureka:floater", emeralds = 1, count = 4, weight = 30.0, maxUses = 16, xp = 1),
+        sell("vs_eureka:ballast", emeralds = 2, weight = 30.0, xp = 1)
+    )
+
+    private fun apprenticeTrades(): MutableList<TradeEntry> = mutableListOf(
+        buy("minecraft:coal", count = 16, weight = 25.0),
+        sell("vs_eureka:anchor", emeralds = 12, weight = 15.0, maxUses = 5),
+        balloon(emeralds = 6, weight = 20.0)
+    )
+
+    private fun journeymanTrades(): MutableList<TradeEntry> = mutableListOf(
+        buy("minecraft:copper_ingot", count = 8, weight = 25.0, maxUses = 12, xp = 10),
+        sell("vs_eureka:engine", emeralds = 20, weight = 10.0, maxUses = 4, xp = 10),
+        balloon(emeralds = 8, weight = 15.0, maxUses = 6, xp = 10)
+    )
+
+    private fun expertTrades(): MutableList<TradeEntry> = mutableListOf(
+        buy("minecraft:prismarine_crystals", count = 6, weight = 25.0, maxUses = 12, xp = 15),
+        sell("vs_eureka:oak_ship_helm", emeralds = 24, weight = 12.0, maxUses = 3, xp = 15),
+        sell("minecraft:heart_of_the_sea", emeralds = 32, weight = 8.0, maxUses = 2, xp = 15)
+    )
+
+    private fun masterTrades(): MutableList<TradeEntry> = mutableListOf(
+        sell("minecraft:heart_of_the_sea", emeralds = 24, weight = 12.0, maxUses = 3, xp = 30),
+        sell("vs_eureka:engine", emeralds = 32, count = 2, weight = 15.0, maxUses = 3, xp = 30),
+        balloon(emeralds = 12, weight = 20.0, maxUses = 4, xp = 30)
+    )
 
     private fun eurekaTable(): MutableList<LootEntry> = mutableListOf(
         item("vs_eureka:cannon", weight = 2.0),
