@@ -7,45 +7,47 @@ body:
 - type: markdown
   attributes:
     value: |
-      **Note:** do not report issues with the following mods:
-      - Optifine
-      - Magma Server (maybe try Arclight?)
+      **Eureka Armada is Fabric only**, and needs the matching Valkyrien Skies 2 build from
+      [Eminai-LeoVinci/VS2](https://github.com/Eminai-LeoVinci/VS2).
+
+      **Please don't report these:**
+      - **OptiFine** — it replaces the chunk renderer, and so does Sodium, which VS2 requires. They cannot coexist.
+      - **Eureka! Ships!** — Armada replaces it and shares its mod id. Running both is not supported.
+      - Mods with no build for the Minecraft version you are on.
 - type: input
   attributes:
     label: Mod Name
-    description: The name of the mod that causes the compatibility issue
+    description: The name and version of the mod that causes the compatibility issue
   validations:
     required: true
 - type: checkboxes
   attributes:
-    label: This issue occurs when only Valkyrien Skies, addons, and the mod I have specified are installed and no other mods
+    label: Before reporting
     options:
-      - label: I have tested this issue and it occurs with only Valkyrien Skies, addons, and the mod I have specified
+      - label: I am using the matching Valkyrien Skies 2 build from Eminai-LeoVinci/VS2, not the official release
+        required: true
+      - label: I have tested with only Valkyrien Skies 2, Eureka Armada and the mod named above installed
+        required: true
 - type: dropdown
   attributes:
     label: Minecraft Version
     description: What Minecraft version does this issue occur on?
     options:
-      - 1.16
-      - 1.18
-      - 1.19
-      - 1.20
-  validations:
-    required: true
-- type: dropdown
-  attributes:
-    label: Mod Loader
-    description: What mod loader does this issue occur on?
-    options:
-      - Forge
-      - Fabric
-      - Quilt
+      - 1.20.1
+      - 1.21.1
+      - 1.21.11
   validations:
     required: true
 - type: input
   attributes:
-    label: Eureka version
-    description: What version of Eureka ships does this issue occur on?
+    label: Eureka Armada version
+    description: The version shown in your mod list, e.g. 0.1.1-prealpha
+  validations:
+    required: true
+- type: input
+  attributes:
+    label: Valkyrien Skies 2 version
+    description: The version shown in your mod list, e.g. 3.3.1
   validations:
     required: true
 - type: textarea
