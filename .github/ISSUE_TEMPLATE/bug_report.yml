@@ -4,45 +4,57 @@ title: '<title>'
 labels: bug
 assignees: []
 body:
+- type: markdown
+  attributes:
+    value: |
+      **Eureka Armada is Fabric only.** There is no Forge or NeoForge build.
+
+      It also needs the **matching Valkyrien Skies 2 build** from
+      [Eminai-LeoVinci/VS2](https://github.com/Eminai-LeoVinci/VS2) — the official VS2 release will not work,
+      and on 1.20.1 it will refuse to load with a dependency error.
 - type: checkboxes
   attributes:
-    label: This issue occurs when only Valkyrien Skies and addons are installed and no other mods
+    label: Before reporting
     options:
-      - label: I have tested this issue and it occurs when no other mods are installed
+      - label: I am using the matching Valkyrien Skies 2 build from Eminai-LeoVinci/VS2, not the official release
+        required: true
+      - label: I have tested this issue with only Valkyrien Skies 2 and Eureka Armada installed, and no other mods
         required: true
 - type: dropdown
   attributes:
     label: Minecraft Version
     description: What Minecraft version does this issue occur on?
     options:
-      - 1.16
-      - 1.18
-      - 1.19
-      - 1.20​
+      - 1.20.1
+      - 1.21.1
+      - 1.21.11
   validations:
     required: true
 - type: input
   attributes:
-    label: Eureka version
-    description: What version of Eureka ships does this issue occur on?
+    label: Eureka Armada version
+    description: The version shown in your mod list, e.g. 0.1.1-prealpha
   validations:
     required: true
 - type: input
   attributes:
-    label: VS2 version
-    description: What version of Valkyrien Skies 2 does this issue occur on?
+    label: Valkyrien Skies 2 version
+    description: The version shown in your mod list, e.g. 3.3.1
   validations:
     required: true
 - type: dropdown
   attributes:
-    label: Mod Loader
-    description: What mod loader does this issue occur on?
+    label: Where does it happen?
     options:
-      - Forge
-      - Fabric
-      - Quilt
+      - Single player
+      - Multiplayer / dedicated server
+      - Both
   validations:
     required: true
+- type: input
+  attributes:
+    label: Shader pack
+    description: If you were using one, which pack and version. Leave blank if none.
 - type: textarea
   attributes:
     label: Issue description
