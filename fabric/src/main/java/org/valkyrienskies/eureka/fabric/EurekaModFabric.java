@@ -47,6 +47,7 @@ import org.valkyrienskies.eureka.fabric.client.blueprint.BlueprintScreen;
 import org.valkyrienskies.eureka.fabric.client.shipwright.ShipwrightScreen;
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
 import org.valkyrienskies.eureka.fabric.client.ArmadaPocketOccluder;
+import org.valkyrienskies.eureka.fabric.client.SubAirWindowHook;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
@@ -198,6 +199,34 @@ public class EurekaModFabric implements ModInitializer {
         });
     }
 
+    /** "/vs sub-occluder ..." -- the pocket occluder's master switch and its debug view (restored pixels in green). */
+    @Environment(EnvType.CLIENT)
+    private static int subOccluder(final com.mojang.brigadier.context.CommandContext<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> ctx,
+        final boolean enabled, final boolean debug) {
+        EurekaConfig.CLIENT.setSubmarineOccluder(enabled);
+        ArmadaPocketOccluder.setDebug(debug);
+        if (!enabled) {
+            ArmadaPocketOccluder.clear();
+        }
+        EurekaConfigLoader.save();
+        return subStatus(ctx);
+    }
+
+    /** "/vs sub-status" -- everything the submarine rendering is currently doing, in one line. */
+    @Environment(EnvType.CLIENT)
+    private static int subStatus(final com.mojang.brigadier.context.CommandContext<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> ctx) {
+        ctx.getSource().sendFeedback(Component.literal("Pocket occluder: " + ArmadaPocketOccluder.describe()));
+        ctx.getSource().sendFeedback(Component.literal("Exterior fog: " + EurekaConfig.CLIENT.getSubmarineExteriorFog()
+            + " (start " + EurekaConfig.CLIENT.getSubmarineFogStart() + ", end " + EurekaConfig.CLIENT.getSubmarineFogEnd()
+            + ") | legacy underwater: " + EurekaConfig.CLIENT.getSubmarineShaderLegacyUnderwater()
+            + " | window water: " + EurekaConfig.CLIENT.getSubmarineWindowWater()
+            + " | shaderpack active: " + org.valkyrienskies.eureka.fabric.client.SubAirClient.shaderPackInUse()
+            + " | camera in submerged pocket: " + org.valkyrienskies.eureka.fabric.client.SubAirClient.cameraSubmergedInPocket()));
+        ctx.getSource().sendFeedback(Component.literal("Windows: " + SubAirWindowHook.describe()));
+        ctx.getSource().sendFeedback(Component.literal("Census: " + org.valkyrienskies.eureka.fabric.client.SubAirClient.census()));
+        return 1;
+    }
+
     @Environment(EnvType.CLIENT)
     public static class Client implements ClientModInitializer {
 
@@ -250,8 +279,11 @@ public class EurekaModFabric implements ModInitializer {
                 (handler, client) -> ClientPathState.INSTANCE.clear()
             );
 
-            // Submarines: write depth for every sub-air voxel before the world's translucent pass so the sea
-            // surface stops drawing inside a hull.             ArmadaPocketOccluder.register();
+            // Submarines: the pocket occluder that hides the sea inside a hull. Its frame hooks are the Sodium
+            // mixin (MixinSodiumWorldRendererPocket); this only announces the config state.
+            ArmadaPocketOccluder.register();
+            // And, under a shaderpack, the hook that turns a hull's window faces into the sea's edge.
+            SubAirWindowHook.register();
 
             BlockEntityRenderers.register(
                 EurekaBlockEntities.INSTANCE.getSHIP_HELM().get(),
@@ -352,7 +384,60 @@ public class EurekaModFabric implements ModInitializer {
                                         "Cannonball render distance set to " + blocks
                                             + " blocks (server tracking caps visibility at 1024)"));
                                     return 1;
-                                })))));
+                                })))
+                        // DEV/TEST TOGGLES for the submarine work, for A/B-ing in one session. Strip before a
+                        // release, like ship-shadows. They write the client config, so a choice survives a relaunch.
+                        .then(ClientCommandManager.literal("sub-occluder")
+                            .then(ClientCommandManager.literal("on").executes(ctx -> subOccluder(ctx, true, false)))
+                            .then(ClientCommandManager.literal("off").executes(ctx -> subOccluder(ctx, false, false)))
+                            .then(ClientCommandManager.literal("debug").executes(ctx -> subOccluder(ctx, true, true)))
+                            // The shaderpack path (the double draw at the waterline), experimental: on/off on its own.
+                            .then(ClientCommandManager.literal("iris")
+                                .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                    .executes(ctx -> {
+                                        EurekaConfig.CLIENT.setSubmarineShaderOccluder(BoolArgumentType.getBool(ctx, "enabled"));
+                                        EurekaConfigLoader.save();
+                                        return subStatus(ctx);
+                                    }))))
+                        .then(ClientCommandManager.literal("sub-fog")
+                            .then(ClientCommandManager.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    EurekaConfig.CLIENT.setSubmarineExteriorFog(BoolArgumentType.getBool(ctx, "enabled"));
+                                    EurekaConfigLoader.save();
+                                    return subStatus(ctx);
+                                }))
+                            .then(ClientCommandManager.argument("start", IntegerArgumentType.integer(0))
+                                .then(ClientCommandManager.argument("end", IntegerArgumentType.integer(1))
+                                    .executes(ctx -> {
+                                        EurekaConfig.CLIENT.setSubmarineFogStart(IntegerArgumentType.getInteger(ctx, "start"));
+                                        EurekaConfig.CLIENT.setSubmarineFogEnd(IntegerArgumentType.getInteger(ctx, "end"));
+                                        EurekaConfigLoader.save();
+                                        return subStatus(ctx);
+                                    }))))
+                        .then(ClientCommandManager.literal("sub-shader")
+                            .then(ClientCommandManager.argument("legacyUnderwater", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    EurekaConfig.CLIENT.setSubmarineShaderLegacyUnderwater(BoolArgumentType.getBool(ctx, "legacyUnderwater"));
+                                    EurekaConfigLoader.save();
+                                    SubAirWindowHook.rebakeAll(); // the answer is baked into the ship meshes
+                                    return subStatus(ctx);
+                                })))
+                        .then(ClientCommandManager.literal("sub-window")
+                            .then(ClientCommandManager.argument("water", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    EurekaConfig.CLIENT.setSubmarineWindowWater(BoolArgumentType.getBool(ctx, "water"));
+                                    EurekaConfigLoader.save();
+                                    SubAirWindowHook.rebakeAll(); // the answer is baked into the ship meshes
+                                    return subStatus(ctx);
+                                })))
+                        // Show/hide the baked window sheets on the spot (no re-bake, saved to the config).
+                        .then(ClientCommandManager.literal("sub-sheets")
+                            .then(ClientCommandManager.argument("shown", BoolArgumentType.bool())
+                                .executes(ctx -> {
+                                    SubAirWindowHook.setSheetsEnabled(BoolArgumentType.getBool(ctx, "shown"));
+                                    return subStatus(ctx);
+                                })))
+                        .then(ClientCommandManager.literal("sub-status").executes(EurekaModFabric::subStatus))));
 
             Registry.register(
                 BuiltInRegistries.CREATIVE_MODE_TAB,

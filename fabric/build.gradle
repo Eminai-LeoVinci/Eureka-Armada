@@ -29,6 +29,11 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     modApi "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
     modImplementation("net.fabricmc:fabric-language-kotlin:${kotlin_fabric_version}")
+    // Sodium's API, compile-only, for the submarine pocket occluder's hook on the world translucent draw
+    // (MixinSodiumWorldRendererPocket). The same jar VS2 compiles against, kept in libs/ (gitignored):
+    // 0.8.11 with its Fabric-Loom-Version manifest field rewritten down so this Loom accepts it. Never
+    // shipped; players run whatever Sodium VS2 requires.
+    modCompileOnly(files("$rootDir/libs/sodium-fabric-0.8.11-loompatched.jar"))
 
     // Mod menu — compile-only: ModMenu 11.0.3 isn't built for 1.21.11 (its MixinTitleScreen
     // injection fails). Kept on the compile classpath for the ModMenuApi entrypoint; dropped

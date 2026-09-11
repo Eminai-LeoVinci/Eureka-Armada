@@ -2,7 +2,7 @@ package org.valkyrienskies.eureka.fabric.mixin.client;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.world.level.Level;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.material.FogType;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
@@ -10,8 +10,10 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-import org.valkyrienskies.eureka.armada.SubAir;
+import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.fabric.client.CameraPositionDuck;
+import org.valkyrienskies.eureka.fabric.client.SubAirClient;
+import org.valkyrienskies.eureka.fabric.client.SubAirWindowHook;
 
 /**
  * Stops the underwater look from following the camera into a submarine -- under shaders as well as vanilla.
@@ -50,7 +52,7 @@ public abstract class MixinCameraSubAir implements CameraPositionDuck {
         if (cir.getReturnValue() == FogType.NONE) {
             return;
         }
-        final Level level = Minecraft.getInstance().level;
+        final ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return;
         }
@@ -58,8 +60,23 @@ public abstract class MixinCameraSubAir implements CameraPositionDuck {
         if (pos == null) {
             return;
         }
-        if (SubAir.INSTANCE.isShielded(level, pos.x, pos.y, pos.z)) {
-            cir.setReturnValue(FogType.NONE);
+        // Judged in the RENDER pose of each hull (the one it is drawn in), not the ticked physics pose: the
+        // latter trails by up to a tick of movement, and a moving sub read its own camera as outside for a frame
+        // -- one frame is all a shaderpack needs to start its several-second "entered the water" transition.
+        if (!SubAirClient.cameraInSubAir(level, pos)) {
+            return;
         }
+        // Under a shaderpack it is the pack, not vanilla, that draws the water look, and it takes its cue from
+        // this one call. The interior can only read as air once the windows read as water (VS2's route through
+        // the pack's water program plus the window hook -- SubAirWindowHook.active()); until then, or by choice
+        // (the legacy toggle), the pack is left believing the eye is in water: the sea past the windows renders
+        // as sea at the price of its tint reaching the interior. Vanilla's overlay and oxygen meter read the
+        // entity, not the camera, so they stay off either way; vanilla's fog gets its own answer from
+        // MixinFogRendererSubAir.
+        if (SubAirClient.shaderPackInUse()
+            && (EurekaConfig.CLIENT.getSubmarineShaderLegacyUnderwater() || !SubAirWindowHook.active())) {
+            return;
+        }
+        cir.setReturnValue(FogType.NONE);
     }
 }

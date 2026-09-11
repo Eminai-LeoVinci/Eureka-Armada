@@ -265,6 +265,65 @@ object EurekaConfig {
                 "way. Default true."
         )
         var hotkeysNeedSneak = true
+
+        @JsonSchema(
+            description = "Hide the sea inside a hull at the waterline. Without a shaderpack the water that " +
+                "landed inside the hull's dry interior is put back per pixel right after the world's water is " +
+                "drawn; under a shaderpack that water is never drawn to begin with (the layer is drawn beyond " +
+                "the hull and in front of it, in two passes). Default true."
+        )
+        var submarineOccluder = true
+
+        @JsonSchema(
+            description = "Underwater fog through the windows of a submerged hull (vanilla rendering). The " +
+                "camera itself stays 'in air' inside the hull -- no blue overlay, no oxygen meter -- but the " +
+                "fog is told the truth, so the sea past the glass goes the biome's underwater colour. Default true."
+        )
+        var submarineExteriorFog = true
+
+        @JsonSchema(
+            description = "Where that underwater fog STARTS, in blocks from the camera, while inside a submerged " +
+                "hull. Fog is by distance, so this is the clear zone: keep it about the size of the interior so " +
+                "nothing inside is fogged, at the cost of the water just outside the glass being clear for the " +
+                "same distance. Default 10."
+        )
+        var submarineFogStart = 10.0
+
+        @JsonSchema(
+            description = "Where that underwater fog is FULL, in blocks from the camera, while inside a submerged " +
+                "hull. Smaller is murkier. Default 48."
+        )
+        var submarineFogEnd = 48.0
+
+        @JsonSchema(
+            description = "With a shaderpack active, the interior of a submerged hull is shown to the pack as air " +
+                "(no underwater tint or fog inside), with the ship's glass drawn through the pack's own glass " +
+                "program after the world's water. Needs VS2's translucent route through the pack's water program " +
+                "and a pack that maps minecraft:water; without either the legacy look below is used. Default true."
+        )
+        var submarineWindowWater = true
+
+        @JsonSchema(
+            description = "With window water on, also lay a sheet of the pack's water just inside each submerged " +
+                "window, so the pack shades the sea past the glass as water seen from under the surface. The " +
+                "sheets take the pack's full water look -- reflections, ripple, absorption -- which reads as an " +
+                "aquarium wall in most packs, so they are off unless asked for. Default false."
+        )
+        var submarineWindowSheets = false
+
+        @JsonSchema(
+            description = "With a shaderpack active, also run the pocket occluder for a hull at the waterline " +
+                "(draws the world's water twice, beyond the hull and in front of it, so the surface never cuts " +
+                "through the rooms). Experimental. Default false."
+        )
+        var submarineShaderOccluder = false
+
+        @JsonSchema(
+            description = "With a shaderpack active, let the pack believe the eye is under water while inside a " +
+                "submerged hull -- the whole screen gets its underwater look, interior included. The fallback " +
+                "when window water is off or unavailable; true forces it. Nothing without a shaderpack. Default false."
+        )
+        var submarineShaderLegacyUnderwater = false
     }
 
     /**
