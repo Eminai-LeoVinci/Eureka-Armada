@@ -11,6 +11,7 @@ import org.joml.Quaterniond
 import org.joml.Vector3d
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.core.api.ships.Ship
+import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.mod.common.command.arguments.ShipArgument
 import org.valkyrienskies.mod.common.shipObjectWorld
 
@@ -49,6 +50,7 @@ object ArmadaCommand {
                             // Explicit modes rather than a bool: "enclosed" only claims air the outside can't
                             // reach, which under-fills an open-topped hull badly (31 cells where the interior
                             // is ~174). "all" claims every air cell in the ship's AABB.
+                            .then(literal("waterline").executes { subAir(it, SubAir.FillMode.WATERLINE) })
                             .then(literal("enclosed").executes { subAir(it, SubAir.FillMode.ENCLOSED) })
                             .then(literal("all").executes { subAir(it, SubAir.FillMode.ALL) })
                             .then(literal("clear").executes { subAir(it, null) })
@@ -131,6 +133,11 @@ object ArmadaCommand {
         result.error?.let {
             src.sendFailure(Component.literal(it))
             return 0
+        }
+        // Keep the hull's own record straight: a fill that found something makes it a pressure hull, a clear
+        // takes that away. Assembly sets the same flag through SubAir.fillAtAssembly.
+        shipAny.getAttachment(EurekaShipControl::class.java)?.let { control ->
+            control.pressureHull = mode != null && result.dry
         }
         src.sendSuccess({
             val verb = if (mode == null) "Cleared" else "Filled"

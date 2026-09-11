@@ -65,8 +65,8 @@ object EurekaConfig {
     // the three presets can be read side by side. The fastest and most manoeuvrable of the three.
     @JvmStatic
     fun boatDefaults(s: ShipHandling) {
-        s.maxSpeedFromEngines = 50.0
-        s.maxReverseSpeedFromEngines = 50.0
+        s.maxSpeedFromEngines = 40.0
+        s.maxReverseSpeedFromEngines = 40.0
         s.turnSpeed = 1.0
         s.turnAcceleration = 7.0
         s.waterThrustAssist = 8.0
@@ -123,8 +123,8 @@ object EurekaConfig {
         // and the throttle therefore maps onto speed nearly linearly. Pushed higher, the atan saturates and a
         // few percent of throttle commands nearly full speed -- which is what makes a launch violent and a
         // coast long, because the commanded speed hangs at the top while the throttle bleeds off.
-        s.maxSpeedFromEngines = 50.0
-        s.maxReverseSpeedFromEngines = 50.0
+        s.maxSpeedFromEngines = 40.0
+        s.maxReverseSpeedFromEngines = 40.0
         // Doubles the stiffness of the velocity controller (acceleration is speedMassScale * velocity error),
         // which firms up stopping far more than it costs on the launch, since a launch is throttle-limited.
         // enginePowerLinear above is scaled to match -- speedMassScale divides engine power as well.
@@ -151,24 +151,22 @@ object EurekaConfig {
         s.turnAccelDelay = 0.6
     }
 
-    // PLACEHOLDER. Submarine handling is not implemented -- ControlProfile.SUBMARINE is never selected, so
-    // nothing here is read yet. The block exists now so the config file's shape is final and the values are
-    // ready to tune when the submarine work lands. Boat handling, slowed down, with more vertical authority.
+    // Submarine handling: boat handling, slowed down, with more vertical authority. Read whenever a vessel with
+    // a pressure hull is fully under water (ControlProfile.SUBMARINE); the depth hold owns the vertical axis.
     @JvmStatic
     fun submarineDefaults(s: ShipHandling) {
         boatDefaults(s)
-        s.maxSpeedFromEngines = 50.0
-        s.maxReverseSpeedFromEngines = 50.0
+        s.maxSpeedFromEngines = 40.0
+        s.maxReverseSpeedFromEngines = 40.0
         s.turnSpeed = 0.4
         s.turnAcceleration = 6.0
         s.baseImpulseElevationRate = 3.0
         s.baseImpulseDescendRate = 6.0
         s.elevationSnappiness = 1.5
         s.doFluidDrag = true
-        // Restored to the pre-category value: boatDefaults above now sets these for a
-        // boat, and this category is built on top of it, so leaving them inherited would
-        // hand a boat's tuning to a hull that is not one.
-        s.enginePowerLinear = 100000f
+        // Half a boat's engine power, with the water's own drag on top: a sub is slower than the same hull on
+        // the surface, and gets its speed back the way anything does -- more engines. The cap is the shared 40.
+        s.enginePowerLinear = 60000f
         s.turnAccelDelay = 0.6
     }
 
@@ -569,7 +567,7 @@ object EurekaConfig {
         // These are real m/s now. They used to be tripled by baseSpeed on the way into the physics, so the
         // old 24.0/12.0 delivered ~72/~36; the defaults are raised to match, leaving ship speeds unchanged.
         @JsonSchema(description = "Max speed in m/s of a ship with engines (actual max speed varies with engines and mass.)")
-        var maxSpeedFromEngines = 70.0
+        var maxSpeedFromEngines = 40.0
 
         @JsonSchema(description = "Max reverse speed in m/s of a ship with engines")
         var maxReverseSpeedFromEngines = 36.0
@@ -759,6 +757,16 @@ object EurekaConfig {
                 "as the keel touches. Default 0.05."
         )
         var waterAltitudeHoldMinOverlap = 0.05
+
+        @JsonSchema(
+            description = "The buoyant factor a hull is given while it is fully under water and steering as a " +
+                "submarine (VS2's own buoyancy multiplier: 1 = the water's natural lift, 0 = none). The depth " +
+                "hold already cancels the hull's weight and holds it on a line, so the natural lift is only " +
+                "something for it to fight; 0 lets the hold own the depth outright. Raise it toward 1 if a sub " +
+                "should tend to drift up when the helm lets go. Global, like every lift key: a hull changes " +
+                "category at the waterline, and lift that moved with it would launch or sink it there. Default 0."
+        )
+        var submarineNeutralBuoyancy = 0.0
 
         @JsonSchema(
             description = "Seconds you must hold the OPPOSITE turn (A/D) to cancel a locked orbit while cruising " +

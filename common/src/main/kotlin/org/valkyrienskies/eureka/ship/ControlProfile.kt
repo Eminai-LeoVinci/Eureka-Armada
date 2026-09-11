@@ -29,9 +29,9 @@ enum class ControlProfile {
     AIRSHIP,
 
     /**
-     * Underwater handling. Detection ([EurekaShipControl.fullySubmerged]) and the `serverSubmarine` config
-     * block are both live, but nothing selects this yet -- the submarine control law is a later installment,
-     * and the helm's Submarine tab is greyed out until it lands.
+     * Underwater handling: the whole vessel is under water ([EurekaShipControl.fullySubmerged], pooled) AND it
+     * has a pressure hull -- a dry interior of sub air, filled at assembly. The depth hold owns the vertical
+     * axis while this is live; see [EurekaShipControl.physTick].
      */
     SUBMARINE;
 
@@ -51,7 +51,16 @@ enum class ControlProfile {
          * blocks, matching the fields on [EurekaShipControl]; only their sign is read here.
          */
         @JvmStatic
-        fun classify(balloons: Int, floaters: Int, wet: Boolean): ControlProfile = when {
+        fun classify(
+            balloons: Int,
+            floaters: Int,
+            wet: Boolean,
+            submerged: Boolean = false,
+            pressureHull: Boolean = false
+        ): ControlProfile = when {
+            // Under water with a dry interior to breathe in: a submarine, whatever else it carries. A hull
+            // that is under water WITHOUT one is not steering anything -- it is sinking, and stays a boat.
+            submerged && pressureHull -> SUBMARINE
             balloons > 0 && floaters <= 0 -> AIRSHIP
             balloons > 0 && !wet -> AIRSHIP
             else -> BOAT

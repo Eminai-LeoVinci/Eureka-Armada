@@ -53,6 +53,7 @@ import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.armada.ArmadaSelection
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
+import org.valkyrienskies.eureka.armada.SubAir
 import org.valkyrienskies.eureka.EurekaConfigLoader
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.AnchorBlock
@@ -332,6 +333,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
     val isHybridVessel: Boolean get() = control?.isHybrid ?: false
     // Whether the whole vessel is under water. Detection only for now -- see EurekaShipControl.vesselSubmerged.
     val isSubmerged: Boolean get() = control?.vesselSubmerged ?: false
+    // Whether the hull has a dry interior (sub air) -- what makes the Submarine tab live and lets it dive.
+    val hasPressureHull: Boolean get() = control?.pressureHull ?: false
 
     // Environment readouts for the per-category info boxes, in blocks; -1 = not known, drawn as "--".
     val seabedDistance: Int get() = control?.seabedDistance ?: -1
@@ -521,6 +524,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
      * environment probes; a name that takes a second to appear is not a name anyone is watching change.
      */
     var shipSlug: String? = null
+
+    // Hulls filled before the pressure-hull flag existed (or by the /armada subair command) carry sub air the
+    // flag knows nothing about. Read it off the blocks once per session, from the tick below.
+    private var pressureHullChecked = false
         private set
 
     /**
@@ -1056,6 +1063,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
                 // Only worth asking once the keel is wet -- a ship out of the water is not under it.
                 curControl.fullySubmerged = curControl.keelInWater &&
                     sampleWaterAt(sLevel, curShip, ceil(curShip.worldAABB.maxY()).toInt() - 1, any = false)
+                if (!pressureHullChecked) {
+                    pressureHullChecked = true
+                    if (!curControl.pressureHull && SubAir.hasAny(sLevel, curShip)) curControl.pressureHull = true
+                }
             }
             // The helm's info-box readouts: a few hundred lookups, so a much slower stagger than the water
             // contact above. Nothing steers by these -- they are numbers on a screen.
@@ -1459,6 +1470,22 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             control.currentBlocks = blockCount
             control.blocksCounted = true
             control.crewStationPos = crewStation
+
+            // The dry interior. Every hull gets one: the sea is flooded in around it and whatever air it
+            // cannot reach becomes sub air, so a sealed cabin below the waterline stops being a swimming
+            // pool and a keel-under deck behind its gunwale stays dry (SubAir.FillMode.WATERLINE). Whether
+            // anything was found is the hull's pressureHull -- what lets it dive. Deferred like the settle
+            // below: the fill walks shipAABB, which vs-core fills in a beat after the ship loads.
+            run {
+                val filledId = loadedShip.id
+                val server = level.server
+                val fillAt = server.overworld().gameTime + NAME_APPLY_DELAY_TICKS
+                server.executeIf({ server.overworld().gameTime >= fillAt }) {
+                    val built = level.shipObjectWorld.loadedShips.getById(filledId) ?: return@executeIf
+                    val dry = SubAir.fillAtAssembly(level, built)
+                    built.getAttachment(EurekaShipControl::class.java)?.pressureHull = dry
+                }
+            }
             // One station per ship, and a written record of where it landed. This wheel flagged itself
             // before the relocation; the wheels that did NOT win keep old flags forever unless somebody
             // clears them, and stale flags mis-rank every later sweep and template score. Deferred the
@@ -1716,6 +1743,10 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         closeMenusOnThisHelm()
 
         val serverLevel = level as ServerLevel
+        // The dry pocket goes before the hull does. Sub air is air to VS2, so unfillShip neither moves it into
+        // the world nor counts it: left alone it stays behind in the shipyard as a hull-less ghost that still
+        // shields water and still occludes. A rebuilt hull fills afresh at its next assembly.
+        (ship as? LoadedServerShip)?.let { SubAir.clear(serverLevel, it) }
         if (!ShipAssembler.unfillShip(serverLevel, ship, this.blockPos, BlockPos.containing(inWorld.x, inWorld.y, inWorld.z))) {
             // The hull doesn't fit under (or over) the world's height limit where it's floating, so it was left
             // alone rather than relocating blocks into a chunk section that doesn't exist. Hand control back --

@@ -161,6 +161,7 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
                 var f = be.controlProfile.ordinal
                 if (be.isHybridVessel) f = f or 0x10
                 if (be.isSubmerged) f = f or 0x20
+                if (be.hasPressureHull) f = f or 0x40
                 return f
             }
             override fun set(value: Int) { syncedProfile = value }
@@ -377,8 +378,10 @@ class ShipHelmScreenMenu(syncId: Int, playerInv: Inventory, private val blockEnt
         blockEntity?.controlProfile ?: PROFILES.getOrElse(syncedProfile and 0xF) { ControlProfile.BOAT }
     /** This vessel has both floaters and balloons, so its category changes with the waterline. */
     val isHybridVessel: Boolean get() = blockEntity?.isHybridVessel ?: (syncedProfile and 0x10 != 0)
-    /** The whole vessel is under water. Detection only until submarine handling lands. */
+    /** The whole vessel is under water. */
     val isSubmerged: Boolean get() = blockEntity?.isSubmerged ?: (syncedProfile and 0x20 != 0)
+    /** The hull has a dry interior (sub air), so it can dive and the Submarine tab is live. */
+    val hasPressureHull: Boolean get() = blockEntity?.hasPressureHull ?: (syncedProfile and 0x40 != 0)
 
     // Environment readouts, in blocks; -1 = not known.
     val seabedDistance: Int get() = blockEntity?.seabedDistance ?: syncedSeabed

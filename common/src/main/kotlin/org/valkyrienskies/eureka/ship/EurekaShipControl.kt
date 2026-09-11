@@ -470,6 +470,25 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
     var vesselSubmerged = false
         private set
 
+    // Whether this hull has a dry interior at all -- any sub air, written at assembly (SubAir.fillAtAssembly)
+    // and by the /armada subair command. PERSISTED, like the block counts: it is what lets a hull dive, and a
+    // relog must not turn a submarine back into a boat. Pooled across an armada with OR in physTick.
+    @Volatile
+    var pressureHull = false
+
+    // The dive latch: set by descend with the keel wet on a pressure hull, held through the same wet
+    // hysteresis as the water lock, and what keeps the depth hold engaged whatever the Water Lock box says.
+    // Physics thread only.
+    @JsonIgnore
+    private var diveLatched = false
+
+    // The pilot's vertical input as of the last physics tick, for the dive latch above. The hold has to be
+    // decided before the tick's control data is assembled (buoyancy hangs off it), so this is one tick stale --
+    // which for a held key is nothing.
+    @JsonIgnore
+    @Volatile
+    private var lastUpImpulse = 0.0f
+
     // Environment readouts for the helm's per-category info boxes, in blocks, sampled game-side on a slow
     // stagger. -1 means "not known" -- out of range, an unloaded chunk, or not applicable -- and the helm
     // draws those as "--" rather than a number.
@@ -644,6 +663,8 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         var pooledKeelInWater = keelInWater
         // ANDed, not ORed, unlike the others: "the vessel is under water" has to mean EVERY hull of it is.
         var pooledFullySubmerged = fullySubmerged
+        // ORed: one dry compartment anywhere in the formation is somewhere to breathe.
+        var pooledPressureHull = pressureHull
         var pooledLiquidOverlap = physShip.liquidOverlap
         var pooledAnchorsActive = anchorsActive
 
@@ -673,6 +694,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
             pooledFloaters += childControl.floaters
             pooledKeelInWater = pooledKeelInWater || childControl.keelInWater
             pooledFullySubmerged = pooledFullySubmerged && childControl.fullySubmerged
+            pooledPressureHull = pooledPressureHull || childControl.pressureHull
             pooledLiquidOverlap = max(pooledLiquidOverlap, childPhys.liquidOverlap)
         }
         body.build()
@@ -716,13 +738,15 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // hysteresis above: a boat while it is touching water, an airship once it is clear of it. A ship
         // built as one thing or the other never switches at all, so there is nothing to chatter.
         //
-        // pooledFullySubmerged is deliberately NOT consulted yet: a fully-submerged hybrid is what will pick
-        // ControlProfile.SUBMARINE, and until the submarine control law exists it stays a boat under water.
-        // The detection and the config block are both live, so that is a one-line change when it lands.
+        // A vessel entirely under water WITH a pressure hull is a submarine; one without is merely sinking and
+        // stays whatever it was. fullySubmerged flips back the moment the hull top clears the surface, which is
+        // what hands a surfacing sub back to its floaters.
         isHybrid = pooledBalloons > 0 && pooledFloaters > 0
         vesselSubmerged = pooledFullySubmerged
         hybridWet = inWater || (hybridWet && stillInWater)
-        activeProfile = ControlProfile.classify(pooledBalloons, pooledFloaters, hybridWet)
+        activeProfile = ControlProfile.classify(
+            pooledBalloons, pooledFloaters, hybridWet, pooledFullySubmerged, pooledPressureHull
+        )
 
         // What the damage costs this tick. An airship settles wherever it is -- there is nothing under it
         // but air -- while a boat loses buoyancy, which only means anything while the keel is actually in
@@ -754,9 +778,25 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // enableWaterAltitudeHold, so a hybrid gets the hold exactly while it is being a boat -- which is to
         // say while it is touching water -- and a plain floaters-only boat can hold its waterline too, which
         // it could not before.
-        holdEngaged = cfg.enableWaterAltitudeHold && !disassembling && !armadaAnchored &&
-            activeProfile == ControlProfile.BOAT && pooledFloaters > 0 &&
+        val waterLock = cfg.enableWaterAltitudeHold && activeProfile == ControlProfile.BOAT && pooledFloaters > 0 &&
             (inWater || (holdEngaged && stillInWater))
+
+        // The dive. A hull with a dry interior goes under on the descend key with its keel wet, whatever the
+        // Water Lock box says: the same hold that pins a boat to its waterline is driven down instead, and
+        // once the vessel is fully under it is the depth keeper outright. The latch survives through the wet
+        // hysteresis so a sub holds its depth hands-off, and lets go only when the hull leaves the water
+        // altogether (ascend until it pops) or stops being a pressure hull.
+        val diveOrdered = pooledPressureHull && stillInWater && lastUpImpulse < 0.0f
+        // Ascend while not fully under is "surface, please": the latch lets go and the floaters (or balloons)
+        // take the hull the rest of the way up, so a boat that never leaves the water entirely can still end
+        // its dive.
+        val surfaceOrdered = !pooledFullySubmerged && lastUpImpulse > 0.0f
+        diveLatched = pooledPressureHull && (
+            activeProfile == ControlProfile.SUBMARINE || diveOrdered ||
+                (diveLatched && holdEngaged && stillInWater && !surfaceOrdered)
+        )
+
+        holdEngaged = !disassembling && !armadaAnchored && (waterLock || diveLatched)
         if (!holdEngaged) holdTargetY = null
 
         val buoyantFactorPerFloater = min(
@@ -769,7 +809,16 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // Every member gets the SAME armada-wide factor, from the pooled floaters and combined mass: floaters
         // hold up the vessel, not the hull they happen to sit in. The lead owns this for the whole formation --
         // a child never sets it, so the two can't race depending on which ship's physTick ran last.
-        val buoyantFactor = if (holdEngaged) 1.0 else 1.0 + pooledFloaters * buoyantFactorPerFloater
+        // For the whole of a dive the natural lift is only something for the depth hold to fight, so it is
+        // handed the configured neutral factor (0 by default) and the hold's gravity feed-forward carries the
+        // weight. The WHOLE dive, not just the fully-submerged part: the profile flips at the surface as the
+        // hull top breaks it, and giving the lift back there while the feed-forward still cancels the weight
+        // shoved the hull up and out. See EurekaConfig.SERVER.submarineNeutralBuoyancy.
+        val buoyantFactor = when {
+            diveLatched -> EurekaConfig.SERVER.submarineNeutralBuoyancy
+            holdEngaged -> 1.0
+            else -> 1.0 + pooledFloaters * buoyantFactorPerFloater
+        }
         physShip.buoyantFactor = buoyantFactor
         for (i in 1 until body.size) body.memberAt(i).buoyantFactor = buoyantFactor
 
@@ -994,6 +1043,7 @@ class EurekaShipControl : ShipPhysicsListener, ServerTickListener {
         // so the water altitude-hold drives that rate; zero (a free set on release, or a latched rate trimmed
         // to 0) lets it spring-hold the current altitude.
         val verticalInputActive = (effective?.upImpulse ?: 0.0f) != 0.0f
+        lastUpImpulse = effective?.upImpulse ?: 0.0f
 
         effective?.let { control ->
             applyPlayerControl(control, body, thrustMultiplier)

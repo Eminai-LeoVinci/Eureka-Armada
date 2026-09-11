@@ -9,6 +9,7 @@ import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.armada.ArmadaBindings
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
+import org.valkyrienskies.eureka.armada.SubAir
 import org.valkyrienskies.eureka.crew.CrewMuster
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.crew.GunnerMounts
@@ -199,6 +200,8 @@ object ShipFoundering {
         }
 
         EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+        // Sub air is air to VS2 and would be left behind in the shipyard as a ghost pocket; clear it first.
+        (ship as? LoadedServerShip)?.let { SubAir.clear(level, it) }
         if (!ShipAssembler.unfillShip(
                 level, ship, anchor,
                 BlockPos.containing(inWorld.x, inWorld.y, inWorld.z),

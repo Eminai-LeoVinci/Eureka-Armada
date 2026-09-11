@@ -92,7 +92,7 @@ class ShipHelmTab(
         // 0xFFC6C6C6 grey both as a fill (with white text on it) and as a hairline outline.
         const val ACCENT_BOAT = 0xFF1F5C8B.toInt()      // deep navy -- open water
         const val ACCENT_AIRSHIP = 0xFF9A7328.toInt()   // brass -- envelope and rigging
-        const val ACCENT_SUBMARINE = 0xFF2A6B5A.toInt() // abyss green
+        const val ACCENT_SUBMARINE = 0xFF1B2F6B.toInt() // navy -- deep water, darker than the boat's open-water blue
 
         private const val PANEL_BG = 0xFFC6C6C6.toInt()
         private const val ACTIVE_TEXT = 0xFFF0F0F0.toInt()

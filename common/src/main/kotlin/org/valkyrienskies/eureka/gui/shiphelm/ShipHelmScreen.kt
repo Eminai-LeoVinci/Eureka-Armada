@@ -153,8 +153,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
             ShipHelmTab(
                 x + tabX(2), y + TAB_Y, TAB_W, TAB_H, TAB_SUBMARINE_TEXT, font,
                 ShipHelmTab.ACCENT_SUBMARINE, { tabState(ControlProfile.SUBMARINE) }
-            ) { /* not selectable yet -- see updateButtons */ }
+            ) { viewedTab = ControlProfile.SUBMARINE }
         )
+        // Live only for a hull with a dry interior -- see updateButtons.
         submarineTab.active = false
         // endregion
 
@@ -618,6 +619,9 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // work: click Airships on a boat and it stays there, but the moment the hull actually becomes an
         // airship (or you open the menu on a different ship) the panel goes back to telling the truth.
         val activeTab = menu.controlProfile
+        // The Submarine tab is a real tab only for a hull that can be one: a dry interior to breathe in.
+        submarineTab.active = menu.hasPressureHull && !inHand
+        if (!submarineTab.active && viewedTab == ControlProfile.SUBMARINE) viewedTab = activeTab
         if (lastActiveTab != activeTab) {
             lastActiveTab = activeTab
             viewedTab = activeTab
@@ -973,7 +977,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     /** How this tab reads: ACTIVE = what the ship is, PEEK = being looked at, IDLE, DISABLED. */
     private fun tabState(tab: ControlProfile): ShipHelmTab.State = when {
-        tab == ControlProfile.SUBMARINE -> ShipHelmTab.State.DISABLED
+        tab == ControlProfile.SUBMARINE && !menu.hasPressureHull -> ShipHelmTab.State.DISABLED
         tab == menu.controlProfile && tab == viewedTab -> ShipHelmTab.State.ACTIVE
         tab == viewedTab -> ShipHelmTab.State.PEEK
         else -> ShipHelmTab.State.IDLE
