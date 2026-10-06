@@ -177,6 +177,29 @@ object EurekaConfig {
         var displayHud = true
 
         @JsonSchema(
+            description = "How far beyond a ship's hull, in blocks, you keep being carried by it while airborne: jumping " +
+                "or falling off it, gliding with an elytra, or flying in creative. One value per face. Front, Back, " +
+                "Left and Right follow the ship's helm, so Front is always the bow. 0 on a face is the bare hull " +
+                "there. Default 2."
+        )
+        var influenceExtendFront = 2.0
+
+        @JsonSchema(description = "See influenceExtendFront. The stern. Default 2.")
+        var influenceExtendBack = 2.0
+
+        @JsonSchema(description = "See influenceExtendFront. Port, looking toward the bow. Default 2.")
+        var influenceExtendLeft = 2.0
+
+        @JsonSchema(description = "See influenceExtendFront. Starboard, looking toward the bow. Default 2.")
+        var influenceExtendRight = 2.0
+
+        @JsonSchema(description = "See influenceExtendFront. Above the highest block of the ship. Default 2.")
+        var influenceExtendTop = 2.0
+
+        @JsonSchema(description = "See influenceExtendFront. Below the keel. Default 2.")
+        var influenceExtendBottom = 2.0
+
+        @JsonSchema(
             description = "How far IN the scroll wheel can zoom VS2's ship-mounted third-person camera, as a fraction of " +
                 "the distance VS2 picks from the ship's size. 0.125 lets you scroll in to an eighth of it. Default 0.125."
         )

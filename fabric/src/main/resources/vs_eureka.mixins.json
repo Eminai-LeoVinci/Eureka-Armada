@@ -31,6 +31,7 @@
     "client.MixinClientCommandInternals",
     "client.MixinClientPacketListenerCommandMerge",
     "client.MixinHelmDpadClimb",
+    "client.MixinLocalPlayerElytraOnShip",
     "client.MixinCameraShipZoom",
     "client.MixinMouseHandlerShipZoom",
     "client.MixinGameRendererHelmCamera",

@@ -55,6 +55,7 @@ import org.valkyrienskies.eureka.shipwright.ShipwrightMenu;
 import org.valkyrienskies.eureka.fabric.client.PathHud;
 import org.valkyrienskies.eureka.fabric.client.PathKeybinds;
 import org.valkyrienskies.eureka.fabric.client.PathRenderer;
+import org.valkyrienskies.eureka.fabric.client.InfluenceBorder;
 import org.valkyrienskies.eureka.follow.ShipFollows;
 import org.valkyrienskies.eureka.path.ClientPathState;
 import org.valkyrienskies.eureka.path.PathCommand;
@@ -263,6 +264,10 @@ public class EurekaModFabric implements ModInitializer {
             PathKeybinds.INSTANCE.register();
             PathRenderer.INSTANCE.register();
             PathHud.INSTANCE.register();
+
+            // Ship influence border: /vs influence-border (blue wireframe), /vs expand-influence and
+            // /vs contract-influence (move one face, saved to the config).
+            InfluenceBorder.INSTANCE.register();
 
             // The Shipwright's Bench is built into the CUTOUT layer, not SOLID. Its model carries the
             // stonecutter's saw blade and a couple of knives, whose textures are mostly transparent -- and

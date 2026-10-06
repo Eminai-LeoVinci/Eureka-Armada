@@ -7,6 +7,7 @@
     "MixinNoSnowOnShips",
     "MixinEntityTransitionHold",
     "MixinServerPlayerReconnectSeat",
+    "MixinEntityDraggerInfluence",
     "MixinRecipeManager"
   ],
   "client": [

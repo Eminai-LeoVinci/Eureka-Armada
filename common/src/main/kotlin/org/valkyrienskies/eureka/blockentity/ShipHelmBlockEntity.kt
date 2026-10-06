@@ -76,6 +76,7 @@ import org.valkyrienskies.eureka.crew.CrewTickets
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmScreenMenu
 import org.valkyrienskies.eureka.ship.ControlProfile
 import org.valkyrienskies.eureka.ship.EurekaShipControl
+import org.valkyrienskies.eureka.ship.ShipInfluenceOrientation
 import org.valkyrienskies.eureka.ship.ShipIntegrity
 import org.valkyrienskies.eureka.util.BuoyancyMath
 import org.valkyrienskies.eureka.util.EurekaAssembler
@@ -1412,10 +1413,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
         // Lock the influence-border orientation to the helm's facing at assembly: the Front/Back/Left/Right faces
         // follow the bow from the moment the ship is created, so the expand/contract commands and the border
-        // wireframe are correct immediately -- no longer wrong until someone sits at the helm. Seeded reflectively
-        // because ShipInfluenceOrientation is a VS2 port addition that isn't on the VS2 API version Eureka compiles
-        // against; the deployed port VS2 jar has it at runtime. On stock VS2 the class is absent and this no-ops.
-        InfluenceOrientationBridge.seedForward(shipId, forwardAtAssembly)
+        // wireframe are correct immediately -- no longer wrong until someone sits at the helm.
+        ShipInfluenceOrientation.observeForward(shipId, forwardAtAssembly)
 
         fun applyControl(loadedShip: LoadedServerShip) {
             // Keep Active on by default for anything Eureka assembles. A ship only physics-ticks while a player
@@ -1782,34 +1781,4 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         return startRiding(player, force, blockPos, blockState, level as ServerLevel)
     }
     private val logger by logger()
-}
-
-/**
- * Reflective bridge to VS2's `ShipInfluenceOrientation.observeForward`, which records a ship's forward (bow)
- * direction so the influence-border faces (Front/Back/Left/Right) follow the helm. That class is a VS2 port
- * addition that isn't on the VS2 API version Eureka compiles against, so we resolve it reflectively against the
- * runtime jar (cached after the first call). On stock VS2 the class is absent and [seedForward] is a no-op.
- */
-private object InfluenceOrientationBridge {
-    private var resolved = false
-    private var instance: Any? = null
-    private var method: java.lang.reflect.Method? = null
-
-    fun seedForward(shipId: Long, forward: Direction) {
-        if (!resolved) {
-            try {
-                val clazz = Class.forName("org.valkyrienskies.mod.common.util.ShipInfluenceOrientation")
-                instance = clazz.getField("INSTANCE").get(null)
-                method = clazz.getMethod("observeForward", java.lang.Long.TYPE, Direction::class.java)
-            } catch (e: ReflectiveOperationException) {
-                method = null // stock VS2: no helm-oriented influence border to seed
-            }
-            resolved = true
-        }
-        try {
-            method?.invoke(instance, shipId, forward)
-        } catch (e: ReflectiveOperationException) {
-            // best-effort: fall back to mount-time seeding (if present)
-        }
-    }
 }
