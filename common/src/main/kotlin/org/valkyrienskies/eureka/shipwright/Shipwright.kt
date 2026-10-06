@@ -366,12 +366,13 @@ object Shipwright {
     }
 
     /**
-     * Put the hull in the water -- the plans as filed, or the plans as the captain altered them.
+     * Put the hull in the water -- the plans as filed, or the plans as the captain altered them -- EMPTY.
      *
-     * ## Unaltered plans take the old road exactly
-     * A ship nobody has changed is placed straight from its own template, with no copy, no temporary file
-     * and no new way to fail. The whole apparatus below exists for the altered case and costs the ordinary
-     * one nothing, which matters because the ordinary one is almost all of them.
+     * ## Always from a working copy
+     * The plans carry whatever the ship had aboard when its blueprint was drawn: chests, engine fuel, cannon
+     * powder, item frames. The shipwright builds the hull, not the cargo, so the copy is emptied before it goes
+     * up ([ShipTemplate.emptyContents]); building straight from the plans duplicated everything aboard the
+     * original once per build. The plans themselves keep the contents.
      *
      * ## Why the copy is not optional
      * `ShipTemplate.place` hands out the structure manager's CACHED template. Rewriting that would change
@@ -386,12 +387,6 @@ object Shipwright {
         plans: ShipwrightLedger.Plans,
         corner: BlockPos
     ): Boolean {
-        if (plans.alteration.isEmpty) {
-            if (ShipTemplate.place(level, plans.template, corner) is ShipTemplate.Placed) return true
-            PathMessages.send(player, "The ship could not be built.", PathMessages.Kind.ERROR)
-            return false
-        }
-
         val working = "altered/${UUID.randomUUID().toString().replace("-", "")}"
         try {
             if (!ShipTemplate.copy(level, plans.template, working)) {
@@ -400,6 +395,10 @@ object Shipwright {
             }
             if (!ShipAlterations.rewrite(level, working, plans.alteration, plans.deliveries)) {
                 PathMessages.send(player, "The alterations could not be applied.", PathMessages.Kind.ERROR)
+                return false
+            }
+            if (!ShipTemplate.emptyContents(level, working)) {
+                PathMessages.send(player, "The plans could not be drawn up.", PathMessages.Kind.ERROR)
                 return false
             }
             if (ShipTemplate.place(level, working, corner) !is ShipTemplate.Placed) {
@@ -470,6 +469,14 @@ object Shipwright {
         if (!ShipAlterations.rewrite(level, bottleTemplate, plans.alteration, plans.deliveries)) {
             ShipTemplate.delete(level, bottleTemplate)
             PathMessages.send(player, "The alterations could not be applied.", PathMessages.Kind.ERROR)
+            return false
+        }
+
+        // And EMPTY, as a built one is (see lay): the shipwright bottles the hull, not what the original carried.
+        // Only here -- a bottle a captain fills with their own ship keeps everything aboard, as it should.
+        if (!ShipTemplate.emptyContents(level, bottleTemplate)) {
+            ShipTemplate.delete(level, bottleTemplate)
+            PathMessages.send(player, "The ship would not go in the bottle.", PathMessages.Kind.ERROR)
             return false
         }
 

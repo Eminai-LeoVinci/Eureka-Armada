@@ -18,7 +18,9 @@ import net.minecraft.world.entity.decoration.HangingEntity
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.Clearable
 import net.minecraft.world.level.block.EntityBlock
+import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructurePlaceSettings
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate
@@ -31,6 +33,7 @@ import org.valkyrienskies.core.api.ships.ServerShip
 import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.block.HelmMark
 import org.valkyrienskies.eureka.block.ShipHelmBlock
+import org.valkyrienskies.eureka.blockentity.EngineBlockEntity
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import org.valkyrienskies.eureka.cannon.CannonShot
 import org.valkyrienskies.eureka.crew.GunnerMounts
@@ -499,8 +502,85 @@ object ShipTemplate {
         }
     }
 
+    /**
+     * Empty everything [name] carries, and save it: chests, barrels and every other container, engine fuel, cannon
+     * powder and shot, jukebox discs and lectern books, and on entities item-frame items, armor-stand gear and
+     * minecart or boat chests. For a ship the shipwright builds or bottles from a blueprint: the page keeps the
+     * contents (it is a record of the ship), but the shipwright builds the HULL, and building the cargo back in
+     * duplicated everything aboard the original once per build.
+     *
+     * The wheels forget the original's crew the same way: its articles (the roster) and which crew each captain
+     * bound to it. A new hull carrying them mustered the original's crew on assembly, and refused because they were
+     * already crewing the original.
+     *
+     * The template named here must be a COPY that nothing else refers to (see [copy]).
+     *
+     * A block entity is emptied by loading it and asking it to clear itself (every container, Armada's engines and
+     * cannons included, is Clearable), so modded containers empty too without this file knowing their keys. The
+     * known item keys are dropped as well, which also covers anything that would not load. Engines come back
+     * cold, as a never-fired engine would.
+     */
+    fun emptyContents(level: ServerLevel, name: String): Boolean {
+        val template = find(level, name) ?: return false
+        for (palette in template.palettes) {
+            val blocks = palette.blocks()
+            for (i in blocks.indices) {
+                val info = blocks[i]
+                val tag = info.nbt ?: continue
+                if (info.state.block is ShipHelmBlock) {
+                    tag.remove(CREW_ROSTER_KEY)
+                    tag.remove(CREW_BINDINGS_KEY)
+                }
+                val (state, emptied) = emptied(info.pos, info.state, tag)
+                blocks[i] = StructureTemplate.StructureBlockInfo(info.pos, state, emptied)
+            }
+        }
+        for (entity in template.entityInfoList) {
+            for (key in ENTITY_CARGO_KEYS) entity.nbt.remove(key)
+        }
+        return save(level, name)
+    }
+
+    private fun emptied(pos: BlockPos, state: BlockState, tag: CompoundTag): Pair<BlockState, CompoundTag> {
+        val blockEntity = try {
+            BlockEntity.loadStatic(pos, state, tag)
+        } catch (_: Throwable) {
+            null
+        }
+        var out: CompoundTag? = null
+        if (blockEntity is Clearable) {
+            out = try {
+                blockEntity.clearContent()
+                blockEntity.saveWithId()
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        val result = out ?: tag.copy()
+        for (key in BLOCK_CARGO_KEYS) result.remove(key)
+        if (blockEntity is EngineBlockEntity) {
+            result.putInt("FuelLeft", 0)
+            result.putInt("PrevFuelTotal", 0)
+            result.putFloat("Heat", 0f)
+            return cooled(state) to result
+        }
+        return state to result
+    }
+
+    /** Item-bearing keys on block entities: containers, jukebox, lectern, Armada's engine and cannon. */
+    private val BLOCK_CARGO_KEYS = listOf(
+        "Items", "Item", "RecordItem", "Book", "FuelSlot", "Powder", "Powder2", "Powder3", "Shot"
+    )
+
+    /** Item-bearing keys on entities: frames, armor stands and mobs, chest minecarts and boats, saddles. */
+    private val ENTITY_CARGO_KEYS = listOf(
+        "Item", "Items", "ArmorItems", "HandItems", "Inventory", "SaddleItem", "DecorItem", "ArmorItem"
+    )
+
     /** Mirrors the private constants in ShipHelmBlockEntity; the tags are written by that class, not this one. */
     private const val REMEMBERED_SHIP_KEY = "vs_eureka:remembered_ship"
+    private const val CREW_ROSTER_KEY = "vs_eureka:crew"
+    private const val CREW_BINDINGS_KEY = "vs_eureka:crew_bindings"
     private const val SHIP_SLUG_KEY = "vs_eureka:ship_slug"
     private const val BOTTLE_BINDING_KEY = "vs_eureka:bottle_binding"
     private const val PIRATE_TEMPLATE_KEY = "vs_eureka:pirate_template"
