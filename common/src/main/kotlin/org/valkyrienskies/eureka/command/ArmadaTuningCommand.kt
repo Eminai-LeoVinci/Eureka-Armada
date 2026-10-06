@@ -18,7 +18,8 @@ import org.valkyrienskies.eureka.item.ChanceSpec
 import kotlin.reflect.KMutableProperty0
 
 /**
- * "/armada cannons ..." and "/armada cannonballs ..." -- live gunnery tuning from chat.
+ * "/armada cannons ...", "/armada cannonballs ..." and "/armada waves ..." -- live gunnery and ocean-swell tuning
+ * from chat.
  *
  * Every leaf is a GET when bare and a SET with a value. A SET writes the live [EurekaConfig.SERVER]
  * singleton -- each firing site reads the config per shot, so the next shot obeys -- and then persists it
@@ -40,6 +41,7 @@ object ArmadaTuningCommand {
             literal("armada")
                 .then(cannons())
                 .then(cannonballs())
+                .then(waves())
         )
     }
 
@@ -333,6 +335,43 @@ object ArmadaTuningCommand {
             "fire: spreads ${cfg.shipFireSpreads}, burn ${cfg.shipFireBurnSecondsMin}-${cfg.shipFireBurnSecondsMax} s, " +
                 "watch ${cfg.fireWatchHorizontalBlocks}x${cfg.fireWatchVerticalBlocks} douse ${cfg.fireWatchDouseBlocks} " +
                 "rest ${cfg.fireWatchRestSeconds} s"
+        )
+        for (line in lines) src.sendSuccess({ Component.literal("  $line").withStyle(ChatFormatting.AQUA) }, false)
+        return 1
+    }
+
+    // endregion
+
+    // region /armada waves
+
+    private fun waves(): LiteralArgumentBuilder<CommandSourceStack> {
+        val cfg = EurekaConfig.SERVER
+        return literal("waves")
+            .requires { gate(it) }
+            .executes { wavesInfo(it) }
+            .then(literal("info").executes { wavesInfo(it) })
+            .then(literal("on").executes { store(it, "waves", { cfg.waveBuoyancy = true }, "on") })
+            .then(literal("off").executes { store(it, "waves", { cfg.waveBuoyancy = false }, "off") })
+            .then(doubleNode("height", "wave height", "blocks", cfg::waveHeight))
+            .then(doubleNode("speed", "wave speed", "x", cfg::waveSpeed))
+            .then(doubleNode("scale", "wave scale", "x", cfg::waveHorizontalScale))
+            .then(doubleNode("stiffness", "wave stiffness", "", cfg::waveStiffness))
+            .then(doubleNode("damping", "wave damping", "", cfg::waveDamping))
+            .then(intNode("grid", "wave sample grid", "per side", cfg::waveSampleGrid))
+            .then(intNode("iterations", "wave iterations", "", cfg::waveIterations))
+            .then(doubleNode("phase", "wave phase", "s", cfg::wavePhaseOffset))
+    }
+
+    private fun wavesInfo(ctx: CommandContext<CommandSourceStack>): Int {
+        val cfg = EurekaConfig.SERVER
+        val src = ctx.source
+        src.sendSuccess({ Component.literal("Ocean waves:").withStyle(ChatFormatting.GOLD) }, false)
+        val lines = listOf(
+            "waves = " + (if (cfg.waveBuoyancy) "on" else "off"),
+            "height = ${cfg.waveHeight} blocks, speed = ${cfg.waveSpeed}x, scale = ${cfg.waveHorizontalScale}x",
+            "stiffness = ${cfg.waveStiffness}, damping = ${cfg.waveDamping}",
+            "grid = ${cfg.waveSampleGrid} per side, iterations = ${cfg.waveIterations}, phase = ${cfg.wavePhaseOffset} s",
+            "height, speed, scale and iterations must match the shader's VS2 Ocean Swells settings"
         )
         for (line in lines) src.sendSuccess({ Component.literal("  $line").withStyle(ChatFormatting.AQUA) }, false)
         return 1

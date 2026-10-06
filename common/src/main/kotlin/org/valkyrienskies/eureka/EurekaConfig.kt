@@ -2552,6 +2552,71 @@ object EurekaConfig {
 
         // endregion
 
+
+        // region Ocean waves
+        @JsonSchema(
+            description = "Ships afloat bob, pitch and roll with the ocean swell, in step with the swell a wave shader " +
+                "draws (the modified Eclipse pack's VS2 Ocean Swells). Everyone aboard is carried with the bob. On " +
+                "flat vanilla water there is nothing to see them riding, so turn it off there. Flip it live with " +
+                "/armada waves on|off. Default true."
+        )
+        var waveBuoyancy = true
+
+        @JsonSchema(
+            description = "Swell height in blocks, crest to trough. Must match the shader's Swell Height so ships " +
+                "ride the visible waves. /armada waves height. Default 4.0."
+        )
+        var waveHeight = 4.0
+
+        @JsonSchema(
+            description = "Horizontal size of the swell; above 1 packs the waves closer together. Must match the " +
+                "shader's Swell Scale. /armada waves scale. Default 1.0."
+        )
+        var waveHorizontalScale = 1.0
+
+        @JsonSchema(
+            description = "How fast the swell travels. Must match the shader's Swell Speed. /armada waves speed. " +
+                "Default 1.0."
+        )
+        var waveSpeed = 1.0
+
+        @JsonSchema(
+            description = "Detail passes in the wave function. The shader uses 13; change both together. " +
+                "/armada waves iterations. Default 13."
+        )
+        var waveIterations = 13
+
+        @JsonSchema(
+            description = "How hard a ship is pulled to follow the swell. Higher hugs the waves more tightly. " +
+                "/armada waves stiffness. Default 8.0."
+        )
+        var waveStiffness = 8.0
+
+        @JsonSchema(
+            description = "How much the bob is calmed. Higher is steadier and stops a ship rocking on and on. " +
+                "/armada waves damping. Default 3.0."
+        )
+        var waveDamping = 3.0
+
+        @JsonSchema(
+            description = "Hull points sampled per side (the grid is this squared), 1 to 8. More is smoother pitch " +
+                "and roll for a little more CPU. /armada waves grid. Default 3."
+        )
+        var waveSampleGrid = 3
+
+        @JsonSchema(
+            description = "Seconds to shift the swell by, to line the bob up with the visible waves. " +
+                "/armada waves phase. Default 0.0."
+        )
+        var wavePhaseOffset = 0.0
+
+        @JsonSchema(description = "World X offset of the swell, to line it up with the shader (advanced). Default 0.0.")
+        var waveOffsetX = 0.0
+
+        @JsonSchema(description = "World Z offset of the swell, to line it up with the shader (advanced). Default 0.0.")
+        var waveOffsetZ = 0.0
+        // endregion
+
         // Armada world collision is engine-resolved: a child is welded to its parent by a rigid VSFixedJoint and
         // collides with the world as a normal physics body, so there is nothing here to tune.
     }

@@ -3,7 +3,10 @@ package org.valkyrienskies.eureka
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.path.PathBinding
+import org.valkyrienskies.core.api.VsBeta
 import org.valkyrienskies.eureka.ship.KeepActiveFlag
+import org.valkyrienskies.eureka.ship.OceanWaveField
+import org.valkyrienskies.eureka.ship.WaveBuoyancyAttachment
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
@@ -64,6 +67,23 @@ object EurekaMod {
         // ShipKeepActive acts on it every tick.
         ValkyrienSkiesMod.vsCore.registerAttachment(KeepActiveFlag::class.java) {
             useLegacySerializer()
+        }
+
+        // Ocean wave bob (see WaveBuoyancyAttachment). Transient: nothing is saved, it is put back on every ship as
+        // it loads, and the swell's clock runs on VS2's physics tick.
+        ValkyrienSkiesMod.vsCore.registerAttachment(WaveBuoyancyAttachment::class.java) {
+            useTransientSerializer()
+        }
+        registerWaves()
+    }
+
+    @OptIn(VsBeta::class)
+    private fun registerWaves() {
+        ValkyrienSkiesMod.vsCore.shipLoadEvent.on { event ->
+            event.ship.setAttachment(WaveBuoyancyAttachment().also { it.ship = event.ship })
+        }
+        ValkyrienSkiesMod.vsCore.physTickEvent.on { event ->
+            OceanWaveField.advanceTime(event.world.dimension, event.delta)
         }
     }
 
