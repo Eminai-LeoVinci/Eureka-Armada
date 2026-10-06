@@ -6,6 +6,7 @@
     "MixinExplosionPirateHelm",
     "MixinNoSnowOnShips",
     "MixinEntityTransitionHold",
+    "MixinServerPlayerReconnectSeat",
     "MixinRecipeManager"
   ],
   "client": [

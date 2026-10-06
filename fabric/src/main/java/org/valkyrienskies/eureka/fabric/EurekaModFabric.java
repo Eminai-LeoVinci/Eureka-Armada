@@ -13,6 +13,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
@@ -28,7 +29,11 @@ import org.valkyrienskies.eureka.EurekaBlocks;
 import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaEntities;
+import org.valkyrienskies.eureka.entity.ReconnectSeat;
 import org.valkyrienskies.eureka.client.ShipGamepad;
+import org.valkyrienskies.eureka.client.ShipCameraZoom;
+import org.valkyrienskies.eureka.client.HelmCamera;
+import org.valkyrienskies.eureka.client.CameraMemory;
 import org.valkyrienskies.eureka.ship.ShipKeepActive;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
@@ -178,7 +183,12 @@ public class EurekaModFabric implements ModInitializer {
         // (see ShipKeepActive). Released before vanilla drains chunks on shutdown.
         ServerTickEvents.START_SERVER_TICK.register(ShipKeepActive::tick);
         ServerLifecycleEvents.SERVER_STOPPING.register(ShipKeepActive::clearAll);
+        // The sit key: sit down on deck, SHIFT to stand (see SitDownFabric).
+        SitDownFabric.INSTANCE.registerServer();
 
+        // Log back in on a ship and you are sitting (see ReconnectSeat).
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> ReconnectSeat.onJoin(handler.player));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> ReconnectSeat.onLeave(handler.player));
 
         // Ship paths are held in singletons, which in single player outlive the world -- quitting to the title
         // screen stops the server but leaves them standing. Dropping them here is what makes logging back in look
@@ -215,8 +225,18 @@ public class EurekaModFabric implements ModInitializer {
 
             // The controller is read straight off the hardware; poll it once, before anything reads it this tick.
             ClientTickEvents.START_CLIENT_TICK.register(client -> ShipGamepad.INSTANCE.poll());
+            // The helm's F5 cycle takes its presses before vanilla handles them (see HelmCamera).
+            ClientTickEvents.START_CLIENT_TICK.register(HelmCamera::tick);
+            SitDownFabric.INSTANCE.registerClient();
+            ClientTickEvents.END_CLIENT_TICK.register(ShipCameraZoom::tick);
+            // Relog seated on a ship and the camera comes back as it was (see CameraMemory).
+            ClientTickEvents.END_CLIENT_TICK.register(CameraMemory::tick);
+            ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> CameraMemory.onJoin(client));
+            ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> CameraMemory.onDisconnect());
+
             // A gun seat draws nothing: the gunner sitting in it is what you see.
             EntityRenderers.register(EurekaEntities.INSTANCE.getDECK_SEAT().get(), NoopRenderer::new);
+
             // Reading a blueprint is a purely client-side affair -- the page travels whole in the item's own
             // component -- but the item lives in :common, which cannot name a Screen. Same indirection as
             // PathMessages: common declares the hook, the client entrypoint fills it in.

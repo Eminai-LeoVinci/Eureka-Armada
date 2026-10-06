@@ -177,6 +177,18 @@ object EurekaConfig {
         var displayHud = true
 
         @JsonSchema(
+            description = "How far IN the scroll wheel can zoom VS2's ship-mounted third-person camera, as a fraction of " +
+                "the distance VS2 picks from the ship's size. 0.125 lets you scroll in to an eighth of it. Default 0.125."
+        )
+        var shipCameraZoomMin = 0.125
+
+        @JsonSchema(
+            description = "How far OUT the scroll wheel can zoom VS2's ship-mounted third-person camera, as a multiple of " +
+                "the distance VS2 picks from the ship's size. Default 2."
+        )
+        var shipCameraZoomMax = 2.0
+
+        @JsonSchema(
             description = "How far away a cannonball in flight stays visible, in blocks. Vanilla culled a " +
                 "shot-sized entity at about 77 blocks, which made long shots vanish mid-arc. Visibility " +
                 "no longer bends to render distance; the server stops tracking shots past 1024 blocks, " +

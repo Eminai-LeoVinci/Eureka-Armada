@@ -276,6 +276,7 @@
   "key.vs_eureka.path_record": "Record a route. Hold to discard. (Sneak)",
   "key.vs_eureka.path_play": "Fly the recorded route. Hold to release. (Sneak)",
   "key.vs_eureka.path_show": "Show saved routes. (Sneak)",
+  "key.vs_eureka.ship_seat": "Sit Down (on Ship)",
   "key.vs_eureka.path_follow": "Follow the ship you're looking at. (Sneak)",
   "key.vs_eureka.path_crew": "Sign on crew, or open the crew manifest. (Sneak)",
   "key.vs_eureka.path_broadside": "Fire every manned gun aboard. Works at the wheel.",
