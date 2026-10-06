@@ -47,5 +47,8 @@
     "valkyrienskies": "^${vs2_version}",
     "fabricloader": ">=0.14.21",
     "forgeconfigapiport": ">=8.0.0"
+  },
+  "breaks": {
+    "valkyrienskies": ">2.4.11 <2.4.12"
   }
 }
