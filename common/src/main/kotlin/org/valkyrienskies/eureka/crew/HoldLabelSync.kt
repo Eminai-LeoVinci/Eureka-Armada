@@ -1,6 +1,8 @@
 package org.valkyrienskies.eureka.crew
 
 import net.minecraft.server.level.ServerLevel
+import net.minecraft.world.level.block.ChestBlock
+import net.minecraft.world.level.block.state.properties.ChestType
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.Container
 import org.valkyrienskies.core.api.ships.LoadedServerShip
@@ -29,10 +31,10 @@ object HoldLabelSync {
     /**
      * Work out what to call the box (or boxes) behind [container] and tell [player].
      *
-     * A double chest is two numbered halves under one screen, so it reads as "Chest 2 - D3 + Chest 3 - D3":
-     * they are genuinely two boxes, each tagged on its own, and collapsing them to one number would make the
-     * screen disagree with the restock messages. The tag mask is the UNION, because the screen is showing
-     * what is reachable through this window.
+     * A double chest is two numbered halves under one screen, and the screen names ONE of them: the half on your
+     * right as you face the chest, so "Large Chest 4 - D3" for chests 3 and 4. Naming both ("3 - D3 + 4 - D3") ran
+     * the second under the Restock button. Each half is still its own numbered box in the restock messages. The
+     * tag mask is the UNION, because the screen is showing what is reachable through this window.
      *
      * Silent for anything not aboard an assembled ship, which is the rule for the whole feature: a box on
      * land is just a box.
@@ -58,14 +60,17 @@ object HoldLabelSync {
             return
         }
 
-        val names = ArrayList<String>(2)
         var tags = 0
-        for (hold in holds) {
-            labelled.firstOrNull { it.hold.blockPos == hold.blockPos }?.let { names.add(it.short) }
-            tags = tags or HoldTags.toMask(HoldTags.tagsOf(hold))
-        }
-        if (names.isEmpty()) return
+        for (hold in holds) tags = tags or HoldTags.toMask(HoldTags.tagsOf(hold))
 
-        send(player, containerId, names.joinToString(" + "), tags)
+        // The half on your right as you face a double chest is the one vanilla calls LEFT (the chest's own left).
+        val shown = holds.firstOrNull {
+            it.blockState.getOptionalValue(ChestBlock.TYPE).orElse(null) == ChestType.LEFT
+        }
+        val label = (listOfNotNull(shown) + holds).firstNotNullOfOrNull { hold ->
+            labelled.firstOrNull { it.hold.blockPos == hold.blockPos }?.short
+        } ?: return
+
+        send(player, containerId, label, tags)
     }
 }
