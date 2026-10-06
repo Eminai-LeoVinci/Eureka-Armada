@@ -7,11 +7,13 @@
     "MixinNoSnowOnShips",
     "MixinEntityTransitionHold",
     "MixinServerPlayerReconnectSeat",
+    "MixinLivingEntityWalkOnShip",
     "MixinPathNavigationRegionShips",
     "MixinGroundPathNavigationShips",
     "PathNavigationMobAccessor",
     "MixinMoveControlShipStep",
     "MixinLivingEntitySleepOnShip",
+    "MixinFireworkRocketNearShips",
     "ai.villagers.MixinInteractWith",
     "ai.villagers.MixinSetWalkTargetFromBlockMemory",
     "ai.villagers.MixinSleepInBed",
@@ -23,11 +25,15 @@
     "ai.jobsites.MixinValidateNearbyPoi",
     "ai.jobsites.MixinWorkAtPoi",
     "MixinEntityDraggerInfluence",
+    "MixinLivingEntityStandingOnShip",
     "MixinPathNavigationGroundYShips",
     "MixinRecipeManager"
   ],
   "client": [
-    "client.PlayerEntityModelMixin"
+    "client.PlayerEntityModelMixin",
+    "client.MixinLivingEntityRendererStandAtMount",
+    "client.MixinEntityRendererShipLight",
+    "client.MixinEntityRendererRiderNameTag"
   ],
   "injectors": {
     "defaultRequire": 1

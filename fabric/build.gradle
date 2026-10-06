@@ -32,6 +32,10 @@ dependencies {
 
     // Mod menu
     modImplementation "fuzs.forgeconfigapiport:forgeconfigapiport-fabric:${rootProject.fcap_version}"
+
+    // Entity Model Features (Fresh Animations): compile-only, for the soft compat mixins. Same versions official VS2 uses.
+    modCompileOnly("maven.modrinth:entity-model-features:3.0.7-fabric-1.20.1")
+    modCompileOnly("maven.modrinth:entitytexturefeatures:7.0.6-fabric-1.20.1")
     modRuntimeOnly("maven.modrinth:forge-config-screens:v${rootProject.fcs_version}-${rootProject.minecraft_version}-Fabric")
 
     // Remove the next line if you don't want to depend on the API
