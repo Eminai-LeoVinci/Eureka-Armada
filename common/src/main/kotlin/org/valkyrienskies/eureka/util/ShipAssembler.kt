@@ -129,6 +129,19 @@ object ShipAssembler {
             BlockPos(corner.x.toInt(), corner.y.toInt(), corner.z.toInt()),
             BlockPos(minX, minY, minZ)
         )
+    /**
+     * VS2's relocateBlock writes the block straight into the chunk, so the level never hears that a block changed:
+     * villager points of interest (job sites, beds, bells) stay registered where the block was and are missing where
+     * it is now, and a relocated helm or barrel no longer draws anyone. Tell the level about both ends.
+     */
+    private fun ServerLevel.relocateWithPoi(
+        from: BlockPos, to: BlockPos, doUpdate: Boolean, toShip: ServerShip?, rotation: Rotation
+    ) {
+        val fromBefore = getBlockState(from)
+        val toBefore = getBlockState(to)
+        relocateBlock(from, to, doUpdate, toShip, rotation)
+        onBlockStateChange(from, fromBefore, getBlockState(from))
+        onBlockStateChange(to, toBefore, getBlockState(to))
     }
 
     // Back-compat one-shot collect-then-assemble (no pre-assembly hook). Kept for any external callers;
@@ -345,7 +358,7 @@ object ShipAssembler {
             if (drop <= 0) continue
 
             for (half in halves) {
-                level.relocateBlock(half, half.below(drop), true, null, Rotation.NONE)
+                level.relocateWithPoi(half, half.below(drop), true, null, Rotation.NONE)
                 moved.add(half)
             }
         }
@@ -577,7 +590,7 @@ object ShipAssembler {
                             }
 
                             toUpdate.add(Triple(inShipPos, inWorldBlockPos, state))
-                            level.relocateBlock(inShipPos, inWorldBlockPos, false, null, rotation)
+                            level.relocateWithPoi(inShipPos, inWorldBlockPos, false, null, rotation)
                         }
                     }
                 }
