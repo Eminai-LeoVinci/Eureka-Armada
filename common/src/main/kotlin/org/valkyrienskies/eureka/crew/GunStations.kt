@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.entity.ai.memory.MemoryModuleType
+import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.npc.Villager
 import net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING
 import net.minecraft.world.phys.AABB
@@ -15,7 +16,7 @@ import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.mod.common.dimensionId
-import org.valkyrienskies.mod.common.entity.ShipMountingEntity
+import org.valkyrienskies.eureka.entity.DeckSeat
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
 import java.util.UUID
@@ -34,7 +35,7 @@ import java.util.UUID
  * a hand-rolled per-tick glue to place its rider; and then vanilla sends NO movement packets for an entity
  * that is a passenger, so however right the server's picture was, the CLIENT still drew every gunner frozen
  * on the spot where he was standing when the order landed -- unreachable to clicks, because the server's
- * copy stood fourteen blocks away behind his gun. [ShipMountingEntity.spawnPassengerSeat] is the mechanism
+ * copy stood fourteen blocks away behind his gun. [DeckSeat.spawn] is the mechanism
  * VS2 built for exactly this (it is what carries a reconnecting player on a moving ship): a WORLD-space seat
  * that snaps itself to `shipToWorld(driveRelPos)` every tick, ticks like any world entity so vanilla
  * positions its rider server-side, and syncs its drive anchor so the client drives it identically. No glue,
@@ -53,7 +54,7 @@ import java.util.UUID
 object GunStations {
 
     /** One gunner's live seating: which gun, and the world-space seat serving it. */
-    private class Seating(val gunPos: BlockPos, val seat: ShipMountingEntity)
+    private class Seating(val gunPos: BlockPos, val seat: DeckSeat)
 
     /** villager -> their seating. Runtime only; rebuilt from the ledger by [reconcile]. */
     private val seats = HashMap<UUID, Seating>()
@@ -123,7 +124,7 @@ object GunStations {
      * the rest of the save, and one released by a disassembly would be a statue on the deck of a ship that
      * no longer exists.
      */
-    private fun wake(seat: ShipMountingEntity) {
+    private fun wake(seat: Entity) {
         (seat.passengers.firstOrNull() as? Villager)?.let { if (it.isNoAi) it.isNoAi = false }
     }
 
@@ -147,7 +148,7 @@ object GunStations {
         val behind = behindOf(level, gunPos) ?: return false
 
         // Re-stationing: free the old seat before the move, so its orphan can never hold a stale claim.
-        (villager.vehicle as? ShipMountingEntity)?.takeIf { !it.isController }?.let { wake(it); it.kill() }
+        villager.vehicle?.takeIf { DeckSeat.isGunSeat(it) }?.let { wake(it); it.kill() }
 
         val ship = level.getLoadedShipManagingPos(gunPos) ?: return false
         val footing = footingOf(level, gunPos) as? Footing.Stand ?: return false
@@ -169,7 +170,7 @@ object GunStations {
         // itself knows what it is riding. Never a CONTROLLER seat -- that is the helm's, and no villager
         // legitimately sits one.
         val villager = CrewMuster.findAnywhere(level.server, villagerId)
-        (villager?.vehicle as? ShipMountingEntity)?.takeIf { !it.isController }?.kill()
+        villager?.vehicle?.takeIf { DeckSeat.isGunSeat(it) }?.kill()
         // The freeze lives on the VILLAGER, not on the seat. Seating sets isNoAi so a gunner stands still
         // at his breech, and [wake] can only reach that flag THROUGH a seat that still exists with him
         // still riding it. So every path that had already lost the seat -- a reload, a dimension hop, a
@@ -330,7 +331,7 @@ object GunStations {
         }
         // Seated at the wrong gun (the station changed), or in something else entirely.
         seats.remove(villager.uuid)?.seat?.takeIf { !it.isRemoved }?.let { wake(it); it.kill() }
-        if (riding is ShipMountingEntity && !riding.isController) riding.kill()
+        if (riding != null && DeckSeat.isGunSeat(riding)) riding.kill()
         else if (riding != null) villager.stopRiding()
 
         val ship = level.getLoadedShipManagingPos(gunPos) as? LoadedServerShip ?: return false
@@ -353,7 +354,7 @@ object GunStations {
         val relY = footing.surfaceY + SEAT_SINK + rideY
         val relZ = behind.z + 0.5
         val world = ship.shipToWorld.transformPosition(Vector3d(relX, relY, relZ))
-        val seat = ShipMountingEntity.spawnPassengerSeat(
+        val seat = DeckSeat.spawn(
             level, world.x, world.y, world.z, yaw, 0.0f, ship.id, relX, relY, relZ
         ) ?: return false
         if (!villager.startRiding(seat, true)) {

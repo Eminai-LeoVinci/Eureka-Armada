@@ -190,12 +190,6 @@ object ArmadaTuningCommand {
             )
             .then(doubleNode("max-flight-seconds", "max-flight-seconds", "s", cfg::cannonShotMaxFlightSeconds))
             .then(
-                literal("voxy-lod")
-                    .executes { show(it, "voxy-lod", if (cfg.cannonballVoxyLodUpdates) "on" else "off") }
-                    .then(literal("on").executes { store(it, "voxy-lod", { cfg.cannonballVoxyLodUpdates = true }, "on") })
-                    .then(literal("off").executes { store(it, "voxy-lod", { cfg.cannonballVoxyLodUpdates = false }, "off") })
-            )
-            .then(
                 literal("chunk-loading")
                     .executes { show(it, "chunk-loading", if (cfg.cannonballChunkLoading) "on" else "off") }
                     .then(literal("on").executes { store(it, "chunk-loading", { cfg.cannonballChunkLoading = true }, "on") })
@@ -214,7 +208,6 @@ object ArmadaTuningCommand {
             "drag 1x/2x/3x = ${cfg.cannonShotDrag1x}/${cfg.cannonShotDrag2x}/${cfg.cannonShotDrag3x} kept/tick",
             "fire-at-will crew = ${cfg.cannonFireAtWillFireRateSeconds} s, pirate = ${cfg.pirateFireAtWillFireRateSeconds} s",
             "max-flight-seconds = ${cfg.cannonShotMaxFlightSeconds} s",
-            "voxy-lod = " + (if (cfg.cannonballVoxyLodUpdates) "on" else "off"),
             "chunk-loading = " + (if (cfg.cannonballChunkLoading) "on" else "off"),
             "render distance is client-side -- each player sets it with /vs cannonball-render-distance"
         )

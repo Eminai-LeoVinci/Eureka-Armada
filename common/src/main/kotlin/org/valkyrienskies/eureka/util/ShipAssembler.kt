@@ -37,6 +37,7 @@ import org.valkyrienskies.eureka.crew.HoldTags
 import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
 import org.valkyrienskies.mod.common.VS2ChunkAllocator
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
+import org.valkyrienskies.eureka.entity.DeckSeat
 import org.valkyrienskies.mod.common.executeIf
 import org.valkyrienskies.mod.common.isTickingChunk
 import org.valkyrienskies.mod.common.networking.PacketRestartChunkUpdates
@@ -507,7 +508,7 @@ object ShipAssembler {
             it !is HangingEntity && it !is Player && !it.isPassenger &&
                 // A seat stands its own rider down when the ship dies (serverSeatTick); it needs no carry,
                 // and it must never get one.
-                it !is ShipMountingEntity
+                it !is ShipMountingEntity && it !is DeckSeat
         }
 
         val chunksToBeUpdated = mutableMapOf<ChunkPos, Pair<ChunkPos, ChunkPos>>()

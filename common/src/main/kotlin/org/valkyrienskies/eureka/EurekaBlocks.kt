@@ -12,9 +12,9 @@ import net.minecraft.world.level.material.MapColor
 import org.valkyrienskies.eureka.block.*
 import org.valkyrienskies.eureka.item.ShipHelmBlockItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
-import org.valkyrienskies.mod.common.blockProps
+import org.valkyrienskies.eureka.registry.blockProps
 import org.valkyrienskies.mod.common.hooks.VSGameEvents
-import org.valkyrienskies.mod.common.itemProps
+import org.valkyrienskies.eureka.registry.itemProps
 
 @Suppress("unused")
 object EurekaBlocks {

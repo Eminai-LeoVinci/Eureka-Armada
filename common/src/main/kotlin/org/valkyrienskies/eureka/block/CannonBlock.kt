@@ -45,7 +45,7 @@ import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.cannon.CannonFire
 import org.valkyrienskies.eureka.util.DirectionalShape
 import org.valkyrienskies.eureka.util.RotShapes
-import org.valkyrienskies.mod.common.blockProps
+import org.valkyrienskies.eureka.registry.blockProps
 
 /**
  * A ship's gun: two blocks long, laid rear-to-front like a bed.

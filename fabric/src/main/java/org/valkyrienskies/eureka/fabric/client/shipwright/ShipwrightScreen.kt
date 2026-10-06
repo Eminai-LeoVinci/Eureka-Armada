@@ -20,7 +20,7 @@ import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmCheckbox
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmButton
 import org.valkyrienskies.eureka.shipwright.MaterialFamilies
 import org.valkyrienskies.eureka.shipwright.ShipwrightMenu
-import org.valkyrienskies.mod.client.ShipGamepad
+import org.valkyrienskies.eureka.client.ShipGamepad
 import kotlin.math.abs
 
 /**
@@ -1441,7 +1441,7 @@ class ShipwrightScreen private constructor(private var shelf: ShipwrightMenu.She
     }
 
     /**
-     * Controller support, read straight off the hardware (VS2's ShipGamepad) because a controller mod's
+     * Controller support, read straight off the hardware (ShipGamepad) because a controller mod's
      * screen handling never reaches a custom screen.
      *
      * The right stick is the scroll wheel everywhere. On the shelf and in the yard the D-pad is the

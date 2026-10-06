@@ -12,7 +12,6 @@
     "MixinCrewProjectileBoost",
     "MixinCrewStrollAnywhere",
     "MixinEntitySubAir",
-    "MixinGunnerSeatPersists",
     "MixinPoiCompetitorScan",
     "MixinRandomSpreadAccess",
     "MixinSinglePoolElementAccess",
@@ -29,6 +28,9 @@
   ],
   "client": [
     "client.MixinRaycastUtils",
+    "client.MixinClientCommandInternals",
+    "client.MixinClientPacketListenerCommandMerge",
+    "client.MixinHelmDpadClimb",
     "client.MixinCameraSubAir",
     "client.MixinContainerScreenHoldLabel",
     "client.MixinEntityRendererCrewNameTag",

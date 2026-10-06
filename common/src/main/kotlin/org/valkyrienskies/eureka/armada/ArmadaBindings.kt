@@ -1,4 +1,5 @@
 package org.valkyrienskies.eureka.armada
+import org.valkyrienskies.eureka.ship.keepActive
 
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerLevel
@@ -89,8 +90,8 @@ object ArmadaBindings {
         // rather than waiting for someone to notice. A parent that falls out of simulation strands its children;
         // a child that does is a welded body that has stopped stepping, which stalls the whole formation dead.
         // Recorded as the mirrored value so the edge-triggered push in reconcile doesn't read this as a change.
-        parent.settings.keepActive = true
-        child.settings.keepActive = true
+        parent.keepActive = true
+        child.keepActive = true
         parentArmada.mirroredKeepActive = true
 
         // A ship that just became a child can't also be someone's marked parent.
@@ -220,10 +221,10 @@ object ArmadaBindings {
             if (ship.chunkClaimDimension != dimension) continue
             val armada = ArmadaShipControl.get(ship) ?: continue
             if (armada.isChild || armada.childShips.isEmpty()) continue
-            val keepActive = ship.settings.keepActive
+            val keepActive = ship.keepActive
             if (armada.mirroredKeepActive == keepActive) continue
             armada.mirroredKeepActive = keepActive
-            for (child in armada.childShips.values) child.settings.keepActive = keepActive
+            for (child in armada.childShips.values) child.keepActive = keepActive
         }
     }
 

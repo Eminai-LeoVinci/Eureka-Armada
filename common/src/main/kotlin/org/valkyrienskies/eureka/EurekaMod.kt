@@ -3,6 +3,7 @@ package org.valkyrienskies.eureka
 import org.valkyrienskies.eureka.armada.ArmadaShipControl
 import org.valkyrienskies.eureka.crew.CrewProfession
 import org.valkyrienskies.eureka.path.PathBinding
+import org.valkyrienskies.eureka.ship.KeepActiveFlag
 import org.valkyrienskies.eureka.ship.EurekaShipControl
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.mod.common.ValkyrienSkiesMod
@@ -56,6 +57,12 @@ object EurekaMod {
         // acts on it (a PathFollower, rather than a physics weld) is rebuilt by ShipPaths.tick once the ship and
         // its route store are both loaded.
         ValkyrienSkiesMod.vsCore.registerAttachment(PathBinding::class.java) {
+            useLegacySerializer()
+        }
+
+        // Keep Active, per ship, PERSISTED. Official VS2's ShipSettings has no such field, so Armada keeps its own;
+        // ShipKeepActive acts on it every tick.
+        ValkyrienSkiesMod.vsCore.registerAttachment(KeepActiveFlag::class.java) {
             useLegacySerializer()
         }
     }

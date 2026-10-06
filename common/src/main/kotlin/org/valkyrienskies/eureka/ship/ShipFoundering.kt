@@ -178,7 +178,7 @@ object ShipFoundering {
             Vector3d(anchor.x + 0.5, anchor.y + 0.5, anchor.z + 0.5)
         )
         val shipId = ship.id
-        val holdAABB = EntityShipCollisionUtils.worldAABBForShip(ship)
+        val holdAABB = TransitionHold.worldAABBForShip(ship)
 
         // A wreck goes UNDER the ground she came to rest on, and onto her side. She fell on her own hull
         // like any other ship -- the physics engine will always rest her on it -- so the burial is done
@@ -198,7 +198,7 @@ object ShipFoundering {
             maxSink = (holdAABB.minY - (level.minBuildHeight + 1)).toInt().coerceAtLeast(0)
         }
 
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+        TransitionHold.markWorldFreeze(level, holdAABB, 2_000_000_000L)
         if (!ShipAssembler.unfillShip(
                 level, ship, anchor,
                 BlockPos.containing(inWorld.x, inWorld.y, inWorld.z),
@@ -213,7 +213,7 @@ object ShipFoundering {
                 shipId, roll, (fraction * 100).toInt(), maxSink
             )
         }
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 2_000_000_000L)
+        TransitionHold.markWorldFreeze(level, holdAABB, 2_000_000_000L)
         // No crew ids: a foundering has no wheel in hand and no captain behind it, so the hull sweep is the
         // only source -- which is exactly the case that sweep exists for.
         CrewMuster.standDownShip(level, shipId, holdAABB, crewIds = emptyList())
@@ -371,7 +371,7 @@ object ShipFoundering {
 
     /** Whether any player is inside [ship]'s hull box, generously inflated. Spectators do not count. */
     private fun anyoneNear(level: ServerLevel, ship: LoadedServerShip, margin: Double): Boolean {
-        val box = EntityShipCollisionUtils.worldAABBForShip(ship)
+        val box = TransitionHold.worldAABBForShip(ship)
         val m = margin.coerceAtLeast(0.0)
         return level.players().any { player ->
             !player.isSpectator &&

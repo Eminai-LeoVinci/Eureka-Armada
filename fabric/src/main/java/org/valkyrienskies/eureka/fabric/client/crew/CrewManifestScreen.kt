@@ -27,7 +27,8 @@ import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmIconButton
 import org.valkyrienskies.eureka.gui.shiphelm.ShipHelmTab
 import org.valkyrienskies.eureka.item.Cannonball
 import org.valkyrienskies.eureka.item.CannonCharge
-import org.valkyrienskies.mod.client.ShipGamepad
+import org.valkyrienskies.eureka.client.ShipGamepad
+import org.valkyrienskies.eureka.entity.DeckSeat
 import java.util.UUID
 import kotlin.math.abs
 
@@ -872,7 +873,7 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
     // region the pad drives the screen
 
     /**
-     * Controller support, read straight off the hardware (VS2's ShipGamepad, polled at the head of this
+     * Controller support, read straight off the hardware (ShipGamepad, polled at the head of this
      * same tick) because a controller mod's screen handling never reaches a custom screen.
      *
      * The scheme: the RIGHT STICK is the scroll wheel, and the D-PAD is the hover -- up/down walk the

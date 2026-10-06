@@ -17,7 +17,7 @@ import org.valkyrienskies.eureka.EurekaMod
 import org.valkyrienskies.eureka.fabric.PathNetworkingFabric
 import org.valkyrienskies.eureka.path.ClientPathState
 import org.valkyrienskies.eureka.path.PathMessages
-import org.valkyrienskies.mod.client.ShipGamepad
+import org.valkyrienskies.eureka.client.ShipGamepad
 import kotlin.math.max
 
 /**
@@ -211,7 +211,7 @@ object PathKeybinds {
         // half of that button and drained before handleKeybinds can fire it. Crouching is what arms the layer,
         // which is exactly the chord it has always meant: crouch says "the next press is for the ship".
         //
-        // The D-pad half reads the hardware itself (VS2's ShipGamepad) rather than any keybind, so it works
+        // The D-pad half reads the hardware itself (ShipGamepad) rather than any keybind, so it works
         // whether or not a controller mod deigns to deliver emulated presses: crouched and on foot, D-Left
         // signs on the crew, D-Up follows the ship you're looking at, D-Down orders the broadside. Standing
         // only --

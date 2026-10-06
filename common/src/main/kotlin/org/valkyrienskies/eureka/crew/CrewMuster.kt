@@ -15,7 +15,8 @@ import org.joml.primitives.AABBdc
 import org.valkyrienskies.core.api.ships.LoadedServerShip
 import org.valkyrienskies.eureka.cannon.GunLabels
 import org.valkyrienskies.eureka.follow.ShipCrew
-import org.valkyrienskies.mod.common.entity.ShipMountingEntity
+import org.valkyrienskies.eureka.entity.DeckSeat
+import org.valkyrienskies.mod.common.getShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
 import org.valkyrienskies.mod.util.logger
 import org.valkyrienskies.eureka.path.PathMessages
@@ -317,7 +318,7 @@ object CrewMuster {
             }
             // Aboard means inside the hull box -- or seated on one of THIS ship's gun seats, which pins them
             // to the ship more directly than any position test can.
-            val seated = (villager.vehicle as? ShipMountingEntity)?.driveShipId == shipId
+            val seated = (villager.vehicle as? DeckSeat)?.driveShipId == shipId
             if (!seated && !deck.contains(villager.x, villager.y, villager.z)) {
                 continue
             }

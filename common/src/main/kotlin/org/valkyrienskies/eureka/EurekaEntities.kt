@@ -11,6 +11,7 @@ import net.minecraft.world.entity.MobCategory
 import net.minecraft.world.level.Level
 import org.valkyrienskies.eureka.bottle.ThrownShipBottle
 import org.valkyrienskies.eureka.cannon.CannonShot
+import org.valkyrienskies.eureka.entity.DeckSeat
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.eureka.registry.RegistrySupplier
 
@@ -73,6 +74,15 @@ object EurekaEntities {
             // Iron does not mind lava, and neither should a shot that flies over a lake of it.
             .fireImmune()
             .byName("cannon_shot")
+
+    /**
+     * The seat a gunner sits in behind his cannon, or a player who sat down on deck. It drives itself with the ship, so it is small and never
+     * collides; see [DeckSeat].
+     */
+    val DECK_SEAT: RegistrySupplier<EntityType<DeckSeat>> =
+        (::DeckSeat category MobCategory.MISC)
+            .sized(0.3f, 0.3f)
+            .byName("deck_seat")
 
     fun register() {
         ENTITIES.applyAll()

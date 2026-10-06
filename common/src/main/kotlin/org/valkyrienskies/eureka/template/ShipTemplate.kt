@@ -37,7 +37,7 @@ import org.valkyrienskies.eureka.crew.GunnerMounts
 import org.valkyrienskies.eureka.pirate.PirateCrewTypes
 import org.valkyrienskies.eureka.pirate.PirateShips
 import org.valkyrienskies.mod.common.entity.ShipMountingEntity
-import org.valkyrienskies.mod.compat.voxy.VoxyLodRefresh
+import org.valkyrienskies.eureka.entity.DeckSeat
 import org.valkyrienskies.mod.util.StructureTemplateFillFromVoxelSet
 
 /**
@@ -346,9 +346,9 @@ object ShipTemplate {
                 // exclusion above exists to keep OUT of the template, smuggled back in inside his chair.
                 // Placement is non-recursive today, so the copy stays inert -- but "inert duplicate villager
                 // NBT" is a duplication bug waiting on a vanilla change, not a feature. (Chunk saves are a
-                // different channel: MixinGunnerSeatPersists deliberately keeps occupied seats across a
+                // different channel: DeckSeat.shouldBeSaved deliberately keeps occupied seats across a
                 // relog, and nothing here touches that.)
-                it !is ShipMountingEntity
+                it !is ShipMountingEntity && it !is DeckSeat
         }
 
         // The gun crews are somewhere else entirely, and that is why the first authored hull came back
@@ -547,22 +547,6 @@ object ShipTemplate {
         }
 
         val size = template.size
-
-        // Voxy voxelises a world chunk when it ingests it and never revisits it, so blocks written into
-        // chunks no client is tracking never reach the LOD. A pirate site regenerating a day's sail away
-        // is the case that matters: from a distance the anchorage reads as open water, and the hull only
-        // exists once you are close enough to load the real chunks -- which arrives as a collision rather
-        // than a sighting. Assembly and disassembly already send this signal; placing a template is the
-        // third way a hull appears in the world, and it went without.
-        val minChunkX = at.x shr 4
-        val minChunkZ = at.z shr 4
-        val maxChunkX = (at.x + size.x - 1) shr 4
-        val maxChunkZ = (at.z + size.z - 1) shr 4
-        for (chunkX in minChunkX..maxChunkX) {
-            for (chunkZ in minChunkZ..maxChunkZ) {
-                VoxyLodRefresh.mark(level, chunkX, chunkZ)
-            }
-        }
 
         return Placed(id, at, BlockPos(size.x, size.y, size.z))
     }

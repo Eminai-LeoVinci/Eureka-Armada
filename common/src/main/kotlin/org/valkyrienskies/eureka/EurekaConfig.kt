@@ -1639,15 +1639,6 @@ object EurekaConfig {
                 "losing steam)."
         )
         var cannonArmorPiercingStrikePercents = "100,75,50,25"
-
-        @JsonSchema(
-            description = "Whether a cannonball exploding against WORLD terrain pushes the crater into " +
-                "Voxy's distant LODs right away (ship hits never do; disassembly already has its own " +
-                "path). Costs a chunk re-ingest per touched chunk per volley, so it is a toggle -- flip " +
-                "it live with /armada cannons voxy-lod. Does nothing when Voxy is not installed. " +
-                "Default true."
-        )
-        var cannonballVoxyLodUpdates = true
         // endregion
 
         @JsonSchema(

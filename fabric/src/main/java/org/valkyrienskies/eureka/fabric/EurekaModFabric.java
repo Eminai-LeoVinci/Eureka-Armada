@@ -14,6 +14,7 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
 import net.minecraft.client.renderer.entity.EntityRenderers;
@@ -27,6 +28,8 @@ import org.valkyrienskies.eureka.EurekaBlocks;
 import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.eureka.EurekaConfigLoader;
 import org.valkyrienskies.eureka.EurekaEntities;
+import org.valkyrienskies.eureka.client.ShipGamepad;
+import org.valkyrienskies.eureka.ship.ShipKeepActive;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
@@ -61,6 +64,7 @@ import org.valkyrienskies.eureka.ship.ShipFoundering;
 import org.valkyrienskies.eureka.ship.ShipWreck;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
+import org.valkyrienskies.eureka.command.KeepActiveCommand;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
 import org.valkyrienskies.eureka.registry.CreativeTabs;
 import org.valkyrienskies.mod.fabric.common.ValkyrienSkiesModFabric;
@@ -92,9 +96,10 @@ public class EurekaModFabric implements ModInitializer {
 
         // "/vs get-ship-weight <ship> <floater|balloon>" + "/vs eureka-assembler <floater|balloon> <bool>"
         // -- SERVER commands; Brigadier merges these "vs" literals into VS2's root, and VS2's
-        // vs_command_passthrough mixin lets the client send them.
+        // Armada's MixinClientCommandInternals lets the client send them.
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             ShipWeightCommand.INSTANCE.register(dispatcher);
+            KeepActiveCommand.INSTANCE.register(dispatcher);
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
             // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
             // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
@@ -169,6 +174,12 @@ public class EurekaModFabric implements ModInitializer {
         // does, which is the one moment both are true. See PirateWorldgen.
         ServerLifecycleEvents.SERVER_STARTING.register(PirateWorldgen.INSTANCE::apply);
 
+        // Keep Active: hand every kept-active ship to a watching player and force-load the chunks under it
+        // (see ShipKeepActive). Released before vanilla drains chunks on shutdown.
+        ServerTickEvents.START_SERVER_TICK.register(ShipKeepActive::tick);
+        ServerLifecycleEvents.SERVER_STOPPING.register(ShipKeepActive::clearAll);
+
+
         // Ship paths are held in singletons, which in single player outlive the world -- quitting to the title
         // screen stops the server but leaves them standing. Dropping them here is what makes logging back in look
         // like a fresh load, which is the whole basis of the saved-binding resume. See ShipPaths.reset.
@@ -202,6 +213,10 @@ public class EurekaModFabric implements ModInitializer {
         public void onInitializeClient() {
             EurekaMod.initClient();
 
+            // The controller is read straight off the hardware; poll it once, before anything reads it this tick.
+            ClientTickEvents.START_CLIENT_TICK.register(client -> ShipGamepad.INSTANCE.poll());
+            // A gun seat draws nothing: the gunner sitting in it is what you see.
+            EntityRenderers.register(EurekaEntities.INSTANCE.getDECK_SEAT().get(), NoopRenderer::new);
             // Reading a blueprint is a purely client-side affair -- the page travels whole in the item's own
             // component -- but the item lives in :common, which cannot name a Screen. Same indirection as
             // PathMessages: common declares the hook, the client entrypoint fills it in.

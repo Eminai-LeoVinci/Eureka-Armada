@@ -14,7 +14,7 @@ import org.valkyrienskies.eureka.item.CannonballItem
 import org.valkyrienskies.eureka.item.ShipBottleItem
 import org.valkyrienskies.eureka.registry.DeferredRegister
 import org.valkyrienskies.eureka.registry.RegistrySupplier
-import org.valkyrienskies.mod.common.itemProps
+import org.valkyrienskies.eureka.registry.itemProps
 
 @Suppress("unused")
 object EurekaItems {

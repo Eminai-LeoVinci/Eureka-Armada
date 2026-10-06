@@ -4,7 +4,9 @@
   "compatibilityLevel": "JAVA_17",
   "mixins": [
     "MixinExplosionPirateHelm",
-    "MixinNoSnowOnShips"
+    "MixinNoSnowOnShips",
+    "MixinEntityTransitionHold",
+    "MixinRecipeManager"
   ],
   "client": [
     "client.PlayerEntityModelMixin"

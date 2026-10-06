@@ -507,7 +507,7 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
 
     /**
      * The bumpers walk the category tab strip, exactly as clicking the tabs does -- a view change on this
-     * client and nothing else. Read straight off the hardware (VS2's ShipGamepad), because a controller
+     * client and nothing else. Read straight off the hardware (ShipGamepad), because a controller
      * mod's screen handling never reaches a custom screen. Submarines join the cycle when their tab is
      * live.
      */
@@ -516,14 +516,14 @@ class ShipHelmScreen(handler: ShipHelmScreenMenu, playerInventory: Inventory, te
         // D-pad right opens the book -- "choose", in the crew screens' pad language, and the one control
         // on this menu a pad player reaches for. Drained so the press cannot double as a deck gesture the
         // moment the screen closes underneath it.
-        if (org.valkyrienskies.mod.client.ShipGamepad.dpadRightPressed() && crewBookButton.active) {
+        if (org.valkyrienskies.eureka.client.ShipGamepad.dpadRightPressed() && crewBookButton.active) {
             minecraft?.gameMode?.handleInventoryButtonClick(menu.containerId, ShipHelmScreenMenu.BUTTON_CREW_BOOK)
-            org.valkyrienskies.mod.client.ShipGamepad.drainPresses()
+            org.valkyrienskies.eureka.client.ShipGamepad.drainPresses()
             return
         }
         val step = when {
-            org.valkyrienskies.mod.client.ShipGamepad.bumperRightPressed() -> 1
-            org.valkyrienskies.mod.client.ShipGamepad.bumperLeftPressed() -> -1
+            org.valkyrienskies.eureka.client.ShipGamepad.bumperRightPressed() -> 1
+            org.valkyrienskies.eureka.client.ShipGamepad.bumperLeftPressed() -> -1
             else -> return
         }
         val tabs = mutableListOf(ControlProfile.BOAT, ControlProfile.AIRSHIP)

@@ -1,4 +1,6 @@
 package org.valkyrienskies.eureka.blockentity
+import org.valkyrienskies.eureka.ship.TransitionHold
+import org.valkyrienskies.eureka.ship.keepActive
 
 import org.valkyrienskies.eureka.util.nbt.*
 
@@ -234,7 +236,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // Keep Active from the moment a ship is nominated to lead, before any child has bound: a parent that
         // falls out of simulation strands the formation, and the point of marking one is that ships are about to
         // be locked to it. ArmadaBindings.bindChild does the same for both ends of each bond.
-        ship.settings.keepActive = true
+        ship.keepActive = true
         ArmadaSelection.select(player.uuid, ship.id)
         armadaFeedback(player, "Marked as armada parent. Tick Armada Child at another ship's helm to add it.")
     }
@@ -282,9 +284,9 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
 
     // Keep-active (VS2 ShipSettings), toggled from the helm menu's "Keep Active?" checkbox -- equivalent to
     // `/vs set-keep-active <ship> <bool>` but usable by players without command access. Server-side only.
-    val keepActive: Boolean get() = ship?.settings?.keepActive ?: false
+    val keepActive: Boolean get() = ship?.keepActive ?: false
     fun setKeepActive(value: Boolean) {
-        ship?.let { it.settings.keepActive = value }
+        ship?.let { it.keepActive = value }
     }
 
     // Ship stats surfaced to the helm menu (synced to the client via DataSlots in ShipHelmScreenMenu).
@@ -1376,7 +1378,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // clock when the world-side work is finished rather than when it began.
         val holdAABB = worldFootprint(blockPositions)
         if (holdEntities) {
-            EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
+            TransitionHold.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
         }
 
         // This wheel becomes the ship's crew station -- "the first helm wins", stated as the one that built the
@@ -1393,7 +1395,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         val builtShip = assembled.ship
 
         if (holdEntities) {
-            EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
+            TransitionHold.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
         }
 
         // Where that wheel ended up, so the roster can be found in one block-entity lookup instead of a walk
@@ -1420,7 +1422,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
             // is within vanilla simulation distance, so without this a ship left cruising, hovering or holding
             // altitude quietly stops the moment you walk away and is found wherever it stalled. Turn it off per
             // ship from the helm or `/vs set-keep-active` if you'd rather a parked hull cost nothing.
-            loadedShip.settings.keepActive = true
+            loadedShip.keepActive = true
             val control = EurekaShipControl.getOrCreate(loadedShip)
             // Set helms (>= 1 for any real ship) first so the deleteIfEmpty() in the
             // remaining setters can't drop the attachment mid-update when a count is 0.
@@ -1686,8 +1688,8 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         // longer) AFTER it, in case the world-side blocks need an extra moment to register. World-AABB keyed
         // because unfillShip removes the ship (its id can't be used); the box is captured now, while the ship is
         // still valid, and reused for both arms.
-        val holdAABB = EntityShipCollisionUtils.worldAABBForShip(ship)
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
+        val holdAABB = TransitionHold.worldAABBForShip(ship)
+        TransitionHold.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
 
         // The teardown is really happening now -- past the canDisassemble gate, so a deferred one waiting on
         // a ship to come to rest does not boot anybody early. The wheel is about to come back out into the
@@ -1717,7 +1719,7 @@ class ShipHelmBlockEntity(pos: BlockPos, state: BlockState) :
         }
         // ship.die() TODO i think we do need this no? or autodetecting on all air
 
-        EntityShipCollisionUtils.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
+        TransitionHold.markWorldFreeze(level, holdAABB, 40L) // ~2s in TICKS -- 1.21.1 markWorldFreeze is tick-based, not nanos
         shouldDisassembleWhenPossible = false
 
         if (masterStamp != null) {

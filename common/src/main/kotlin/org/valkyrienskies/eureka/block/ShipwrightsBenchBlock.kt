@@ -32,7 +32,7 @@ import org.valkyrienskies.eureka.EurekaProperties.BENCH_PART
 import org.valkyrienskies.eureka.crew.CrewEggs
 import org.valkyrienskies.eureka.shipwright.ShipwrightProfession
 import org.valkyrienskies.eureka.shipwright.ShipwrightTalk
-import org.valkyrienskies.mod.common.blockProps
+import org.valkyrienskies.eureka.registry.blockProps
 import org.valkyrienskies.mod.common.executeIf
 
 /**
