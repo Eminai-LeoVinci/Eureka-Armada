@@ -7,15 +7,19 @@ import net.minecraft.world.level.biome.Biome;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.valkyrienskies.eureka.EurekaConfig;
 import org.valkyrienskies.mod.common.VS2ChunkAllocator;
 
 /**
- * Weather does not snow on the shipyard.
+ * Weather does not snow on the shipyard while the server config's {@code snowOnShips} is off ({@code /vs snow-accumulation off}).
  *
  * <p>A ship's blocks live in shipyard chunks, and those chunks block-tick like any other -- so every
  * snowfall quietly stacked layers onto every assembled deck in the dimension, which the player then met
  * as a white ship after any long flight through a storm (and, before the helm probe learned better, as a
  * sunken helmsman). Snow belongs to the world; a ship only carries what her captain put aboard.
+ *
+ * <p>Settled snow is harmless on this version (flush with the deck, it never holds a ship back), so it is a choice
+ * rather than a fix: {@code /vs snow-accumulation} flips it and {@code /vs desnow} clears what has settled (see SnowCommands).
  *
  * <p>Ice is deliberately left alone: shouldFreeze is gated on water the ship actually carries, which is
  * cargo like anything else.
@@ -31,7 +35,8 @@ public abstract class MixinNoSnowOnShips {
         )
     )
     private boolean vs_eureka$noSnowOnShips(final Biome biome, final LevelReader reader, final BlockPos pos) {
-        if (VS2ChunkAllocator.INSTANCE.isChunkInShipyardCompanion(pos.getX() >> 4, pos.getZ() >> 4)) {
+        if (!EurekaConfig.SERVER.getSnowOnShips()
+            && VS2ChunkAllocator.INSTANCE.isChunkInShipyardCompanion(pos.getX() >> 4, pos.getZ() >> 4)) {
             return false;
         }
         return biome.shouldSnow(reader, pos);

@@ -2552,6 +2552,12 @@ object EurekaConfig {
 
         // endregion
 
+        @JsonSchema(
+            description = "Whether snow settles on ships in snowy weather, like on any other ground. Off keeps every " +
+                "ship clear of it. Flip it live with /vs snow-accumulation on|off; /vs desnow clears what has " +
+                "already settled. Default true."
+        )
+        var snowOnShips = true
 
         // region Ocean waves
         @JsonSchema(

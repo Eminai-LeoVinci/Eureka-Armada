@@ -75,6 +75,7 @@ import org.valkyrienskies.eureka.ship.ShipWreck;
 import org.valkyrienskies.eureka.command.ShipTemplateCommand;
 import org.valkyrienskies.eureka.command.ShipWeightCommand;
 import org.valkyrienskies.eureka.command.KeepActiveCommand;
+import org.valkyrienskies.eureka.command.SnowCommands;
 import org.valkyrienskies.eureka.fabric.registry.FuelRegistryImpl;
 import org.valkyrienskies.eureka.registry.CreativeTabs;
 import org.valkyrienskies.mod.fabric.common.ValkyrienSkiesModFabric;
@@ -110,6 +111,7 @@ public class EurekaModFabric implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             ShipWeightCommand.INSTANCE.register(dispatcher);
             KeepActiveCommand.INSTANCE.register(dispatcher);
+            SnowCommands.INSTANCE.register(dispatcher);
             EurekaAssemblerCommand.INSTANCE.register(dispatcher);
             // "/vs template save|load|list" -- DEV ONLY, remove before release. Proves the ship
             // serialization round trip that blueprints, bottled ships and pirate worldgen all rest on.
