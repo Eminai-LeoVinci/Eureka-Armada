@@ -29,8 +29,8 @@ import org.valkyrienskies.eureka.fabric.client.crew.HoldLabelClient;
  * screen, and the text cannot end up painted over a tooltip.
  *
  * <p>Filtered by MENU rather than by screen class, so it covers single chests, double chests and barrels --
- * all of which open a {@code ChestMenu} -- and nothing else. Drawn right-aligned on the title row, opposite
- * the container's own name.
+ * all of which open a {@code ChestMenu} -- and nothing else. The number follows the container's own name; the
+ * tags are a Restock dropdown in the title row's top right corner (see {@link HoldCheckboxes}).
  *
  * <p>Nothing is drawn unless the server has sent a label for THIS container id, which it only does for a box
  * aboard an assembled ship. A chest on land looks exactly as it always has.
@@ -64,12 +64,9 @@ public abstract class MixinContainerScreenHoldLabel {
     @Shadow
     public abstract AbstractContainerMenu getMenu();
 
-    /** Matches vanilla's own title inset, so the two ends of the row line up. */
+    /** Is the Restock dropdown open? Per screen, so every chest opens with it shut. */
     @Unique
-    private static final int VS_EUREKA_RIGHT_MARGIN = 8;
-
-    @Unique
-    private static final int VS_EUREKA_TITLE_Y = 6;
+    private boolean vs_eureka$tagsOpen;
 
     /** A space's worth of air between vanilla's title and the number, so the two do not touch. */
     @Unique
@@ -105,47 +102,79 @@ public abstract class MixinContainerScreenHoldLabel {
         final int afterTitle = this.titleLabelX + font.width(self.getTitle()) + VS_EUREKA_TITLE_GAP;
         graphics.drawString(font, label, afterTitle, this.titleLabelY, VS_EUREKA_LABEL_COLOUR, false);
 
+        // mouseX/mouseY are screen space; the dropdown is laid out in panel space.
         HoldCheckboxes.render(
-            graphics, font, this.imageWidth, VS_EUREKA_TITLE_Y,
-            HoldLabelClient.INSTANCE.tagSetFor(menu.containerId)
+            graphics, font, this.imageWidth, HoldLabelClient.INSTANCE.tagSetFor(menu.containerId),
+            this.vs_eureka$tagsOpen, mouseX - this.leftPos, mouseY - this.topPos
         );
     }
 
+    /** Is this screen a numbered hold (a box aboard an assembled ship), the only kind that shows the dropdown? */
+    @Unique
+    private boolean vs_eureka$isHold() {
+        final AbstractContainerMenu menu = this.getMenu();
+        return menu instanceof ChestMenu && HoldLabelClient.INSTANCE.labelFor(menu.containerId) != null;
+    }
+
     /**
-     * A click on one of the three boxes.
+     * Clicks on the Restock dropdown: the button opens and shuts it, a row of the open list ticks that tag.
      *
-     * Injected cancellable at HEAD so a tick never also lands on whatever is behind it, and gated on the
-     * same "is this a numbered hold" test the drawing uses -- an ordinary chest on land has no boxes and
-     * therefore nothing here can consume its clicks.
+     * Injected cancellable at HEAD so a click on the dropdown never also lands on the slot behind it, and gated on
+     * the same "is this a numbered hold" test the drawing uses -- an ordinary chest on land has no dropdown and
+     * therefore nothing here can consume its clicks. A click anywhere else shuts an open list and carries on to the
+     * slot as usual.
      *
-     * Mouse coordinates are SCREEN space and the boxes are laid out in PANEL space, so the panel origin is
+     * Mouse coordinates are SCREEN space and the dropdown is laid out in PANEL space, so the panel origin is
      * subtracted before asking. That is the one conversion, and it is why the geometry lives in one place.
      */
     @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true)
     private void vs_eureka$clickHoldTag(final MouseButtonEvent event, final boolean doubleClick,
         final CallbackInfoReturnable<Boolean> cir) {
-        if (event.button() != 0) {
+        if (event.button() != 0 || !this.vs_eureka$isHold()) {
             return;
         }
         final double mouseX = event.x();
         final double mouseY = event.y();
-        final AbstractContainerMenu menu = this.getMenu();
-        if (!(menu instanceof ChestMenu) || HoldLabelClient.INSTANCE.labelFor(menu.containerId) == null) {
+        final Font font = Minecraft.getInstance().font;
+        final double x = mouseX - this.leftPos;
+        final double y = mouseY - this.topPos;
+        if (HoldCheckboxes.onButton(font, this.imageWidth, x, y)) {
+            this.vs_eureka$tagsOpen = !this.vs_eureka$tagsOpen;
+            vs_eureka$click();
+            cir.setReturnValue(true);
             return;
         }
-        final HoldTag tag = HoldCheckboxes.hit(
-            Minecraft.getInstance().font, this.imageWidth, VS_EUREKA_TITLE_Y,
-            mouseX - this.leftPos, mouseY - this.topPos
-        );
-        if (tag == null) {
+        if (!this.vs_eureka$tagsOpen) {
             return;
         }
-        HoldLabelClient.INSTANCE.toggle(menu.containerId, tag);
+        if (!HoldCheckboxes.inPanel(font, this.imageWidth, x, y)) {
+            this.vs_eureka$tagsOpen = false;
+            return;
+        }
+        final HoldTag tag = HoldCheckboxes.rowAt(font, this.imageWidth, x, y);
+        if (tag != null) {
+            HoldLabelClient.INSTANCE.toggle(this.getMenu().containerId, tag);
+            vs_eureka$click();
+        }
+        cir.setReturnValue(true);
+    }
+
+    /** No tooltip for the item hidden under the open list. */
+    @Inject(method = "renderTooltip", at = @At("HEAD"), cancellable = true)
+    private void vs_eureka$noTooltipUnderTags(final GuiGraphics graphics, final int mouseX, final int mouseY,
+        final CallbackInfo ci) {
+        if (this.vs_eureka$tagsOpen && this.vs_eureka$isHold() && HoldCheckboxes.inPanel(
+            Minecraft.getInstance().font, this.imageWidth, mouseX - this.leftPos, mouseY - this.topPos)) {
+            ci.cancel();
+        }
+    }
+
+    @Unique
+    private static void vs_eureka$click() {
         Minecraft.getInstance().getSoundManager().play(
             net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(
                 net.minecraft.sounds.SoundEvents.UI_BUTTON_CLICK, 1.0F
             )
         );
-        cir.setReturnValue(true);
     }
 }
