@@ -1,11 +1,15 @@
 package org.valkyrienskies.eureka.crew
 
 import net.minecraft.core.BlockPos
+import net.minecraft.core.GlobalPos
+import net.minecraft.core.registries.BuiltInRegistries
+import net.minecraft.world.entity.ai.memory.MemoryModuleType
 import net.minecraft.network.chat.Component
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.npc.Villager
+import net.minecraft.world.entity.npc.VillagerProfession
 import net.minecraft.world.level.GameRules
 import net.minecraft.world.phys.AABB
 import org.joml.Matrix4d
@@ -18,6 +22,7 @@ import org.valkyrienskies.eureka.follow.ShipCrew
 import org.valkyrienskies.eureka.entity.DeckSeat
 import org.valkyrienskies.mod.common.getShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
+import org.valkyrienskies.mod.common.toWorldCoordinates
 import org.valkyrienskies.mod.util.logger
 import org.valkyrienskies.eureka.path.PathMessages
 import java.util.UUID
@@ -94,6 +99,7 @@ object CrewMuster {
         }
 
         val berthing = Berthing(level, ship, station)
+        val wheel = BlockPos.of(station)
         var moved = 0
         var returned = 0
         var rebuilt = 0
@@ -114,6 +120,7 @@ object CrewMuster {
                 // Already where they belong: nothing to move, but this is still the moment their name and
                 // their written copy are known to be current, so both are brought up to date.
                 answerTo(aboard, berth)
+                employAboard(level, ship, aboard, wheel)
                 CrewSnapshot.capture(aboard)?.let { ledger.updateSnapshot(berth.villager, it) }
                 ledger.markAboard(berth.villager)
                 continue
@@ -125,6 +132,7 @@ object CrewMuster {
             if (live != null) {
                 live.teleportTo(spot.x, spot.y, spot.z)
                 answerTo(live, berth)
+                employAboard(level, ship, live, wheel)
                 CrewSnapshot.capture(live)?.let { ledger.updateSnapshot(berth.villager, it) }
                 ledger.markAboard(berth.villager)
                 moved++
@@ -137,6 +145,7 @@ object CrewMuster {
                 continue
             }
             val restored = CrewSnapshot.restore(level, snapshot, spot)
+            if (restored != null) employAboard(level, ship, restored, wheel)
             if (restored == null) {
                 lost++
             } else if (berth.ashore) {
@@ -541,10 +550,20 @@ object CrewMuster {
         /** Two blocks of clear air here: enough for a villager to be put down without suffocating. */
         private fun roomy(pos: BlockPos): Boolean = clear(pos) && clear(pos.above())
 
+        /**
+         * Nothing solid in this shipyard block, nor in the WORLD where it sits. A hull resting low in shallow water
+         * can have seabed inside its lower deck, and a crewman put down there suffocated in it at once.
+         */
+        private fun clearInWorld(pos: BlockPos): Boolean {
+            val w = ship.shipToWorld.transformPosition(Vector3d(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5))
+            val world = BlockPos.containing(w.x, w.y, w.z)
+            return level.getBlockState(world).getCollisionShape(level, world).isEmpty
+        }
+
         private fun spokenFor(pos: BlockPos): Boolean = (taken[pos] ?: 0) > 0
 
         private fun clear(pos: BlockPos): Boolean =
-            level.getBlockState(pos).getCollisionShape(level, pos).isEmpty
+            level.getBlockState(pos).getCollisionShape(level, pos).isEmpty && clearInWorld(pos)
 
         private fun standable(pos: BlockPos): Boolean =
             !level.getBlockState(pos.below()).getCollisionShape(level, pos.below()).isEmpty
@@ -570,6 +589,47 @@ object CrewMuster {
         if (berth.name.isEmpty() || CrewNames.displayName(villager) == berth.name) return
         villager.customName = Component.literal(berth.name)
     }
+
+    /**
+     * Give a crew member their job back aboard this hull: a crewman at this ship's wheel, any other trade at the
+     * nearest workstation of its kind on this ship.
+     *
+     * A villager remembers its workstation by block position, and every assembly moves them all: a bottled ship
+     * comes back as a new hull, and an assembly moves the blocks into the shipyard. The memory then points at a
+     * workstation that is gone, the brain drops it, and the whole crew walked off to sign on again (the crewmen to
+     * the wheel; a fisherman with nothing earned even lost his trade until he found a barrel). Pointing the memory
+     * at a workstation on this hull, and taking the berth that costs, leaves them where they stand. A villager with
+     * no trade yet still walks to a workstation to take one, as always.
+     *
+     * Workstations are looked up from their WORLD position: VS2 measures every job-site search that way, so a
+     * search centred on a shipyard address finds nothing. If none is filed yet, nothing changes and the villager
+     * finds one on their own.
+     */
+    private fun employAboard(level: ServerLevel, ship: LoadedServerShip, villager: Villager, wheel: BlockPos) {
+        val profession = villager.villagerData.profession
+        if (profession == VillagerProfession.NONE || profession == VillagerProfession.NITWIT) return
+        val jobSite = profession.heldJobSite()
+        val held = villager.brain.getMemory(MemoryModuleType.JOB_SITE).orElse(null)
+        if (held != null && held.dimension() == level.dimension() && level.getShipManagingPos(held.pos())?.id == ship.id &&
+            level.poiManager.exists(held.pos(), jobSite)
+        ) return
+        val crewman = BuiltInRegistries.VILLAGER_PROFESSION.getResourceKey(profession).orElse(null) ==
+            CrewProfession.PROFESSION_KEY
+        val taken = if (crewman) {
+            val near = level.toWorldCoordinates(wheel)
+            level.poiManager.take(jobSite, { _, pos -> pos == wheel }, BlockPos.containing(near.x, near.y, near.z), 4)
+        } else {
+            level.poiManager.take(
+                jobSite, { _, pos -> level.getShipManagingPos(pos)?.id == ship.id }, villager.blockPosition(), JOB_SEARCH
+            )
+        }
+        if (taken.isEmpty) return
+        villager.brain.setMemory(MemoryModuleType.JOB_SITE, GlobalPos.of(level.dimension(), taken.get()))
+        villager.brain.eraseMemory(MemoryModuleType.POTENTIAL_JOB_SITE)
+    }
+
+    /** How far from where a crew member stands to look for a workstation of their trade on the hull, in blocks. */
+    private const val JOB_SEARCH = 48
 
     /** The living villager with this id anywhere on the server, or null if they cannot be reached. */
     fun findAnywhere(server: MinecraftServer, id: UUID): Villager? {

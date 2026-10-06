@@ -35,8 +35,10 @@ import org.valkyrienskies.eureka.client.ShipCameraZoom;
 import org.valkyrienskies.eureka.client.HelmCamera;
 import org.valkyrienskies.eureka.client.CameraMemory;
 import org.valkyrienskies.eureka.ship.ShipKeepActive;
+import org.valkyrienskies.eureka.ship.ShipCombat;
 import org.valkyrienskies.eureka.ship.ShipSpawnGrace;
 import org.valkyrienskies.eureka.ship.ShipTeleportCarry;
+import org.valkyrienskies.eureka.crew.CrewOverboard;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
@@ -142,6 +144,8 @@ public class EurekaModFabric implements ModInitializer {
         // The armada collides with the world through the weld itself, so there is no per-tick collision solver here.
         ServerTickEvents.END_WORLD_TICK.register(level -> {
             ArmadaBindings.INSTANCE.reconcile(level);
+            // Crewman overboard in peacetime: put him back on his deck (see CrewOverboard).
+            CrewOverboard.INSTANCE.tick(level);
             ArmadaNetworkingFabric.INSTANCE.broadcastBonds(level);
             // Ship paths: re-arm any ship whose saved route binding outlived its follower (a world reload, or a
             // ship that drifted out of simulation and back), then advance any recording (sampling the keel,
@@ -189,6 +193,8 @@ public class EurekaModFabric implements ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register(ShipTeleportCarry::tick);
         ServerLifecycleEvents.SERVER_STOPPING.register(ShipKeepActive::clearAll);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            CrewOverboard.clear();
+            ShipCombat.clear();
             ShipTeleportCarry.clear();
             ShipSpawnGrace.clear();
         });

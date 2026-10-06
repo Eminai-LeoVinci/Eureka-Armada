@@ -13,6 +13,12 @@ import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.network.chat.Component
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.EntityType
+import net.minecraft.world.entity.npc.Villager
+import net.minecraft.world.entity.npc.VillagerData
+import net.minecraft.world.entity.npc.VillagerProfession
+import net.minecraft.world.entity.npc.VillagerType
+import net.minecraft.world.level.Level
 import net.minecraft.world.item.ItemStack
 import org.lwjgl.glfw.GLFW
 import org.valkyrienskies.eureka.EurekaItems
@@ -2264,15 +2270,23 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
      * practice means a snapshot that has gone stale under the player.
      */
     private fun drawHead(guiGraphics: GuiGraphics, x: Int, y: Int, row: CrewManifest.Row) {
-        val villager = minecraft?.level?.getEntity(row.entityId) as? LivingEntity
         // The flat skin head while the info card is open: the live-entity render carries its own depth
         // (translate z ~1000) and punches straight through the card overlay, which is drawn at panel
         // depth -- eight heads floating over the character sheet. The flat head has ordinary depth and
         // sits under the card like every other row element.
-        if (villager == null || detail != null) {
+        if (detail != null) {
             drawHeadFromSkin(guiGraphics, x, y, row.villagerType, row.profession)
             return
         }
+        // A crewman this client doesn't have loaded (overboard, far away, unloaded) is drawn as a stand-in villager
+        // of the same type, profession and rank. The flat skin head was the old fallback, and under Fresh Animations
+        // its face is blank skin (FA keeps the eyes elsewhere on the sheet): crewmen with no eyes.
+        val villager = minecraft?.level?.getEntity(row.entityId) as? LivingEntity
+            ?: standIn(row)
+            ?: run {
+                drawHeadFromSkin(guiGraphics, x, y, row.villagerType, row.profession)
+                return
+            }
         // 1.20.1 anchors by the FEET line and draws the WHOLE entity unclipped -- the 1.21.1 form took a
         // rect and clipped to it. Without the clip every crewman standing on a loaded ship paraded his
         // torso down the roster. So: scissor to the icon box (absolute coords -- this is a plain Screen,
@@ -2284,11 +2298,46 @@ class CrewManifestScreen private constructor(private var snapshot: CrewManifest.
         // differences). Any absolute coordinate here saturates the angle and cranes the head into a
         // corner. Zero offset, zero angle: dead ahead, matching the 1.21.x tabs.
         guiGraphics.enableScissor(x, y, x + ICON_SIZE, y + ICON_SIZE)
-        InventoryScreen.renderEntityInInventoryFollowsMouse(
-            guiGraphics, x + ICON_SIZE / 2, y + ICON_SIZE + HEAD_FEET_DROP,
-            HEAD_SCALE, 0f, 0f, villager
-        )
+        // Seated gunners would otherwise be turned to the ship's heading by VS2's mount render; see DeckSeat.
+        DeckSeat.drawingPortrait = true
+        try {
+            InventoryScreen.renderEntityInInventoryFollowsMouse(
+                guiGraphics, x + ICON_SIZE / 2, y + ICON_SIZE + HEAD_FEET_DROP,
+                HEAD_SCALE, 0f, 0f, villager
+            )
+        } finally {
+            DeckSeat.drawingPortrait = false
+        }
         guiGraphics.disableScissor()
+    }
+
+    /** Stand-in villagers for crewmen not loaded on this client, one per look, made once per world. */
+    private val standIns = HashMap<String, Villager>()
+    private var standInLevel: Level? = null
+
+    /** A client-only villager that looks like [row]'s crewman, for drawing only. Never added to the world. */
+    private fun standIn(row: CrewManifest.Row): Villager? {
+        val level = minecraft?.level ?: return null
+        if (standInLevel !== level) {
+            standIns.clear()
+            standInLevel = level
+        }
+        val key = row.villagerType + "|" + row.profession + "|" + row.level
+        standIns[key]?.let { return it }
+        val type = ResourceLocation.tryParse(row.villagerType)
+            ?.let { BuiltInRegistries.VILLAGER_TYPE.getOptional(it).orElse(null) }
+            ?: VillagerType.PLAINS
+        val profession = if (row.profession == CrewManifest.NO_PROFESSION) {
+            VillagerProfession.NONE
+        } else {
+            ResourceLocation.tryParse(row.profession)
+                ?.let { BuiltInRegistries.VILLAGER_PROFESSION.getOptional(it).orElse(null) }
+                ?: VillagerProfession.NONE
+        }
+        val villager = EntityType.VILLAGER.create(level) ?: return null
+        villager.villagerData = VillagerData(type, profession, row.level.coerceIn(1, 5))
+        standIns[key] = villager
+        return villager
     }
 
     /**

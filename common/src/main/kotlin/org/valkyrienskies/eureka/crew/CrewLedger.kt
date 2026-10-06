@@ -182,6 +182,9 @@ class CrewLedger : SavedData() {
     /** The crew [villager] already serves on, or null if they are nobody's. */
     fun crewOf(villager: UUID): UUID? = byVillager[villager]
 
+    /** Every villager in a berth, across every crew. A live view; do not modify. */
+    fun berthedVillagers(): Set<UUID> = byVillager.keys
+
     /** What crew [id] is called, or null if there is no such crew. */
     fun nameOf(id: UUID): String? = crews[id]?.name
 

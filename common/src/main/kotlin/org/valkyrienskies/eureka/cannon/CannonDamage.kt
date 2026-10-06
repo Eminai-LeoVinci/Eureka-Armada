@@ -10,6 +10,7 @@ import net.minecraft.world.level.gameevent.GameEvent
 import org.valkyrienskies.eureka.EurekaConfig
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.mod.common.getShipManagingPos
+import org.valkyrienskies.eureka.ship.ShipCombat
 import kotlin.math.floor
 
 /**
@@ -61,6 +62,7 @@ object CannonDamage {
      */
     fun punch(level: ServerLevel, origin: BlockPos, count: Int, effects: Int = Int.MAX_VALUE): Int {
         if (count <= 0) return 0
+        ShipCombat.markHit(level, origin)
 
         val taken = ArrayList<BlockPos>(count)
         val seen = HashSet<BlockPos>()
@@ -128,6 +130,7 @@ object CannonDamage {
      */
     fun burst(level: ServerLevel, origin: BlockPos, count: Int, effects: Int = Int.MAX_VALUE): Int {
         if (count <= 0) return 0
+        ShipCombat.markHit(level, origin)
 
         val radius = blastRadius(count)
         val reach = radius * radius
@@ -249,6 +252,7 @@ object CannonDamage {
      */
     fun kindle(level: ServerLevel, origin: BlockPos, count: Int) {
         if (count <= 0) return
+        ShipCombat.markHit(level, origin)
 
         var lit = 0
         val litPositions = ArrayList<BlockPos>(count)

@@ -1,5 +1,7 @@
 package org.valkyrienskies.eureka.util
 
+import org.valkyrienskies.eureka.ship.ShipCombat
+
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap
 import net.minecraft.core.BlockPos
 import net.minecraft.resources.ResourceKey
@@ -40,6 +42,7 @@ object ShipFireBurn {
      * time we have seen it.
      */
     fun burnedThrough(level: ServerLevel, firePos: BlockPos): Boolean {
+        ShipCombat.markHit(level, firePos)
         val shortest = EurekaConfig.SERVER.shipFireBurnSecondsMin.coerceAtLeast(0.0)
         val longest = EurekaConfig.SERVER.shipFireBurnSecondsMax.coerceAtLeast(shortest)
 
