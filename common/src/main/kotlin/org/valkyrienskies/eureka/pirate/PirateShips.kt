@@ -28,7 +28,7 @@ import org.valkyrienskies.eureka.util.WeightedNames
 import org.valkyrienskies.mod.common.dimensionId
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.shipObjectWorld
-import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
+import org.valkyrienskies.eureka.util.ShipAssembler
 import org.valkyrienskies.mod.util.logger
 import java.util.UUID
 import kotlin.math.max
@@ -892,7 +892,7 @@ object PirateShips {
                     // than a permanent unassemblable wreck welded to somebody's roof.
                     logger.debug("ship {} wedged at stand-down -- removed rather than merged", shipId)
                     if (control.pathFollowing) control.pathRelease(true)
-                    VSShipAssembler.deleteShip(level, pirate, true, false)
+                    ShipAssembler.deleteShipWithoutDrops(level, pirate)
                     iterator.remove()
                     continue
                 }

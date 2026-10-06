@@ -17,7 +17,7 @@ import org.valkyrienskies.eureka.crew.packedItems
 import org.valkyrienskies.eureka.crew.CrewStations
 import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.template.BillOfMaterials
-import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
+import org.valkyrienskies.eureka.util.ShipAssembler
 import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
 
 /**
@@ -189,7 +189,7 @@ object ShipSalvage {
             )
         }
 
-        VSShipAssembler.deleteShip(level, ship, true, false)
+        ShipAssembler.deleteShipWithoutDrops(level, ship)
 
         // Let go of anyone the ship was carrying the instant it stops existing, or VS2 keeps towing them for
         // its full drag count behind a hull that is no longer there -- and cashes in a fall that never

@@ -8,10 +8,12 @@ import org.valkyrienskies.core.api.ships.ServerShip;
 import org.valkyrienskies.core.api.world.ServerShipWorld;
 import org.valkyrienskies.core.internal.ShipTeleportData;
 import org.valkyrienskies.eureka.armada.ArmadaTeleport;
+import org.valkyrienskies.eureka.ship.ShipTeleportCarry;
 
 /**
  * Makes {@code /vs teleport} on an armada's parent carry the whole formation instead of pulling the parent out
- * of it. See {@link ArmadaTeleport} for the move itself.
+ * of it. See {@link ArmadaTeleport} for the move itself. Also brings along everyone aboard each teleported ship
+ * (see {@link ShipTeleportCarry}).
  *
  * <p>Targets vs-core's {@code VSCoreImpl} because it is the single funnel: {@code VSCoreServerImpl} and
  * {@code VSCoreClientImpl} both hold one of these and delegate {@code teleportShip} straight to it, so hooking
@@ -31,6 +33,7 @@ public abstract class MixinVSCoreTeleport {
     @Inject(method = "teleportShip", at = @At("HEAD"))
     private void vs_eureka$carryArmadaWithParent(final ServerShipWorld world, final ServerShip ship,
         final ShipTeleportData teleportData, final CallbackInfo ci) {
+        ShipTeleportCarry.beforeTeleport(ship, teleportData);
         ArmadaTeleport.carryChildren(world, ship, teleportData);
     }
 }

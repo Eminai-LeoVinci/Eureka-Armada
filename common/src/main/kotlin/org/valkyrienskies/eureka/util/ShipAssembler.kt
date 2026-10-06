@@ -13,6 +13,7 @@ import net.minecraft.tags.TagKey
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.Clearable
 import net.minecraft.world.entity.decoration.HangingEntity
+import net.minecraft.world.entity.decoration.LeashFenceKnotEntity
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.block.Block
@@ -110,25 +111,99 @@ object ShipAssembler {
     fun finishAssembly(level: ServerLevel, blockPositions: Set<BlockPos>): Assembled {
         clearRestingSnowLayers(level, blockPositions)
         tagHoldsBeforeAssembly(level, blockPositions)
-        val context = VSShipAssembler.assembleToShipFull(level, blockPositions, 1.0)
 
-        // Recompute the paste's corner exactly as the assembler computed it: min/max of the set, the box's
-        // half-extent, corner = ceil(centre - halfExtent). Same doubles, same ceil, same answer.
         var minX = Int.MAX_VALUE; var minY = Int.MAX_VALUE; var minZ = Int.MAX_VALUE
         var maxX = Int.MIN_VALUE; var maxY = Int.MIN_VALUE; var maxZ = Int.MIN_VALUE
         for (pos in blockPositions) {
             minX = min(minX, pos.x); minY = min(minY, pos.y); minZ = min(minZ, pos.z)
             maxX = max(maxX, pos.x); maxY = max(maxY, pos.y); maxZ = max(maxZ, pos.z)
         }
+        // Found BEFORE VS2 moves anything, while each one still hangs on its block.
+        val fixtures = fixturesOn(level, blockPositions, BlockPos(minX, minY, minZ), BlockPos(maxX, maxY, maxZ))
+
+        // VS2 clears the area through ordinary block updates; see ShipDropGuard for the bed and door
+        // duplicates that otherwise fall out of it.
+        val context = ShipDropGuard.during(blockPositions) {
+            VSShipAssembler.assembleToShipFull(level, blockPositions, 1.0)
+        }
+
+        // Recompute the paste's corner exactly as the assembler computed it: min/max of the set, the box's
+        // half-extent, corner = ceil(centre - halfExtent). Same doubles, same ceil, same answer.
         val offset = Vector3d(
             (maxX - minX + 1) / 2.0, (maxY - minY + 1) / 2.0, (maxZ - minZ + 1) / 2.0
         )
         val corner = Vector3d(context.toCenter).sub(offset).ceil()
-        return Assembled(
+        val assembled = Assembled(
             context.ship,
             BlockPos(corner.x.toInt(), corner.y.toInt(), corner.z.toInt()),
             BlockPos(minX, minY, minZ)
         )
+        carryFixturesAboard(level, fixtures, assembled)
+        return assembled
+    }
+
+    /**
+     * Item frames, glow item frames, paintings and leash knots hanging on the blocks about to be assembled.
+     *
+     * They are entities, not blocks, so VS2's assembler never moves them: the wall goes to the shipyard and the
+     * frame stays behind, hanging on nothing, until its next survival check pops it off with its item. Only
+     * fixtures whose SUPPORT is assembled count. For a hanging entity that is the block behind it (it hangs in
+     * the air block in front of the wall); a leash knot sits in the fence it is tied to, and on 1.20.1 a knot is
+     * itself a HangingEntity, so it is told apart by class.
+     */
+    private fun fixturesOn(
+        level: ServerLevel, blocks: Set<BlockPos>, min: BlockPos, max: BlockPos
+    ): List<HangingEntity> {
+        // A block bigger on every side: a fixture on an outward-facing hull face sits just outside the set.
+        val box = AABB(
+            min.x - 1.0, min.y - 1.0, min.z - 1.0,
+            max.x + 2.0, max.y + 2.0, max.z + 2.0
+        )
+        return level.getEntitiesOfClass(HangingEntity::class.java, box).filter { entity ->
+            val anchor = entity.pos
+            val support = if (entity is LeashFenceKnotEntity) anchor else anchor.relative(entity.direction.opposite)
+            !entity.isRemoved && blocks.contains(support)
+        }
+    }
+
+    /**
+     * Move the [fixtures] onto the new ship by the same offset its blocks took. Runs after VS2 has placed the
+     * blocks, so nothing is unsupported at either end, and in the same tick, before any survival check.
+     *
+     * The mirror of the fixture carry in disassembly. HangingEntity.setPos re-derives the anchor block and the
+     * bounding box from the position given, so aiming at the centre of the destination block moves the whole
+     * thing. An item frame never sends position updates of its own, so clients are told explicitly.
+     */
+    private fun carryFixturesAboard(level: ServerLevel, fixtures: List<HangingEntity>, assembled: Assembled) {
+        for (entity in fixtures) {
+            if (entity.isRemoved) continue
+            val to = assembled.inShipyard(entity.pos)
+            entity.setPos(to.x + 0.5, to.y + 0.5, to.z + 0.5)
+            level.chunkSource.chunkMap.broadcast(entity, ClientboundTeleportEntityPacket(entity))
+        }
+    }
+
+    /**
+     * Delete [ship] and its blocks with nothing dropping and nothing spilling: for a ship whose contents were saved
+     * or paid out first (bottled, salvaged, a pirate despawning).
+     *
+     * VS2's deleteShip sets each block to air with neighbour updates on, so every torch, ladder, lantern and door
+     * breaks off with a drop, and every chest and barrel spills, because a container spills whenever its block is
+     * removed. Containers are emptied first, and ShipDropGuard covers the rest for the length of the call.
+     */
+    fun deleteShipWithoutDrops(level: ServerLevel, ship: ServerShip) {
+        val box = ship.shipAABB
+        if (box == null) {
+            VSShipAssembler.deleteShip(level, ship, true, false)
+            return
+        }
+        val cursor = BlockPos.MutableBlockPos()
+        for (x in box.minX()..box.maxX()) for (y in box.minY()..box.maxY()) for (z in box.minZ()..box.maxZ()) {
+            (level.getBlockEntity(cursor.set(x, y, z)) as? Clearable)?.clearContent()
+        }
+        ShipDropGuard.during(box) { VSShipAssembler.deleteShip(level, ship, true, false) }
+    }
+
     /**
      * VS2's relocateBlock writes the block straight into the chunk, so the level never hears that a block changed:
      * villager points of interest (job sites, beds, bells) stay registered where the block was and are missing where

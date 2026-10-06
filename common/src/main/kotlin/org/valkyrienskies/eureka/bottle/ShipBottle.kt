@@ -26,7 +26,7 @@ import org.valkyrienskies.eureka.path.PathMessages
 import org.valkyrienskies.eureka.pirate.PirateHelm
 import org.valkyrienskies.eureka.template.PlacementCheck
 import org.valkyrienskies.eureka.template.ShipTemplate
-import org.valkyrienskies.mod.common.assembly.ShipAssembler as VSShipAssembler
+import org.valkyrienskies.eureka.util.ShipAssembler
 import org.valkyrienskies.mod.common.getLoadedShipManagingPos
 import org.valkyrienskies.mod.common.util.IEntityDraggingInformationProvider
 
@@ -294,7 +294,7 @@ object ShipBottle {
             )
         }
 
-        VSShipAssembler.deleteShip(level, ship, true, false)
+        ShipAssembler.deleteShipWithoutDrops(level, ship)
 
         // Let go of anyone the ship was carrying, the instant it stops existing.
         //

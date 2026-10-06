@@ -6,6 +6,7 @@
     "MixinExplosionPirateHelm",
     "MixinNoSnowOnShips",
     "MixinEntityTransitionHold",
+    "MixinBlockAssemblyNoDrops",
     "MixinServerPlayerReconnectSeat",
     "MixinLivingEntityWalkOnShip",
     "MixinPathNavigationRegionShips",
@@ -26,6 +27,9 @@
     "ai.jobsites.MixinWorkAtPoi",
     "MixinEntityDraggerInfluence",
     "MixinLivingEntityStandingOnShip",
+    "EntityShipCollisionUtilsAccessor",
+    "MixinShipAssemblerSpawnGrace",
+    "MixinUnloadedShipSpawnGrace",
     "MixinPathNavigationGroundYShips",
     "MixinRecipeManager"
   ],

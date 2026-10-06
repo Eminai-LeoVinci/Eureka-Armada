@@ -35,6 +35,8 @@ import org.valkyrienskies.eureka.client.ShipCameraZoom;
 import org.valkyrienskies.eureka.client.HelmCamera;
 import org.valkyrienskies.eureka.client.CameraMemory;
 import org.valkyrienskies.eureka.ship.ShipKeepActive;
+import org.valkyrienskies.eureka.ship.ShipSpawnGrace;
+import org.valkyrienskies.eureka.ship.ShipTeleportCarry;
 import org.valkyrienskies.eureka.EurekaItems;
 import org.valkyrienskies.eureka.EurekaMod;
 import org.valkyrienskies.eureka.armada.ArmadaBindings;
@@ -183,7 +185,13 @@ public class EurekaModFabric implements ModInitializer {
         // Keep Active: hand every kept-active ship to a watching player and force-load the chunks under it
         // (see ShipKeepActive). Released before vanilla drains chunks on shutdown.
         ServerTickEvents.START_SERVER_TICK.register(ShipKeepActive::tick);
+        // Everyone aboard a teleported ship is put back on deck once it lands (see ShipTeleportCarry).
+        ServerTickEvents.END_SERVER_TICK.register(ShipTeleportCarry::tick);
         ServerLifecycleEvents.SERVER_STOPPING.register(ShipKeepActive::clearAll);
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            ShipTeleportCarry.clear();
+            ShipSpawnGrace.clear();
+        });
         // The sit key: sit down on deck, SHIFT to stand (see SitDownFabric).
         SitDownFabric.INSTANCE.registerServer();
 
